@@ -479,6 +479,11 @@ function ia_ensure_schema(PDO $db): void
             ['ia_check',     'order_no',            "VARCHAR(60) NULL COMMENT '產品型態稽核表：紙本表頭的訂單號碼（手填）'"],
             ['ia_check',     'auditor_dept_id',     "INT NULL COMMENT '稽核人的部門'"],
             ['ia_check',     'auditor_position_id', "INT NULL COMMENT '稽核人的職稱'"],
+            // 第二位稽核員（2026-11-23 老師建議：每張查檢表至少兩位稽核員，2026 年起）
+            ['ia_check',     'auditor2_id',          "INT NULL COMMENT '第二位稽核員 user.id'"],
+            ['ia_check',     'auditor2_name',        "VARCHAR(60) NULL"],
+            ['ia_check',     'auditor2_dept_id',     "INT NULL"],
+            ['ia_check',     'auditor2_position_id', "INT NULL"],
             // 稽核通知單「完成」（2026-09-18 使用者要求：完成後不可修改、取消要管理員＋操作確認密碼）
             ['ia_case',      'completed_at',        "DATETIME NULL COMMENT '按下完成的時間'"],
             ['ia_case',      'completed_by',        "INT NULL COMMENT '按下完成的人 user.id'"],
@@ -5685,6 +5690,15 @@ function ia_pgroup_ensure(PDO $db): void
             clause_ids TEXT NULL COMMENT 'JSON：手動指定的條文 id；空＝由文件編號自動反查',
             KEY idx_group (group_code, stage, sort_order)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='過程群組的流程步驟'");
+        // 條文題庫：手冊附錄B 帶入的條文編號與作業程序編號；條文所屬的過程群組（可複選）
+        foreach (['clause_no' => "VARCHAR(20) NULL COMMENT '手冊附錄B 條文編號'", 'proc_nos' => "VARCHAR(255) NULL COMMENT '手冊附錄B 作業程序編號（空白分隔）'"] as $col => $def) {
+            if (!$db->query("SHOW COLUMNS FROM ia_as_clause LIKE '$col'")->fetch()) $db->exec("ALTER TABLE ia_as_clause ADD COLUMN $col $def");
+        }
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_clause_group (
+            clause_id  INT NOT NULL,
+            group_code VARCHAR(10) NOT NULL,
+            PRIMARY KEY (clause_id, group_code)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='條文屬於哪幾個過程群組（COP/MP/SP）'");
         if ((int)$db->query("SELECT COUNT(*) FROM ia_process_group")->fetchColumn() === 0) {
             $find = $db->prepare("SELECT id FROM as_document WHERE doc_no=? ORDER BY id LIMIT 1");
             $docId = function (string $no) use ($find): int { $find->execute([$no]); return (int)$find->fetchColumn(); };
@@ -5700,7 +5714,129 @@ function ia_pgroup_ensure(PDO $db): void
                 }
             }
         }
+        // 條文所屬群組第一次由流程步驟推導（之後完全由管理員在條文題庫自行勾選）
+        if ((int)$db->query("SELECT COUNT(*) FROM ia_clause_group")->fetchColumn() === 0
+            && (int)$db->query("SELECT COUNT(*) FROM ia_process_step")->fetchColumn() > 0) {
+            $clauses = ia_as_clauses($db);
+            $insM = $db->prepare("INSERT IGNORE INTO ia_clause_group (clause_id, group_code) VALUES (?,?)");
+            foreach (ia_pgroup_list($db) as $g) foreach ($g['steps'] as $s)
+                foreach (ia_pgroup_step_clauses($s, $clauses, null) as $c) $insM->execute([(int)$c['clause_id'], $g['group_code']]);
+        }
     } catch (Throwable $e) { error_log('ia_pgroup_ensure: ' . $e->getMessage()); }
+}
+
+/** clause_id => [group_code…] */
+function ia_clause_groups_map(PDO $db): array
+{
+    ia_pgroup_ensure($db);
+    $m = [];
+    try {
+        foreach ($db->query("SELECT clause_id, group_code FROM ia_clause_group ORDER BY group_code")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $m[(int)$r['clause_id']][] = $r['group_code'];
+    } catch (Throwable $e) {}
+    return $m;
+}
+
+function ia_clause_groups_save(PDO $db, int $clauseId, array $codes): void
+{
+    ia_pgroup_ensure($db);
+    $valid = $db->query("SELECT group_code FROM ia_process_group")->fetchAll(PDO::FETCH_COLUMN);
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM ia_clause_group WHERE clause_id=?")->execute([$clauseId]);
+        $ins = $db->prepare("INSERT IGNORE INTO ia_clause_group (clause_id, group_code) VALUES (?,?)");
+        foreach (array_unique($codes) as $c) if (in_array($c, $valid, true)) $ins->execute([$clauseId, $c]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+}
+
+/**
+ * 解析手冊（1-GM-01）「附錄B 公司文件系統與 AS9100 條款對照」表：每條回 [no, title, is_header, proc_nos[]]。
+ * 表格有 rowspan（一份程序書管好幾條條文），要依 rowspan 把上面的欄位帶下來才取得到每條的作業程序編號。
+ */
+function ia_appendixb_parse(PDO $db): array
+{
+    $html = '';
+    try {
+        $html = (string)$db->query("SELECT c.content_html FROM as_doc_content c
+                                      JOIN as_document_version v ON v.id=c.version_id
+                                      JOIN as_document d ON d.id=v.doc_id
+                                     WHERE d.doc_no='1-GM-01'
+                                     ORDER BY c.is_primary DESC, v.id DESC LIMIT 1")->fetchColumn();
+    } catch (Throwable $e) {}
+    if ($html === '') return [];
+    $dom = new DOMDocument();
+    @$dom->loadHTML('<?xml encoding="UTF-8">' . $html);
+    $target = null;
+    foreach ($dom->getElementsByTagName('table') as $t) {
+        $txt = $t->textContent;
+        if (strpos($txt, 'AS 9100') !== false && strpos($txt, 'Operational') !== false) { $target = $t; break; }
+    }
+    if (!$target) return [];
+    $out = []; $carry = [];
+    $rows = $target->getElementsByTagName('tr');
+    foreach ($rows as $ri => $tr) {
+        $cells = [];
+        foreach ($tr->childNodes as $c) if (in_array(strtolower($c->nodeName), ['td', 'th'], true)) $cells[] = $c;
+        $row = []; $k = 0;
+        for ($col = 0; $col < 5; $col++) {
+            if (!empty($carry[$col]) && $carry[$col]['n'] > 0) { $row[$col] = $carry[$col]['v']; $carry[$col]['n']--; continue; }
+            if (!isset($cells[$k])) { $row[$col] = ''; continue; }
+            $td = $cells[$k++];
+            $v = trim(preg_replace('/\s+/u', ' ', $td->textContent));
+            $rs = (int)$td->getAttribute('rowspan');
+            if ($rs > 1) $carry[$col] = ['n' => $rs - 1, 'v' => $v];
+            $row[$col] = $v;
+        }
+        if ($ri < 2) continue;                                   // 兩列表頭
+        if (!preg_match('/^(\d+(?:\.\d+)*)\.?$/', (string)$row[1], $m)) continue;
+        $title = (string)$row[2];
+        if ($title === '') continue;
+        $hdr = (substr((string)$row[1], -1) === '.' && strpos($m[1], '.') === false);
+        preg_match_all('/\d-[A-Za-z]{2}-\d{2}/', (string)$row[4], $pm);
+        $out[] = ['no' => $m[1], 'title' => $title, 'is_header' => $hdr ? 1 : 0, 'proc_nos' => array_values(array_unique($pm[0]))];
+    }
+    return $out;
+}
+
+/** 把附錄B 同步進條文題庫：編號對得上的更新名稱與作業程序編號、沒有的新增，順序依附錄B。回 [updated, inserted] */
+function ia_appendixb_sync(PDO $db): array
+{
+    ia_pgroup_ensure($db);
+    $rows = ia_appendixb_parse($db);
+    if (!$rows) throw new RuntimeException('找不到手冊「附錄B」的對照表（1-GM-01 目前版本的內容）');
+    $exist = [];
+    foreach (ia_as_clauses($db, false) as $c) {
+        if (preg_match('/^\s*(\d+(?:\.\d+)*)\.?\s/u', (string)$c['clause_text'] . ' ', $m) && !isset($exist[$m[1]])) $exist[$m[1]] = (int)$c['clause_id'];
+    }
+    $upd = 0; $ins = 0;
+    $db->beginTransaction();
+    try {
+        $u = $db->prepare("UPDATE ia_as_clause SET clause_text=?, clause_no=?, proc_nos=?, is_header=?, sort_order=?, updated_at=NOW(), updated_by='附錄B同步' WHERE clause_id=?");
+        $i = $db->prepare("INSERT INTO ia_as_clause (sort_order, is_header, clause_text, doc_ref, is_active, clause_no, proc_nos, updated_at, updated_by)
+                           VALUES (?,?,?,?,1,?,?,NOW(),'附錄B同步')");
+        $used = [];
+        foreach ($rows as $n => $r) {
+            $text = $r['no'] . ($r['is_header'] ? '.' : '') . ' ' . $r['title'];
+            $procs = implode(' ', $r['proc_nos']);
+            if (isset($exist[$r['no']])) {
+                $u->execute([$text, $r['no'], $procs ?: null, $r['is_header'], ($n + 1) * 10, $exist[$r['no']]]);
+                $used[$exist[$r['no']]] = 1; $upd++;
+            } else {
+                $i->execute([($n + 1) * 10, $r['is_header'], $text, null, $r['no'], $procs ?: null]);
+                $used[(int)$db->lastInsertId()] = 1; $ins++;
+            }
+        }
+        // 附錄B 沒有的舊條文排到最後，順序維持
+        $max = (count($rows) + 1) * 10;
+        foreach (ia_as_clauses($db, false) as $c) {
+            if (isset($used[(int)$c['clause_id']])) continue;
+            $max += 10;
+            $db->prepare("UPDATE ia_as_clause SET sort_order=? WHERE clause_id=?")->execute([$max, (int)$c['clause_id']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    return ['updated' => $upd, 'inserted' => $ins, 'total' => count($rows)];
 }
 
 /** 8 個群組＋各自的流程步驟（程序書／表單名稱即時查 as_document） */
@@ -5776,7 +5912,7 @@ function ia_pgroup_save(PDO $db, string $code, int $ordered, array $steps): void
 }
 
 /** 某一步驟對應的條文列（手動指定優先；否則由 doc_ref 的文件編號反查：表單編號優先、再用程序書編號） */
-function ia_pgroup_step_clauses(array $step, array $clauses): array
+function ia_pgroup_step_clauses(array $step, array $clauses, ?array $member = null): array
 {
     $want = [];
     foreach ((array)($step['clause_ids'] ?? []) as $id) $want[(int)$id] = 1;
@@ -5788,7 +5924,8 @@ function ia_pgroup_step_clauses(array $step, array $clauses): array
         if ((int)$c['is_header']) continue;
         $id = (int)$c['clause_id'];
         if ($want) { if (isset($want[$id])) $byForm[] = $c; continue; }
-        $nn = ia_clause_doc_nos((string)($c['doc_ref'] ?? ''));
+        if ($member !== null && !isset($member[$id])) continue;     // 條文題庫裡設定「不屬於這個群組」的不帶
+        $nn = ia_clause_doc_nos((string)($c['doc_ref'] ?? '') . ' ' . (string)($c['proc_nos'] ?? ''));
         foreach ($nn as $no) if (isset($nos[$no])) { $byForm[] = $c; continue 2; }
         if ($proc !== '' && in_array($proc, $nn, true)) $byProc[] = $c;
     }
@@ -5808,6 +5945,10 @@ function ia_pgroup_build_items(PDO $db, string $code): array
     foreach (ia_pgroup_list($db) as $g) if ($g['group_code'] === $code) { $grp = $g; break; }
     if (!$grp || !$grp['steps']) return [];
     $clauses = ia_as_clauses($db);
+    $gm = [];
+    foreach (ia_clause_groups_map($db) as $cid => $codes) if (in_array($code, $codes, true)) $gm[$cid] = 1;
+    $member = $gm ?: null;
+    $usedCl = [];
     $items = []; $sort = 0; $lastStage = null;
     $stageCnt = [];
     foreach ($grp['steps'] as $s) $stageCnt[(int)$s['stage']] = ($stageCnt[(int)$s['stage']] ?? 0) + 1;
@@ -5818,13 +5959,26 @@ function ia_pgroup_build_items(PDO $db, string $code): array
                         'col_a' => '第 ' . $lastStage . ' 階段' . ($stageCnt[$lastStage] > 1 ? '（可並行）' : ''),
                         'col_b' => '', 'col_c' => null, 'col_d' => null, 'ref_kind' => 'as_step_hdr', 'ref_id' => null];
         }
-        $cl = ia_pgroup_step_clauses($s, $clauses);
-        $a = '【' . $s['title'] . '】' . ($cl ? "\n" . implode("\n", array_map(function ($c) { return $c['clause_text']; }, $cl)) : '');
-        $b = '';
-        if (!empty($s['proc'])) $b .= "程序書：\n" . $s['proc']['doc_no'] . ' ' . $s['proc']['doc_name'] . "\n";
-        if (!empty($s['forms'])) $b .= "表單：\n" . implode("\n", array_map(function ($f) { return $f['doc_no'] . ' ' . $f['doc_name']; }, $s['forms']));
-        $items[] = ['sort_order' => ++$sort * 10, 'is_header' => 0, 'col_a' => $a, 'col_b' => trim($b),
-                    'col_c' => null, 'col_d' => null, 'ref_kind' => 'as_step', 'ref_id' => (int)$s['step_id']];
+        $cl = ia_pgroup_step_clauses($s, $clauses, $member);
+        foreach ($cl as $cc) $usedCl[(int)$cc['clause_id']] = 1;
+        // 欄位：col_c＝標題（步驟名稱）、col_a＝條文編號與名稱、col_d＝對應 AS 程序書、col_b＝對應 AS 文件表單（逐行）
+        $a = implode("\n", array_map(function ($c) { return $c['clause_text']; }, $cl));
+        $b = !empty($s['forms']) ? implode("\n", array_map(function ($f) { return $f['doc_no'] . ' ' . $f['doc_name']; }, $s['forms'])) : '';
+        $d = !empty($s['proc']) ? ($s['proc']['doc_no'] . ' ' . $s['proc']['doc_name']) : null;
+        $items[] = ['sort_order' => ++$sort * 10, 'is_header' => 0, 'col_a' => $a, 'col_b' => $b,
+                    'col_c' => mb_substr((string)$s['title'], 0, 250), 'col_d' => $d, 'ref_kind' => 'as_step', 'ref_id' => (int)$s['step_id']];
+    }
+    // 條文題庫裡勾了這個群組、卻沒被任何步驟用到的條文，集中放在最後一列「其他對應條文」
+    $rest = [];
+    foreach ($clauses as $c) {
+        if ((int)$c['is_header']) continue;
+        $id = (int)$c['clause_id'];
+        if (isset($gm[$id]) && !isset($usedCl[$id])) $rest[] = $c['clause_text'];
+    }
+    if ($rest) {
+        if ($grp['ordered']) $items[] = ['sort_order' => ++$sort * 10, 'is_header' => 1, 'col_a' => '其他對應條文', 'col_b' => '', 'col_c' => null, 'col_d' => null, 'ref_kind' => 'as_step_hdr', 'ref_id' => null];
+        $items[] = ['sort_order' => ++$sort * 10, 'is_header' => 0, 'col_a' => implode("\n", $rest), 'col_b' => '',
+                    'col_c' => '其他對應條文', 'col_d' => null, 'ref_kind' => 'as_step', 'ref_id' => 0];
     }
     return $items;
 }
@@ -5832,10 +5986,13 @@ function ia_pgroup_build_items(PDO $db, string $code): array
 /** 群組涵蓋的條文 id（畫面預覽用） */
 function ia_pgroup_clause_ids(PDO $db, string $code): array
 {
-    $clauses = ia_as_clauses($db); $ids = []; $n = 0;
+    $clauses = ia_as_clauses($db); $ids = [];
+    $gm = [];
+    foreach (ia_clause_groups_map($db) as $cid => $codes) if (in_array($code, $codes, true)) $gm[$cid] = 1;
     foreach (ia_pgroup_list($db) as $g) {
         if ($g['group_code'] !== $code) continue;
-        foreach ($g['steps'] as $s) foreach (ia_pgroup_step_clauses($s, $clauses) as $c) { $ids[(int)$c['clause_id']] = 1; }
+        foreach ($g['steps'] as $s) foreach (ia_pgroup_step_clauses($s, $clauses, $gm ?: null) as $c) { $ids[(int)$c['clause_id']] = 1; }
     }
+    foreach ($gm as $cid => $_) $ids[$cid] = 1;
     return ['ids' => array_keys($ids), 'clauses' => count($ids)];
 }

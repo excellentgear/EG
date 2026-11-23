@@ -520,7 +520,7 @@ $roleLabel = ia_role_label($perms);
             <div class="ia-hint" id="checkAutoHint" style="display:none;background:#FDF0DC;border-color:#F0A24B;"></div>
             <div class="ia-pager" id="checkPager"></div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
-                <th>種類</th><th>標題</th><th>所屬件號</th><th>稽核人</th><th>稽核日期</th>
+                <th>種類</th><th>標題</th><th>所屬件號</th><th>稽核員</th><th>稽核日期</th>
                 <th>項目數</th><th>不合格</th><th>未判定</th><th>狀態</th><th>操作</th>
             </tr></thead><tbody id="checkBody"></tbody></table></div>
         </div>
@@ -990,7 +990,8 @@ $roleLabel = ia_role_label($perms);
 <!-- ============================ AS 條文題庫 ============================ -->
 <div class="ia-mask" id="clauseMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-list-ol"></i> AS 稽核查檢表　條文題庫</h4>
-        <button id="btnClauseAdd" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增條文</button>
+        <button id="btnAppxSync" style="margin-left:auto;" title="依手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」帶入條文編號與名稱、作業程序編號，順序也依附錄B"><i class="fa fa-refresh"></i> 從手冊附錄B 同步</button>
+        <button id="btnClauseAdd" style="margin-left:6px;"><i class="fa fa-plus"></i> 新增條文</button>
         <span class="x" data-close style="margin-left:10px;">&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-hint">這是<b>AS稽核查檢表</b>的題目來源，建一次每年沿用。勾「章節標題」的列在查檢表上只當分隔標題、不判定合格與否。
@@ -1005,6 +1006,7 @@ $roleLabel = ia_role_label($perms);
             <th style="width:64px;">順序</th><th style="width:70px;">標題列</th><th>品質管理系統要求</th>
             <th style="width:240px;">建立的文件、表單</th>
             <th style="width:230px;" title="這一條實務上對應到哪幾件事，勾了才會顯示在建立／填寫查檢表上">作業項目</th>
+            <th style="width:150px;" title="這一條屬於 COP1~SP02 哪幾個過程；勾了才會出現在該過程的 AS稽核查檢表">過程群組</th>
             <th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
         </tr></thead><tbody id="clauseBody"></tbody></table></div>
     </div>
@@ -1157,7 +1159,9 @@ $roleLabel = ia_role_label($perms);
                  <div id="nkKindHint" style="font-size:12px;color:#8a6d45;margin-top:3px;"></div></div>
             <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
             <div><input type="date" id="nkDate"><div class="err-msg" id="errNkDate"></div></div>
-            <label>稽核人</label><div><select id="nkAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
+            <label>稽核員（兩位）</label><div><select id="nkAuditor" data-eg-filter="輸入人員姓名篩選…"></select>
+                <select id="nkAuditor2" data-eg-filter="輸入人員姓名篩選…" style="margin-top:4px;"></select>
+                <div class="err-msg" id="errNkAuditor2"></div></div>
             <label id="nkCaseLab">所屬件號</label>
             <div id="nkCaseWrap"><select id="nkCase" data-eg-filter="輸入件號或日期篩選…"></select>
                  <!-- 選了件號之後：自動帶受稽日期（多天可挑），並列出當天要稽核哪些主過程與單位
@@ -1310,7 +1314,8 @@ $roleLabel = ia_role_label($perms);
             <div><input type="text" id="ckTitleInput">
                  <span id="ckTitleAuto" style="display:none;font-size:11px;color:#8a6d45;">（自動：對應稽核通知單的次別）</span></div>
             <label>稽核日期</label><div><input type="date" id="ckDate"></div>
-            <label>稽核人</label><div><select id="ckAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
+            <label>稽核員（兩位）</label><div><select id="ckAuditor" data-eg-filter="輸入人員姓名篩選…"></select>
+                <select id="ckAuditor2" data-eg-filter="輸入人員姓名篩選…" style="margin-top:4px;"></select></div>
             <label>狀態</label><div><input type="text" id="ckStatus" readonly></div>
             <!-- 產品型態稽核表：客戶與產品編號由來源管制表即時查，一律唯讀（改要回管制表改） -->
             <label id="ckSrcLab">稽核對象</label>
@@ -3542,7 +3547,7 @@ function renderChecks(){
           + '<td>'+esc(kindLabel(r.kind))+(r.half?('（'+(r.half==='H1'?'上':'下')+'半年）'):'')+'</td>'
           + '<td class="l">'+esc(r.title||kindLabel(r.kind))+'</td>'
           + '<td>'+esc(r.case_no||'—')+'</td>'
-          + '<td>'+esc(r.auditor_name||'')+'</td>'
+          + '<td>'+esc([r.auditor_name, r.auditor2_name].filter(Boolean).join('、'))+'</td>'
           + '<td>'+dispDate(r.check_date)+'</td>'
           + '<td>'+esc(r.item_cnt)+'</td>'
           + '<td>'+(+r.ng_cnt ? '<b style="color:#C4442D;">'+esc(r.ng_cnt)+'</b>' : '0')+'</td>'
@@ -4387,7 +4392,7 @@ $(document).on('click', '#nkPgAll', function(){
         var g = PGROUPS[i];
         $.getJSON(API, {action:'pgroup_clauses', code:g.group_code}, function(r){
             if (!r.ok || !r.clauses) { skipped.push(g.group_code); next(i+1); return; }
-            $.post(API, {action:'check_create', kind:'as', check_date:date, auditor_key:$('#nkAuditor').val(),
+            $.post(API, {action:'check_create', kind:'as', check_date:date, auditor_key:$('#nkAuditor').val(), auditor2_key:($('#nkAuditor2').val()||''),
                 case_id:caseId, title:g.group_code + ' ' + g.group_name, src_check_ids:srcIds, group_code:g.group_code, pick:'[]'},
                 function(res){
                     if (!res.ok) { alert(g.group_code + ' 建立失敗：' + (res.error||'')); return; }
@@ -4609,11 +4614,16 @@ $('#btnCheckCreate').on('click', function(){
     }
     var p = nkPicked(), picked = p.ids, real = p.real;
     var grp = (kind === 'as') ? (NK_GROUP || '') : '';
+    $('#errNkAuditor2').removeClass('on').text('');
+    if (kind !== 'type' && $('#nkDate').val() >= '2026-01-01') {
+        if (!$('#nkAuditor').val() || !$('#nkAuditor2').val()) { $('#errNkAuditor2').addClass('on').text('每張查檢表至少要有兩位稽核員，請選兩位'); ok = false; }
+        else if (String($('#nkAuditor').val()).split(':')[0] === String($('#nkAuditor2').val()).split(':')[0]) { $('#errNkAuditor2').addClass('on').text('兩位稽核員不可以是同一個人'); ok = false; }
+    }
     if (kind === 'as' && !grp) { $('#errNkPick').addClass('on').text('請先選擇過程群組（COP1～SP02），AS稽核查檢表依群組的流程步驟建立'); ok = false; }
     else if (!real && !grp) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
     $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(),
-        auditor_key:$('#nkAuditor').val(),
+        auditor_key:$('#nkAuditor').val(), auditor2_key:($('#nkAuditor2').val()||''),
         // AS 是由勾選的系統稽核紀錄表推導所屬件號（畫面上沒有那個下拉）
         case_id:(kind==='as' ? nkSrcCaseId() : $('#nkCase').val()), title:$('#nkTitle').val(),
         src_check_ids:(kind==='as'
@@ -4661,7 +4671,7 @@ function openCheck(id){
         /* 自動標題的欄位一律維持唯讀，不可被「這張表可以編輯」解鎖（否則上面那行 readonly 會被洗掉） */
         $('#ckDate').prop('readonly', ro);
         $('#ckTitleInput').prop('readonly', ro || !!autoTitle);
-        $('#ckAuditor').prop('disabled', ro);
+        $('#ckAuditor,#ckAuditor2').prop('disabled', ro);
         /* AS稽核查檢表的內容是系統自動帶的：不給補加項目（題目在建立當下決定），
            改用「重新自動判定」重新選一次來源。可用條件與後端 can_edit 同一條（鐵律8）。 */
         /* 產品型態稽核表的表頭：客戶／產品編號一律由來源管制表即時查、唯讀
@@ -4695,6 +4705,22 @@ function openCheck(id){
      「當時有資格、現在已離職或調職」的人一個都挑不到，而且完全不報錯。
    ②原本就掛在這張表上的那一位，即使現在已不在候選清單內也一定要留著，
      否則光是改個標題存檔就會把稽核人洗掉（後端同樣放行「沒有更動」的情況）。 */
+/* 第二位稽核員下拉＝第一位下拉的選項副本（同一份候選名單、同一個稽核日期），選項一變就跟著換 */
+function mirrorAuditorSelect(fromSel, toSel, keepVal){
+    var el = document.querySelector(fromSel); if (!el || el._mirrorOn) return;
+    el._mirrorOn = true;
+    new MutationObserver(function(){
+        var cur = $(toSel).val() || keepVal();
+        $(toSel).html($(fromSel).html());
+        if (cur && $(toSel).find('option[value="'+cur+'"]').length) $(toSel).val(cur); else $(toSel).val('');
+    }).observe(el, {childList:true});
+}
+$(function(){
+    mirrorAuditorSelect('#nkAuditor', '#nkAuditor2', function(){ return ''; });
+    mirrorAuditorSelect('#ckAuditor', '#ckAuditor2', function(){
+        return CHK ? postKeyOf(CHK.auditor2_id, CHK.auditor2_dept_id, CHK.auditor2_position_id) : '';
+    });
+});
 function fillCkAuditor(dateStr){
     var curKey = postKeyOf(CHK.auditor_id, CHK.auditor_dept_id, CHK.auditor_position_id);
     peopleAsof(dateStr, function(){
@@ -4705,6 +4731,13 @@ function fillCkAuditor(dateStr){
                 + esc((CHK.auditor_name||'') + '（原稽核人，目前已不在候選名單）') + '</option>');
         }
         $('#ckAuditor').html(h);
+        var k2 = postKeyOf(CHK.auditor2_id, CHK.auditor2_dept_id, CHK.auditor2_position_id);
+        $('#ckAuditor2').html($('#ckAuditor').html());
+        if (CHK.auditor2_id) {
+            if (!$('#ckAuditor2 option[value="'+k2+'"]').length)
+                $('#ckAuditor2').append('<option value="'+esc(k2)+'">'+esc((CHK.auditor2_name||'')+'（原稽核員，目前已不在候選名單）')+'</option>');
+            $('#ckAuditor2').val(k2);
+        } else { $('#ckAuditor2').val(''); }
     });
 }
 $('#ckDate').on('change', function(){ fillCkAuditor($(this).val()); });
@@ -4736,6 +4769,7 @@ $('#ckAuditor').on('change', function(){
         fillCkAuditor($('#ckDate').val());
     }
 });
+var CK_HEADS_STEP = ['項次','標題','條文編號與名稱','對應 AS 程序書','對應 AS 文件','合格','不合格','所見證據或建議','備註'];
 var CK_HEADS = {
     as:     ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議','備註'],
     system: ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註（內稽不符合通知單編號）'],
@@ -4750,11 +4784,14 @@ function renderCheckItems(){
        也不提供增列／刪列。要更新判定請按「重新自動判定」重新選一次來源（後端同規則再擋一次＝鐵律8）。 */
     var lock = (k === 'as'), fro = ro || lock;
     var lockCss = fro ? 'background:#f5efe4;color:#6b5535;cursor:default;' : '';
-    $('#ckHead').html('<tr>'+CK_HEADS[k].map(function(t){ return '<th>'+esc(t)+'</th>'; }).join('')+'</tr>');
+    /* 過程群組（COP1~SP02）建立的 AS 查檢表：標題｜條文編號與名稱｜對應 AS 程序書｜對應 AS 文件（2026-11-23 老師建議） */
+    var stepMode = (k === 'as') && (CHK.items||[]).some(function(x){ return x.ref_kind === 'as_step'; });
+    var HEADS = stepMode ? CK_HEADS_STEP : CK_HEADS[k];
+    $('#ckHead').html('<tr>'+HEADS.map(function(t){ return '<th>'+esc(t)+'</th>'; }).join('')+'</tr>');
     var h = '', n = 0;
     (CHK.items||[]).forEach(function(it){
         if (+it.is_header===1) {
-            h += '<tr class="hdr-row"><td colspan="'+CK_HEADS[k].length+'">'+esc(it.col_a)+'</td></tr>';
+            h += '<tr class="hdr-row"><td colspan="'+HEADS.length+'">'+esc(it.col_a)+'</td></tr>';
             return;
         }
         n++;
@@ -4768,7 +4805,18 @@ function renderCheckItems(){
         // 績效沒達成開的是「異常矯正處理單」（紙本備註欄本來就印 CAR 單號），不是 IA 單
         var ncBtn = ncBtnHtml(it, ro);
         h += '<tr>';
-        if (k==='as') {
+        if (stepMode) {
+            var pre = 'white-space:pre-line;';
+            h += '<td>'+n+'</td><td class="l" style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
+              + '<td class="l" style="'+pre+'font-size:12px;">'+esc(it.col_a||'')+'</td>'
+              + '<td class="l" style="font-size:12px;">'+esc(it.col_d||'')+'</td>'
+              + '<td class="l" style="'+pre+'font-size:12px;color:#7a6444;">'+esc(it.col_b||'')+'</td>'
+              + '<td>'+okChk+'</td><td>'+ngChk+'</td>'
+              + '<td><input type="text" class="ckF" data-id="'+it.item_id+'" data-f="evidence" value="'+esc(it.evidence||'')+'"'
+              + (fro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;'
+              + 'padding:2px 4px;font-size:12px;'+lockCss+'"></td>'
+              + '<td>'+remark+ncBtn+'</td>';
+        } else if (k==='as') {
             // 作業項目：條文原文看不出實務上在查什麼，這裡用小徽章補上（列印版不帶，維持紙本版面）
             var tks = (it.tasks||[]).map(function(t){ return '<span class="nk-task">'+esc(t.task_name)+'</span>'; }).join('');
             h += '<td>'+n+'</td><td class="l" style="white-space:pre-line;">'+esc(it.col_a)+(tks?('<div style="margin-top:2px;">'+tks+'</div>'):'')+'</td>'
@@ -5170,6 +5218,7 @@ $('#btnCheckSave').on('click', function(){ saveCheck(false); });
 function saveCheck(silent, cb){
     var pd = {action:'check_save_items', check_id:CHK.check_id, title:$('#ckTitleInput').val(),
         check_date:$('#ckDate').val(), auditor_key:($('#ckAuditor').val()||''),
+        auditor2_key:($('#ckAuditor2').val()||''),
         items:JSON.stringify(collectCheckItems())};
     // 只有產品型態稽核表才送訂單號碼；其他種類**完全不送這個欄位**＝後端一個字都不會動它
     if (CHK.kind === 'type') pd.order_no = $('#ckOrderNo').val();
@@ -6438,10 +6487,37 @@ function clauseRowHtml(c){
       + '<td class="l"><textarea class="clF" data-f="doc_ref" style="width:100%;min-height:34px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.doc_ref||'')+'</textarea>'
       + '<span class="ia-op" style="margin-top:2px;" onclick="openDocPick(this)"><i class="fa fa-plus"></i> 選文件</span></td>'
       + '<td class="l cl-task">'+clauseTaskHtml(c)+'</td>'
+      + '<td class="cl-grp">'+clauseGroupHtml(c)+'</td>'
       + '<td><input type="checkbox" class="clF" data-f="is_active"'+(c.clause_id===undefined||+c.is_active?' checked':'')+'></td>'
       + '<td><span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span>'
       + '<div class="cl-st"></div></td></tr>';
 }
+/* 條文所屬過程群組（COP1~SP02，可複選）：勾了就直接存；標題列不用勾 */
+var PG_CODES = ['COP1','COP2','COP3','COP4','MP01','MP02','SP01','SP02'];
+function clauseGroupHtml(c){
+    c = c || {};
+    if (+c.is_header || !c.clause_id) return '<span class="cl-task-hint">'+(+c.is_header ? '（標題列）' : '存檔後才能勾')+'</span>';
+    var on = {}; (c.groups||[]).forEach(function(g){ on[g] = 1; });
+    return PG_CODES.map(function(g){
+        return '<label class="cl-task-chk" style="display:inline-block;margin:1px 4px 1px 0;"><input type="checkbox" class="clGrp" data-eg-skip value="'+g+'"'+(on[g]?' checked':'')+'> '+g+'</label>';
+    }).join('');
+}
+$('#clauseBody').on('change', '.clGrp', function(){
+    var $tr = $(this).closest('tr');
+    var gs = $tr.find('.clGrp:checked').map(function(){ return $(this).val(); }).get();
+    $.post(API, {action:'clause_group_save', clause_id:$tr.data('id'), groups:JSON.stringify(gs)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        $tr.find('.cl-st').text('已儲存');
+    }, 'json');
+});
+$('#btnAppxSync').on('click', function(){
+    if (!confirm('要依手冊「附錄B」同步條文題庫嗎？\n\n條文編號與名稱會改成附錄B 的寫法，沒有的條文會新增，順序依附錄B；已設定的文件、作業項目、過程群組都保留。')) return;
+    $.post(API, {action:'appendixb_sync'}, function(res){
+        if (!res.ok) { alert(res.error||'同步失敗'); return; }
+        iaToast('已同步：更新 '+res.updated+' 條、新增 '+res.inserted+' 條（附錄B 共 '+res.total+' 條）', 5000);
+        loadClauses();
+    }, 'json');
+});
 /* 作業項目欄（2026-09-11 使用者交辦）：
    條文原文看不出實務上在查什麼，所以掛「作業項目」（品管檢測／外包加工…）。
    項目本身是設在 **AS 文件管理 → ⚙ 作業項目**（一份文件可以有好幾個），
@@ -6942,7 +7018,7 @@ function printCheck(id){
             /* 日期一律 YYYY.MM.DD（ai-rules/20；2026-09-22 使用者指出績效執行稽核查檢表印成
                「2026 年 01 月 05 日」）——走共用的 dispDate()，與右下角圖章上的日期同一種寫法。 */
             h += '<div style="font-size:12px;margin-bottom:5px;overflow:hidden;">'
-               + '<span>稽核人: '+esc(k.auditor_name||'')+'</span>'
+               + '<span>稽核員: '+esc([k.auditor_name, k.auditor2_name].filter(Boolean).join('、'))+'</span>'
                + (k.title ? '<span style="margin-left:18px;">'+esc(k.title)+'</span>' : '')
                + '<span style="float:right;">'+esc(dispDate(k.check_date))+'</span></div>';
             /* 產品型態稽核表的表頭（照紙本 2-DC-03-02）：客戶／訂單號碼／件號。
@@ -6956,7 +7032,10 @@ function printCheck(id){
                    + '<span style="float:right;">件號: '+esc(k.case_no||'')+'</span></div>';
             }
             h += '<table class="ia-p"><thead><tr>';
-            var heads = (k.kind==='as')
+            var stepMode = (k.kind==='as') && (k.items||[]).some(function(x){ return x.ref_kind === 'as_step'; });
+            var heads = stepMode
+                ? ['項次','標題','條文編號與名稱','對應 AS 程序書','對應 AS 文件','合格','不合格','所見證據或建議']
+                : (k.kind==='as')
                 ? ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議']
                 : (k.kind==='system')
                     ? ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註']
@@ -6965,7 +7044,8 @@ function printCheck(id){
                         : ['序','部門','內容','目標','受稽人','達成','沒達成','備註(異常矯正處理單編號)'];
             /* AS 是橫式，寬度多出來就分給「建立的文件、表單」與「所見證據或建議」（兩欄都是長字串）。
                2026-09-22 使用者要求：「建立的文件、表單」再寬一點、「所見證據或建議」窄一點。 */
-            var widths = (k.kind==='as') ? ['34px','','265px','36px','40px','200px']
+            var widths = stepMode ? ['30px','64px','','150px','190px','34px','40px','120px']
+                       : (k.kind==='as') ? ['34px','','265px','36px','40px','200px']
                        : (k.kind==='system') ? ['34px','86px','','66px','36px','40px','92px']
                        : (k.kind==='type') ? ['34px','','86px','62px','200px','36px','44px','120px']
                        : ['28px','62px','','76px','60px','36px','44px','110px'];
@@ -6980,7 +7060,13 @@ function printCheck(id){
                 n++;
                 var okM = it.result==='ok' ? 'V' : '';
                 var ngM = it.result==='ng' ? 'V' : '';
-                if (k.kind==='as') {
+                if (stepMode) {
+                    h += '<tr><td>'+n+'</td><td class="l" style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
+                      + '<td class="l pre" style="font-size:11px;">'+esc(it.col_a||'')+'</td>'
+                      + '<td class="l" style="font-size:11px;">'+esc(it.col_d||'')+'</td>'
+                      + '<td class="l pre" style="font-size:11px;">'+esc(it.col_b||'')+'</td>'
+                      + '<td>'+okM+'</td><td>'+ngM+'</td><td class="pre">'+esc(it.evidence||'')+'</td></tr>';
+                } else if (k.kind==='as') {
                     h += '<tr><td>'+n+'</td><td class="l">'+esc(it.col_a)+'</td>'
                       + '<td class="pre" style="font-size:11px;">'+esc(it.col_b||'')+'</td>'
                       + '<td>'+okM+'</td><td>'+ngM+'</td><td class="pre">'+esc(it.evidence||'')+'</td></tr>';

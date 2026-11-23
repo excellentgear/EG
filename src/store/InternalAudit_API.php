@@ -1167,6 +1167,17 @@ case 'check_create': {
         $auditorName = (string)($q->fetchColumn() ?: $uname);
     }
 
+    /* 第二位稽核員：每張查檢表至少兩位稽核員（2026-11-23 老師建議，稽核日期 2026 年起）。
+       前端擋一次、這裡同規則再擋一次（鐵律8）。 */
+    $aud2 = null;
+    $a2key = trim((string)($_POST['auditor2_key'] ?? ''));
+    if ($a2key !== '') {
+        $aud2 = ia_resolve_post($db, $a2key, 'auditor', $cd);
+        if (!$aud2) jerr('第二位稽核員沒有該職務的稽核員資格');
+        if ((int)$aud2['user_id'] === (int)$auditorId) jerr('兩位稽核員不可以是同一個人');
+    }
+    if ($cd >= '2026-01-01' && !$aud2) jerr('每張查檢表至少要有兩位稽核員，請選擇第二位稽核員');
+
     $db->beginTransaction();
     try {
         $db->prepare("INSERT INTO ia_check (case_id, year, kind, half, title, auditor_id, auditor_name,
@@ -1178,6 +1189,10 @@ case 'check_create': {
                       $auditorId, $auditorName, $auditorDept, $auditorPos,
                       $srcDocId ?: null, $orderNo, $cd, $uid, $uname]);
         $kid = (int)$db->lastInsertId();
+        if ($aud2) {
+            $db->prepare("UPDATE ia_check SET auditor2_id=?, auditor2_name=?, auditor2_dept_id=?, auditor2_position_id=? WHERE check_id=?")
+               ->execute([$aud2['user_id'], $aud2['user_name'], $aud2['dept_id'], $aud2['position_id'], $kid]);
+        }
         // result／evidence：績效查檢表建立當下就由 KPI 資料自動判定好（2026-09-15），
         // 其他兩種維持空白由稽核員填。
         $ins = $db->prepare("INSERT INTO ia_check_item (check_id, sort_order, is_header, col_a, col_b, col_c, col_d,
@@ -1554,6 +1569,19 @@ case 'check_save_items': {
         }
     }
 
+    // 第二位稽核員：沒送這個欄位＝不動；送空字串＝清除（與第一位同語意）
+    $aud2Set = null;
+    if (array_key_exists('auditor2_key', $_POST)) {
+        $a2 = trim((string)$_POST['auditor2_key']);
+        if ($a2 === '') $aud2Set = ['clear' => 1];
+        elseif ($a2 !== ia_post_key((int)$k['auditor2_id'], (int)$k['auditor2_dept_id'], (int)$k['auditor2_position_id'])) {
+            $asOf2 = $ad ?: (string)$k['check_date'];
+            $ap2 = ia_resolve_post($db, $a2, 'auditor', $asOf2);
+            if (!$ap2) jerr('第二位稽核員在稽核日期（' . $asOf2 . '）當時沒有該職務的稽核員資格');
+            $aud2Set = $ap2;
+        }
+    }
+
     $db->beginTransaction();
     try {
         /* col_c／col_d 用 COALESCE：**沒送這個欄位就沿用原值**（傳 null＝保留），
@@ -1625,6 +1653,16 @@ case 'check_save_items': {
                               $auditorSet['dept_id'], $auditorSet['position_id'], $kid]);
             }
         }
+        if ($aud2Set !== null) {
+            if (!empty($aud2Set['clear'])) {
+                $db->prepare("UPDATE ia_check SET auditor2_id=NULL, auditor2_name=NULL, auditor2_dept_id=NULL, auditor2_position_id=NULL WHERE check_id=?")->execute([$kid]);
+            } else {
+                $first = ($auditorSet === null) ? (int)$k['auditor_id'] : (empty($auditorSet['clear']) ? (int)$auditorSet['user_id'] : 0);
+                if ($first && $first === (int)$aud2Set['user_id']) throw new RuntimeException('兩位稽核員不可以是同一個人');
+                $db->prepare("UPDATE ia_check SET auditor2_id=?, auditor2_name=?, auditor2_dept_id=?, auditor2_position_id=? WHERE check_id=?")
+                   ->execute([$aud2Set['user_id'], $aud2Set['user_name'], $aud2Set['dept_id'], $aud2Set['position_id'], $kid]);
+            }
+        }
         // 存完自動依「受稽人部門 → 表單編號」重排（2026-09-18 使用者要求）
         $resorted = ia_check_items_resort($db, $kid);
         $db->commit();
@@ -1644,6 +1682,10 @@ case 'check_done': {
     $st->execute([$kid]);
     $k = $st->fetch(PDO::FETCH_ASSOC);
     if (!$k) jerr('找不到這張查檢表', 404);
+    // 每張查檢表至少兩位稽核員（2026-11-23 老師建議，稽核日期 2026 年起）
+    if ($to === 'done' && (string)($k['check_date'] ?? '') >= '2026-01-01'
+        && (!(int)$k['auditor_id'] || !(int)($k['auditor2_id'] ?? 0)))
+        jerr('每張查檢表至少要有兩位稽核員，請先在表頭指定第二位稽核員');
     /* 「每一項都要判定過才能結案」刻意**不套用在 AS稽核查檢表**（2026-09-22 使用者要求）：
        那張表的判定是系統從系統稽核紀錄表帶過來的，一條要求底下列到的表單這次沒有查到時
        本來就該留白（不可以亂猜成合格），而人工又不能填——套這條規則等於永遠結不了案。 */
@@ -1705,12 +1747,27 @@ case 'clause_list': {
     $rows = ia_as_clauses($db, false);
     // 每一條帶上「可挑的作業項目（依它列的文件）」與「已挑的」——題庫畫面要一次畫得出來
     $picked = ia_clause_task_map($db, array_column($rows, 'clause_id'));
+    $gmap = ia_clause_groups_map($db);
     foreach ($rows as &$r) {
+        $r['groups'] = $gmap[(int)$r['clause_id']] ?? [];
         $r['doc_tasks'] = ia_clause_doc_tasks($db, $r['doc_ref'] ?? '');
         $r['tasks']     = $picked[(int)$r['clause_id']] ?? [];
     }
     unset($r);
     jout(['rows' => $rows]);
+}
+/* 手冊附錄B 同步進條文題庫、條文所屬過程群組（2026-11-23 老師建議） */
+case 'appendixb_sync': {
+    iaReqAdmin($perms);
+    try { $r = ia_appendixb_sync($db); } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout($r);
+}
+case 'clause_group_save': {
+    iaReqAdmin($perms);
+    $codes = json_decode((string)($_POST['groups'] ?? '[]'), true);
+    try { ia_clause_groups_save($db, (int)($_POST['clause_id'] ?? 0), is_array($codes) ? $codes : []); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['saved' => true]);
 }
 /* AS 文件挑選清單（2026-08-26 使用者要求：條文題庫的「建立的文件、表單」與 IA 單的「相關表單編號」
    都要能打編號或名稱模糊篩選後挑選，不要手打）。回全部未廢止的 AS 文件，前端自己過濾即可，
