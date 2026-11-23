@@ -3378,9 +3378,7 @@ function caseSavePayload(){
 $('#btnCaseSave').on('click', function(){
     if (!validateCase()) return;
     var lm = leadShort();
-    if (lm && !confirm(lm + '
-
-仍要儲存嗎？')) return;
+    if (lm && !confirm(lm + '\n\n仍要儲存嗎？')) return;
     $.post(API, caseSavePayload(), function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         // 稽核日期改過的話件號會跟著重編，要講出來（不然使用者只會覺得編號莫名其妙變了）

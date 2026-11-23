@@ -3278,8 +3278,8 @@ function ia_year_checklist(PDO $db, int $year): array
           'have' => $ncAll, 'need' => 0, 'done' => $ncClosed, 'missing' => $missNc,
           'label' => $ncAll ? ('開立 ' . $ncAll . ' 張，已結案 ' . $ncClosed . ' 張' . ($ncOver ? '，逾期 ' . $ncOver . ' 張' : ''))
                             : '本年度沒有開立不符合通知單',
-          'state' => ($ncOver ? 'warn' : ($ncAll === 0 ? 'ok' : ($ncClosed >= $ncAll ? 'ok' : 'doing'))),
-          'note' => $ncAll ? '' : '沒有缺失不算漏單']);
+          'state' => ($ncOver ? 'warn' : ($ncAll === 0 ? ($cases ? 'ok' : 'todo') : ($ncClosed >= $ncAll ? 'ok' : 'doing'))),
+          'note' => $ncAll ? '' : ($cases ? '沒有缺失不算漏單' : '還沒有任何稽核，尚無從判斷')]);
 
     /* ── ⑧由內稽開立的異常矯正處理單（CAR）──
        來源＝績效執行稽核查檢表「沒達成」自動開的那幾張，靠 ia_check_item.car_id 反查。 */
@@ -3301,7 +3301,7 @@ function ia_year_checklist(PDO $db, int $year): array
     $add(['key' => 'car', 'stage' => '⑧缺失', 'doc_no' => $no, 'doc_name' => $nm . '（由內稽開立）', 'pane' => 'check',
           'have' => $carAll, 'need' => 0, 'done' => $carClosed, 'missing' => $missCar,
           'label' => $carAll ? ('開立 ' . $carAll . ' 張，已結案 ' . $carClosed . ' 張') : '本年度沒有由內稽開立矯正單',
-          'state' => ($carAll === 0 ? 'ok' : ($carClosed >= $carAll ? 'ok' : 'doing')),
+          'state' => ($carAll === 0 ? ($cases ? 'ok' : 'todo') : ($carClosed >= $carAll ? 'ok' : 'doing')),
           'note' => $carAll ? '績效執行稽核查檢表「沒達成」自動開立' : '沒有未達標的指標不算漏單']);
 
     /* ── ⑩稽核報告表 ── */
