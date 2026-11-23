@@ -9325,7 +9325,7 @@ function relinkEditorUrls(node) {
     for (const k in node) {
         const v = node[k];
         if (typeof v === 'string') {
-            if (v.length < 600 && v.indexOf('image_editor.php?action=') > 0 && /^https?:///i.test(v)) node[k] = v.slice(v.indexOf('image_editor.php?action='));
+            if (v.length < 600 && v.indexOf('image_editor.php?action=') > 0 && /^https?:[/][/]/i.test(v)) node[k] = v.slice(v.indexOf('image_editor.php?action='));
         } else if (v && typeof v === 'object') relinkEditorUrls(v);
     }
 }
