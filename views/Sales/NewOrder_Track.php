@@ -4173,6 +4173,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         if ($pnA !== null) $has_order_map[$pnA] = true;
                     }
                 } catch (Exception $e) {}   // order_attachments 尚未建表時略過
+                // 同一個訂單編號（Order_oo）底下的共用附件（2026-11-23）：同編號多張訂單（例如 RH/LH 左右件）
+                // 常只把檔案傳在其中一張，bom_viewer 的訂單附件分頁本來就依 Order_oo 一起列出，
+                // 這裡也要一致，否則另一張的料號明明點得開卻被判成「無附件」。純新增補充判定，不改上面既有查詢。
+                try {
+                    $oaB = $pdo->prepare("SELECT DISTINCT ot.d_id_ID
+                                          FROM order_attachments a
+                                          JOIN order_track src ON src.Order_id = a.order_id
+                                          JOIN order_track ot ON ot.Order_oo = src.Order_oo
+                                          WHERE a.status='active' AND ot.d_id_ID IN ($phA)");
+                    $oaB->execute($pksA);
+                    foreach ($oaB->fetchAll(PDO::FETCH_COLUMN) as $pkB) {
+                        $pnB = $did_of_part[(int)$pkB] ?? null;
+                        if ($pnB !== null) $has_order_map[$pnB] = true;
+                    }
+                } catch (Exception $e) {}
             }
         }
 
