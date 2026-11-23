@@ -5717,6 +5717,14 @@ function ia_pgroup_ensure(PDO $db): void
             group_code VARCHAR(10) NOT NULL,
             PRIMARY KEY (clause_id, group_code)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='條文屬於哪幾個過程群組（COP/MP/SP）'");
+        // 條文在某個群組下「歸這個群組的程序書」（2026-11-23：條文標了 COP2 與 MP01 時，各群組只算各自指定的程序書，
+        // 不再整條文的程序書同時算進兩個群組）。沒有任何列＝這個條文×群組尚未指定。
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_clause_group_proc (
+            clause_id  INT NOT NULL,
+            group_code VARCHAR(10) NOT NULL,
+            proc_no    VARCHAR(30) NOT NULL,
+            PRIMARY KEY (clause_id, group_code, proc_no)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='條文×過程群組 對應的程序書'");
         if ((int)$db->query("SELECT COUNT(*) FROM ia_process_group")->fetchColumn() === 0) {
             $find = $db->prepare("SELECT id FROM as_document WHERE doc_no=? ORDER BY id LIMIT 1");
             $docId = function (string $no) use ($find): int { $find->execute([$no]); return (int)$find->fetchColumn(); };
@@ -5755,6 +5763,45 @@ function ia_clause_groups_map(PDO $db): array
     return $m;
 }
 
+/** clause_id => group_code => [程序書編號…]（只含已指定的） */
+function ia_clause_group_procs_map(PDO $db): array
+{
+    ia_pgroup_ensure($db);
+    $m = [];
+    try {
+        foreach ($db->query("SELECT clause_id, group_code, proc_no FROM ia_clause_group_proc ORDER BY proc_no")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $m[(int)$r['clause_id']][$r['group_code']][] = $r['proc_no'];
+    } catch (Throwable $e) {}
+    return $m;
+}
+/** 某條文三段編號（程序書）清單，唯一判定（附錄B 作業程序編號欄；1 開頭是手冊） */
+function ia_clause_proc_list(array $clause): array
+{
+    $out = [];
+    foreach (ia_clause_doc_nos((string)($clause['proc_nos'] ?? '')) as $no)
+        if (preg_match('/^[2-9]-[A-Za-z]{2,3}-\d{2}$/', $no)) $out[$no] = $no;
+    return array_values($out);
+}
+function ia_clause_group_procs_save(PDO $db, int $clauseId, string $code, array $procs): void
+{
+    ia_pgroup_ensure($db);
+    $st = $db->prepare("SELECT proc_nos FROM ia_as_clause WHERE clause_id=?");
+    $st->execute([$clauseId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) throw new RuntimeException('找不到這一條條文');
+    $ok = ia_clause_proc_list(['proc_nos' => $row['proc_nos']]);
+    $has = $db->prepare("SELECT 1 FROM ia_clause_group WHERE clause_id=? AND group_code=?");
+    $has->execute([$clauseId, $code]);
+    if (!$has->fetchColumn()) throw new RuntimeException('這一條條文沒有勾 ' . $code . ' 這個過程群組');
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM ia_clause_group_proc WHERE clause_id=? AND group_code=?")->execute([$clauseId, $code]);
+        $ins = $db->prepare("INSERT IGNORE INTO ia_clause_group_proc (clause_id, group_code, proc_no) VALUES (?,?,?)");
+        foreach (array_unique($procs) as $no) if (in_array($no, $ok, true)) $ins->execute([$clauseId, $code, $no]);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+}
+
 function ia_clause_groups_save(PDO $db, int $clauseId, array $codes): void
 {
     ia_pgroup_ensure($db);
@@ -5764,6 +5811,14 @@ function ia_clause_groups_save(PDO $db, int $clauseId, array $codes): void
         $db->prepare("DELETE FROM ia_clause_group WHERE clause_id=?")->execute([$clauseId]);
         $ins = $db->prepare("INSERT IGNORE INTO ia_clause_group (clause_id, group_code) VALUES (?,?)");
         foreach (array_unique($codes) as $c) if (in_array($c, $valid, true)) $ins->execute([$clauseId, $c]);
+        // 群組被拿掉的，它指定的程序書一併清掉
+        $keep = array_values(array_intersect(array_unique($codes), $valid));
+        if ($keep) {
+            $ph = implode(',', array_fill(0, count($keep), '?'));
+            $db->prepare("DELETE FROM ia_clause_group_proc WHERE clause_id=? AND group_code NOT IN ($ph)")->execute(array_merge([$clauseId], $keep));
+        } else {
+            $db->prepare("DELETE FROM ia_clause_group_proc WHERE clause_id=?")->execute([$clauseId]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
 }
@@ -5926,19 +5981,23 @@ function ia_pgroup_units(PDO $db): array
     try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $names[(int)$d['id']] = (string)$d['name']; }
     catch (Throwable $e) {}
     // 條文 → 附錄B 作業程序編號（只取啟用中的條文）
-    $procs = [];
+    $procs = []; $label = [];
     foreach (ia_as_clauses($db, true) as $c) {
-        $nos = [];
-        foreach (ia_clause_doc_nos((string)($c['proc_nos'] ?? '')) as $no) {
-            if (preg_match('/^[2-9]-[A-Za-z]{2,3}-\d{2}$/', $no)) $nos[] = $no;   // 三段編號＝程序書；1 開頭是手冊
-        }
+        $nos = ia_clause_proc_list($c);   // 三段編號＝程序書；1 開頭是手冊
         if ($nos) $procs[(int)$c['clause_id']] = $nos;
+        $label[(int)$c['clause_id']] = trim((string)($c['clause_no'] ?? '')) ?: mb_substr((string)($c['clause_text'] ?? ''), 0, 12);
     }
     $gmap = ia_clause_groups_map($db);          // clause_id => [group_code,…]
-    $byGroup = [];
+    $gp   = ia_clause_group_procs_map($db);     // clause_id => group_code => [程序書]
+    $byGroup = []; $unspec = [];
     foreach ($gmap as $cid => $codes) {
         if (empty($procs[$cid])) continue;
-        foreach ($codes as $code) foreach ($procs[$cid] as $no) $byGroup[$code][$no] = 1;
+        foreach ($codes as $code) {
+            // 只算這個條文在這個群組「指定」的程序書；沒指定＝尚未指定（提醒補，不整條帶進來）
+            $sel = array_values(array_intersect($procs[$cid], $gp[$cid][$code] ?? []));
+            if ($sel) foreach ($sel as $no) $byGroup[$code][$no] = 1;
+            else $unspec[$code][] = $label[$cid] ?? ('#' . $cid);
+        }
     }
     $out = []; $n = 0;
     foreach (ia_pgroup_list($db) as $g) {
@@ -5954,7 +6013,7 @@ function ia_pgroup_units(PDO $db): array
             $units[] = ['dept_id' => $key, 'dept_name' => $names[$key] ?? ('#' . $key)];
         }
         $out[] = ['group_code' => $g['group_code'], 'group_name' => $g['group_name'], 'order' => $n,
-                  'units' => $units, 'proc_nos' => $nos];
+                  'units' => $units, 'proc_nos' => $nos, 'unspecified' => $unspec[$g['group_code']] ?? []];
     }
     return $out;
 }

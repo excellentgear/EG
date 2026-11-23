@@ -1805,8 +1805,15 @@ case 'clause_list': {
     // 每一條帶上「可挑的作業項目（依它列的文件）」與「已挑的」——題庫畫面要一次畫得出來
     $picked = ia_clause_task_map($db, array_column($rows, 'clause_id'));
     $gmap = ia_clause_groups_map($db);
+    $gpm  = ia_clause_group_procs_map($db);
+    $docNm = [];
     foreach ($rows as &$r) {
         $r['groups'] = $gmap[(int)$r['clause_id']] ?? [];
+        // 這一條的程序書（編號＋名稱）與各群組已指定的程序書（2026-11-23）
+        $pl = ia_clause_proc_list($r);
+        $r['procs'] = $pl ? array_map(function ($d) { return ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']]; },
+                              ia_clause_doc_tasks($db, implode(' ', $pl))) : [];
+        $r['group_procs'] = $gpm[(int)$r['clause_id']] ?? new stdClass();
         $r['doc_tasks'] = ia_clause_doc_tasks($db, $r['doc_ref'] ?? '');
         // 唯讀顯示用：doc_ref 與附錄B 作業程序編號合併後的文件（編號＋名稱）
         $r['docs_view'] = array_map(function($d){ return ['doc_no'=>$d['doc_no'],'doc_name'=>$d['doc_name']]; },
@@ -1821,6 +1828,13 @@ case 'appendixb_sync': {
     iaReqAdmin($perms);
     try { $r = ia_appendixb_sync($db); } catch (Throwable $e) { jerr($e->getMessage()); }
     jout($r);
+}
+case 'clause_group_procs_save': {
+    iaReqAdmin($perms);
+    $ps = json_decode((string)($_POST['procs'] ?? '[]'), true);
+    try { ia_clause_group_procs_save($db, (int)($_POST['clause_id'] ?? 0), (string)($_POST['group'] ?? ''), is_array($ps) ? $ps : []); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['saved' => true]);
 }
 case 'clause_group_save': {
     iaReqAdmin($perms);

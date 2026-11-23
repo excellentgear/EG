@@ -2819,6 +2819,7 @@ function openCase(id){
         $.getJSON(API, {action:'pgroup_units'}, function(g){
             if (!g.ok || !(g.groups||[]).length || CASE_ID) return;
             GRP_UNITS = g.groups; CASE_ROWS = buildGroupRows(g.groups, null); renderCaseRows();
+            grpUnspecNotice(g.groups);
         });
         $('#btnCaseDelete').hide();
         applyCaseLock(null);
@@ -6755,7 +6756,9 @@ function loadClauses(){
     $.getJSON(API, {action:'clause_list'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         var h = '';
+        CL = {};
         (res.rows||[]).forEach(function(c){
+            CL[c.clause_id] = c;
             h += clauseRowHtml(c);
         });
         $('#clauseBody').html(h || '<tr><td colspan="7" class="ia-empty">題庫是空的</td></tr>');
@@ -6791,9 +6794,16 @@ $('#clauseBody').on('change', '.clAct', function(){
 });
 /* 條文所屬過程群組（COP1~SP02，可複選）：用下拉加入、標籤上的 × 移除，改了就直接存；標題列不用設 */
 var PG_CODES = ['COP1','COP2','COP3','COP4','MP01','MP02','SP01','SP02'];
-function clauseGroupChips(gs){
+var CL = {};
+/* 群組標籤：點群組代號＝指定「這條在這個群組下歸哪幾份程序書」；紅色「⚠」＝還沒指定（提醒補，沒指定的不會帶進受稽單位） */
+function clauseGroupChips(gs, c){
+    c = c || {};
+    var gp = c.group_procs || {}, np = (c.procs||[]).length;
     return (gs||[]).map(function(g){
-        return '<span class="nk-task clGrpChip" data-g="'+esc(g)+'" style="margin:1px 3px 1px 0;">'+esc(g)
+        var n = (gp[g]||[]).length, bad = np && !n;
+        return '<span class="nk-task clGrpChip" data-g="'+esc(g)+'" style="margin:1px 3px 1px 0;'+(bad?'background:#fde2db;border-color:#DD5138;':'')+'">'
+             + '<a href="javascript:void(0)" class="clGrpPick" style="color:'+(bad?'#C4442D':'inherit')+';" title="'+(np?'指定這一條在 '+esc(g)+' 下歸哪幾份程序書':'這一條附錄B 沒有程序書')+'">'+esc(g)
+             + (np ? (bad ? ' ⚠尚未指定' : (' ('+n+'/'+np+')')) : '') + '</a>'
              + ' <a href="javascript:void(0)" class="clGrpDel" style="color:#C4442D;">×</a></span>';
     }).join('');
 }
@@ -6805,13 +6815,42 @@ function clauseGroupOpts(gs){
 function clauseGroupHtml(c){
     c = c || {};
     if (+c.is_header || !c.clause_id) return '<span class="cl-task-hint">'+(+c.is_header ? '（標題列）' : '存檔後才能設定')+'</span>';
-    return '<div class="clGrpChips">'+clauseGroupChips(c.groups)+'</div>'
+    return '<div class="clGrpChips">'+clauseGroupChips(c.groups, c)+'</div>'
+         + '<div class="clGrpPanel" style="display:none;"></div>'
          + '<select class="clGrpAdd" data-eg-skip style="max-width:130px;">'+clauseGroupOpts(c.groups)+'</select>';
 }
+/** 這一條某群組的程序書勾選面板 */
+$('#clauseBody').on('click', '.clGrpPick', function(){
+    var $tr = $(this).closest('tr'), c = CL[$tr.data('id')], g = String($(this).closest('.clGrpChip').data('g'));
+    if (!c) return;
+    var $p = $tr.find('.clGrpPanel');
+    if ($p.is(':visible') && $p.data('g') === g) { $p.hide(); return; }
+    var sel = (c.group_procs||{})[g] || [];
+    var h = '<div style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;margin:3px 0;background:#FFF9EC;font-size:12px;">'
+          + '<b>' + esc(g) + '</b> 稽核這一條時要看哪幾份程序書：';
+    (c.procs||[]).forEach(function(d){
+        h += '<label style="display:block;margin:1px 0;font-weight:normal;"><input type="checkbox" class="clGpChk" value="'+esc(d.doc_no)+'"'
+           + (sel.indexOf(d.doc_no)>=0?' checked':'')+'> '+esc(d.doc_no+' '+(d.doc_name||''))+'</label>';
+    });
+    h += '<button class="clGpSave" style="margin-top:3px;">儲存</button></div>';
+    $p.data('g', g).html(h).show();
+});
+$('#clauseBody').on('click', '.clGpSave', function(){
+    var $tr = $(this).closest('tr'), c = CL[$tr.data('id')], $p = $tr.find('.clGrpPanel'), g = String($p.data('g'));
+    var ps = $p.find('.clGpChk:checked').map(function(){ return $(this).val(); }).get();
+    $.post(API, {action:'clause_group_procs_save', clause_id:$tr.data('id'), group:g, procs:JSON.stringify(ps)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        c.group_procs = c.group_procs || {}; c.group_procs[g] = ps;
+        $p.hide(); $tr.find('.clGrpChips').html(clauseGroupChips(c.groups, c));
+        $tr.find('.cl-st').text('已儲存');
+    }, 'json');
+});
 function clauseGroupSave($tr, gs){
     $.post(API, {action:'clause_group_save', clause_id:$tr.data('id'), groups:JSON.stringify(gs)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        $tr.find('.clGrpChips').html(clauseGroupChips(gs));
+        var c = CL[$tr.data('id')];
+        if (c) { c.groups = gs; var keep = {}; gs.forEach(function(x){ keep[x] = (c.group_procs||{})[x] || []; }); c.group_procs = keep; }
+        $tr.find('.clGrpChips').html(clauseGroupChips(gs, c));
         $tr.find('.clGrpAdd').html(clauseGroupOpts(gs));
         $tr.find('.cl-st').text('已儲存');
     }, 'json');
@@ -8347,6 +8386,13 @@ $('#btnCaseTplSet').on('click', function(){
 });
 /* ---- 依過程群組（COP1~SP02）分配稽核日期，受稽單位自動帶入（2026-11-23 使用者要求） ---- */
 var GRP_UNITS = [];
+/* 條文×群組還沒指定程序書的，提醒去條文題庫補（沒指定的不會帶進受稽單位） */
+function grpUnspecNotice(groups){
+    var bad = (groups||[]).filter(function(g){ return (g.unspecified||[]).length; });
+    if (!bad.length) return;
+    iaToast('提醒：'+bad.map(function(g){ return g.group_code+' 還有 '+g.unspecified.length+' 條條文尚未指定程序書'; }).join('；')
+        +'。這些條文不會帶進受稽單位，請到「AS條文題庫」的過程群組標籤指定。', 9000);
+}
 /* 各受稽單位的「預設陪檢員」（設定一次，每次新增通知單自動帶入；稽核員則每次稽核各自挑） */
 function unitEscortDefaults(){
     try { return JSON.parse((META.settings||{}).ia_unit_escorts || '{}') || {}; } catch(e){ return {}; }
@@ -8548,7 +8594,7 @@ $('#btnCaseGroups').on('click', function(){
     if (!$('#cFrom').val()) { alert('請先填上面的「稽核期間」起日，日期只能選期間內的日子'); return; }
     $.getJSON(API, {action:'pgroup_units'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
-        GRP_UNITS = res.groups || [];
+        GRP_UNITS = res.groups || []; grpUnspecNotice(GRP_UNITS);
         var h = '';
         GRP_UNITS.forEach(function(g){
             h += '<tr data-code="'+esc(g.group_code)+'"><td><b>第 '+g.order+' 順位</b></td>'
