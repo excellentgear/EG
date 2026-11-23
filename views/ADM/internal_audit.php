@@ -4964,9 +4964,17 @@ function stepRowsHtml(it, n, ro){
            + '<td><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ng"'+(v.r==='ng'?' checked':'')+(ro?' disabled':'')+'></td>'
            + '<td><input type="text" class="ckDocF" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" data-f="e" value="'+esc(v.e)+'"'+(ro?' readonly':'')+' style="'+inp+'"></td>'
            + '<td><input type="text" class="ckDocF" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" data-f="m" value="'+esc(v.m)+'"'+(ro?' readonly':'')+' style="'+inp+'">'
-           + (i===0 ? '<span class="ckNcCell">'+ncBtnHtml(it, ro)+'</span>' : '') + '</td></tr>';
+           + '<span class="ckDocNc" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'">'+docNcBtn(it, d.no, v.r, ro)+'</span></td></tr>';
     });
     return h;
+}
+/** 這一份文件的「開不符合單」鈕（判不合格才出現）或已開的單號 */
+function docNcBtn(it, no, r, ro){
+    var dn = (it.doc_ncs||{})[no];
+    if (dn && dn.nc_id) return '<span class="ia-op" onclick="openNc('+dn.nc_id+')">'+esc(dn.nc_no||'IA單')+'</span>';
+    if (r === 'ng' && !ro && CAN_AUDIT)
+        return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+',''+String(no).replace(/'/g,'')+'')"><i class="fa fa-plus"></i> 開不符合單</span>';
+    return '';
 }
 /** 某一條目前畫面上各份文件的判定 → {marks,result,evidence,remark}（整條判定與彙總文字由此推導） */
 function stepItemState(it, $scope){
@@ -4995,7 +5003,8 @@ $('#ckBody').on('change', '.ckDoc', function(){
     var $rows = $('#ckBody tr[data-item="'+id+'"]');
     var st = stepItemState(it, $rows);
     it.result = st.result; it.doc_marks = st.marks;
-    var $cell = $rows.first().find('.ckNcCell'); $cell.html(ncBtnHtml(it, !CHK.can_edit));
+    var $sp = $(this).closest('tr').find('.ckDocNc');
+    $sp.html(docNcBtn(it, String($(this).data('no')), $(this).val(), !CHK.can_edit));
     renderCheckAutoBar(!CHK.can_edit);
 });
 function renderCheckItems(){
@@ -5498,12 +5507,12 @@ function carFromItem(itemId){
 function openCar(carId){ window.open('../QA/correction_order.php?open_id='+carId, '_blank'); }
 
 /* 由查檢表的不合格列直接開不符合通知單，欄位自動帶好 */
-function newNcFromItem(itemId){
+function newNcFromItem(itemId, docNo){
     var it = null;
     (CHK.items||[]).forEach(function(x){ if (+x.item_id===+itemId) it = x; });
     if (!it) return;
     saveCheck(true, function(){
-        openNcNew(ncPrefillFromItem(it));
+        openNcNew(ncPrefillFromItem(it, docNo));
     });
 }
 /* 一列不合格 → 不符合通知單要帶的欄位。
@@ -5512,7 +5521,7 @@ function newNcFromItem(itemId){
 /* 開不符合通知單時要自動帶的東西（2026-09-18 使用者要求）：
    受稽核單位、受稽核人、相關表單編號**與名稱快照**、稽核日期、所屬件號、要求完成期限。
    單位與人都還是可以在開單畫面手動改；期限取該受稽單位的「預定完成改善」。 */
-function ncPrefillFromItem(it){
+function ncPrefillFromItem(it, docNo){
     var sysNo = CHK.kind==='system' ? (it.col_a||'') : '';
     var dept  = CHK.kind==='kpi' ? (it.col_a||'') : (it.dept_name||'');
     /* 產品型態稽核表：不合格的是「這個料號的某一份型態文件」，所以相關表單欄位帶的是
@@ -5539,20 +5548,26 @@ function ncPrefillFromItem(it){
     var asNg = [];
     if (CHK.kind === 'as') {
         var lines = asDocLines(it), mk = asDocMarksOf(it);
-        asNg = lines.filter(function(d){ var v = mk[d.no]; return v && (v === 'ng' || v.r === 'ng'); });
+        asNg = docNo ? lines.filter(function(d){ return d.no === docNo; })
+                     : lines.filter(function(d){ var v = mk[d.no]; return v && (v === 'ng' || v.r === 'ng'); });
         if (!asNg.length) asNg = lines;
         if (asNg.length) sysNo = asNg.map(function(d){ return d.no; }).join('、');
     }
+    var asDoc = (CHK.kind === 'as' && docNo && asNg.length) ? asNg[0] : null;
+    var asDm = asDoc ? asDocMarkOf(it, asDoc.no) : null;
     return {
         case_id: CHK.case_id || '',
         audit_date: inputDate(CHK.check_date),
         src_kind: CHK.kind,
         src_item_id: it.item_id,
+        src_code: asDoc ? asDoc.no : '',
+        ref_form_name_as: asDoc ? asDoc.name : '',
         ref_form_no: sysNo,
         ref_form_name: CHK.kind==='system' ? (it.col_b||'') : '',
         clause_ref: CHK.kind==='as' ? (it.col_a||'') : (it.clause_ref||''),
         clauses: it.clauses || [],                 // 綁定這份文件的條文，開單畫面列出來勾
-        fact: sysNo ? (sysNo+' '+(it.col_b||'')+' 稽核不合格' + (it.evidence ? ('：'+it.evidence) : '')) : (it.evidence||''),
+        fact: asDoc ? (asDoc.text + ' 稽核不合格' + (asDm.e ? ('：'+asDm.e) : '') + (asDm.m ? ('（備註：'+asDm.m+'）') : ''))
+            : (sysNo ? (sysNo+' '+(it.col_b||'')+' 稽核不合格' + (it.evidence ? ('：'+it.evidence) : '')) : (it.evidence||'')),
         auditee_name: CHK.kind==='system' ? (it.col_c||'') : (CHK.kind==='kpi' ? (it.col_d||'') : ''),
         auditee_id: (CHK.kind==='system' ? (it.auditee_id||'') : ''),
         dept_hint: dept,
@@ -5642,7 +5657,7 @@ function openNcNewFill(pre){
     nnLoadAuditee(pre.auditee_id || guessUserId(pre.auditee_name), pre.auditee_name || '');
     ncClausePick(pre.clauses || []);
     $('#btnNcCreate').data('src', JSON.stringify({src_kind:pre.src_kind||'', src_item_id:pre.src_item_id||'',
-                                                 ref_form_name:pre.ref_form_name||''}));
+                                                 ref_form_name:pre.ref_form_name||pre.ref_form_name_as||'', src_code:pre.src_code||''}));
     /* 打字篩選框的選項快照是在 select 被畫出來當下取的，這裡整批換過選項後要它重取，
        否則使用者一打字就會被舊快照（多半是「載入中…」那一筆）洗掉。 */
     ['nnDept', 'nnAuditee'].forEach(function(id){

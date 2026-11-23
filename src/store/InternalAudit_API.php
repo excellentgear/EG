@@ -1395,8 +1395,17 @@ case 'check_get': {
         $cids = [];
         foreach ($k['items'] as $it) if (($it['ref_kind'] ?? '') === 'as_clause') $cids[] = (int)$it['ref_id'];
         $map = $cids ? ia_clause_task_map($db, $cids) : [];
+        // 每份文件各自開過的不符合通知單：{文件編號:{nc_id,nc_no}}
+        $ncq = $db->prepare("SELECT src_item_id, src_code, nc_id, nc_no FROM ia_nc
+                              WHERE src_kind='as' AND src_item_id IN (SELECT item_id FROM ia_check_item WHERE check_id=?)
+                                AND COALESCE(is_deleted,0)=0");
+        $ncq->execute([$kid]);
+        $docNc = [];
+        foreach ($ncq->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $docNc[(int)$r['src_item_id']][(string)$r['src_code']] = ['nc_id' => (int)$r['nc_id'], 'nc_no' => (string)$r['nc_no']];
         foreach ($k['items'] as &$it) {
             $it['tasks'] = (($it['ref_kind'] ?? '') === 'as_clause') ? ($map[(int)$it['ref_id']] ?? []) : [];
+            $it['doc_ncs'] = $docNc[(int)$it['item_id']] ?? new stdClass();
         }
         unset($it);
     }
@@ -2062,9 +2071,14 @@ case 'nc_create': {
     /* AS稽核查檢表不開不符合通知單（2026-09-22 使用者要求）：那張表的不合格是從
        **系統稽核紀錄表**帶過來的，單要在那邊開才連得回真正查到問題的那一份表單；
        在 AS 這邊再開一張，同一件事會變成兩張單、而且違反條文與相關表單都對不起來。 */
-    if ($srcKind === 'as')
-        jerr('AS稽核查檢表不開立不符合通知單，請到該筆不合格對應的「系統稽核紀錄表」開單。');
     $srcCode = mb_substr(trim((string)($_POST['src_code'] ?? '')), 0, 30);
+    /* 2026-11-23 使用者又要求 AS稽核查檢表每一份不合格的文件各開一張單（鍵＝這一條＋文件編號，防重複）。 */
+    if ($srcKind === 'as' && $srcItem && $srcCode !== '') {
+        $q = $db->prepare("SELECT nc_no FROM ia_nc
+                            WHERE src_kind='as' AND src_item_id=? AND src_code=? AND COALESCE(is_deleted,0)=0 LIMIT 1");
+        $q->execute([$srcItem, $srcCode]);
+        if ($dup = $q->fetchColumn()) jerr('這份文件已經開過 ' . $dup . '，不重複開立', 409);
+    }
     /* 資料稽核開過來的單要防重複（鐵律8：前端擋一次、這裡同規則再擋一次）。
        鍵是「訂單＋檢核項目」三件一組——同一張訂單的「無報價單」與「出貨早於訂單」是兩張單，
        只比 src_item_id 會把第二張擋掉。 */
