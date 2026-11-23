@@ -5535,6 +5535,14 @@ function ncPrefillFromItem(it){
             dept_hint: '', dept_id: '', due_date: ''
         };
     }
+    /* AS稽核查檢表：相關表單編號＝這一條被標「不合格」的那幾份文件（沒標就帶這一條對應的全部文件） */
+    var asNg = [];
+    if (CHK.kind === 'as') {
+        var lines = asDocLines(it), mk = asDocMarksOf(it);
+        asNg = lines.filter(function(d){ var v = mk[d.no]; return v && (v === 'ng' || v.r === 'ng'); });
+        if (!asNg.length) asNg = lines;
+        if (asNg.length) sysNo = asNg.map(function(d){ return d.no; }).join('、');
+    }
     return {
         case_id: CHK.case_id || '',
         audit_date: inputDate(CHK.check_date),
