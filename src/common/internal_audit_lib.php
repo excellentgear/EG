@@ -2012,8 +2012,8 @@ function ia_as_apply_system_result(PDO $db, int $checkId, $srcCheckId): array
     $out = ['ng' => 0, 'ok' => 0, 'skip' => 0];
     if (!$forms) return $out;
 
-    $st = $db->prepare("SELECT item_id, ref_id FROM ia_check_item
-                         WHERE check_id=? AND is_header=0 AND ref_kind='as_clause'");
+    $st = $db->prepare("SELECT item_id, ref_id, ref_kind, col_b FROM ia_check_item
+                         WHERE check_id=? AND is_header=0 AND ref_kind IN ('as_clause','as_step')");
     $st->execute([$checkId]);
     $items = $st->fetchAll(PDO::FETCH_ASSOC);
     if (!$items) return $out;
@@ -2025,7 +2025,7 @@ function ia_as_apply_system_result(PDO $db, int $checkId, $srcCheckId): array
     $upd = $db->prepare("UPDATE ia_check_item SET result=?, evidence=? WHERE item_id=?");
     foreach ($items as $it) {
         $ngs = []; $oks = [];
-        foreach (ia_clause_doc_nos($refs[(int)$it['ref_id']] ?? '') as $no) {
+        foreach (ia_clause_doc_nos($it['ref_kind'] === 'as_step' ? (string)$it['col_b'] : ($refs[(int)$it['ref_id']] ?? '')) as $no) {
             if (!isset($forms[$no])) continue;
             $f = $forms[$no];
             if ($f['result'] === 'ng') $ngs[] = $no . ' ' . $f['name'] . ($f['nc_no'] !== '' ? '（' . $f['nc_no'] . '）' : '');
@@ -5594,21 +5594,67 @@ function ia_flow_gate(PDO $db, int $year, string $step): string
 /* ======================================================================
  * 2026-11-23 老師建議：過程導向查檢表（COP1~4、MP01~02、SP01~02 共 8 組）
  * ----------------------------------------------------------------------
- * 依航太品質手冊「附件C 品質管理系統流程圖」把二階程序書歸到 8 個過程群組。
- * 每個群組的條文與文件表單**不另存一份**：條文題庫 ia_as_clause.doc_ref 本來就寫著
- * 「這一條建立了哪些程序書、表單」（即附錄B 公司文件系統與 AS9100 條款對照），
- * 群組只記「包含哪幾份程序書」，條文由 doc_ref 裡的文件編號（程序書編號或其底下的表單編號）反查。
- * 預設歸屬依流程圖自動帶入一次，之後管理員可在設定跳窗自行增減。
+ * 依航太品質手冊「附件C 品質管理系統流程圖」，每個群組由若干「流程步驟」組成：
+ *   步驟名稱（詢價、報價、產品需求審查…）／階段（數字；同一個數字＝可並行）／
+ *   對應的 AS 程序書／對應的 AS 文件表單（可多份）／對應的一階手冊條文。
+ * 群組可設「依順序」（依階段 1、2、3…排列）或「不分順序」（只列出，不分階段）。
+ * 條文**不另存一份**：沒有手動指定時，由條文題庫 ia_as_clause.doc_ref 內寫的文件編號
+ * （程序書編號或其底下的表單編號）自動反查；手動指定了就以指定的為準。
+ * 預設內容依流程圖帶入一次，之後管理員可在「過程群組」設定跳窗自行增減。
  * ====================================================================== */
+/** 預設流程步驟：群組 => [名稱, 依順序?, [[階段, 步驟名稱, 程序書編號, [表單編號…]], …]] */
 const IA_PGROUP_DEFAULTS = [
-    'COP1' => ['客戶需求與客戶滿意管理',   ['2-SM-01', '2-SM-02']],
-    'COP2' => ['新產品與製程工程管理',     ['2-TD-02', '2-GM-02', '2-TD-03', '2-TD-04', '2-GM-03', '2-TD-01', '2-QA-05']],
-    'COP3' => ['生產管理',                 ['2-PD-01', '2-PH-03', '2-QA-02', '2-QA-04', '2-QA-01']],
-    'COP4' => ['原物料管理',               ['3-OB-01', '2-QA-04', '2-WH-01', '2-PH-01']],
-    'MP01' => ['經營管理',                 ['2-GM-01', '2-GM-06', '2-GM-04', '2-GM-03', '2-QA-03', '2-GM-05']],
-    'MP02' => ['持續改善管理',             ['2-QA-05']],
-    'SP01' => ['資源管理',                 ['2-MM-01', '2-MM-02', '2-MM-03', '2-MM-05']],
-    'SP02' => ['品管輔助管理',             ['2-DC-01', '2-DC-02', '3-QA-01']],
+    'COP1' => ['客戶需求與客戶滿意管理', 1, [
+        [1, '詢價',           '2-SM-01', ['2-SM-01-01']],
+        [1, '報價',           '2-SM-01', ['2-SM-01-02']],
+        [2, '產品需求審查',   '2-SM-01', ['2-SM-01-06']],
+        [3, '合約審查／變更', '2-SM-01', ['2-SM-01-05', '2-SM-01-03']],
+        [4, '客戶滿意度管理', '2-SM-02', ['2-SM-02-01', '2-SM-02-02', '2-SM-02-03', '2-SM-02-04']],
+    ]],
+    'COP2' => ['新產品與製程工程管理', 1, [
+        [1, '製程開發',       '2-TD-02', ['2-TD-02-01']],
+        [1, '專案管理',       '2-GM-02', ['2-GM-02-01', '2-GM-02-02', '2-GM-02-03']],
+        [2, '產品安全',       '2-TD-03', ['2-TD-03-01']],
+        [2, '工程變更',       '2-TD-01', ['2-TD-01-01']],
+        [3, '仿冒零件防治',   '2-TD-04', ['2-TD-04-01']],
+        [3, '矯正與預防措施', '2-QA-05', ['2-QA-01-04']],
+        [4, '風險管理',       '2-GM-03', ['2-GM-03-01']],
+    ]],
+    'COP3' => ['生產管理', 1, [
+        [1, '生產管理',       '2-PD-01', ['2-PD-01-01', '2-PD-01-03', '2-PD-01-06']],
+        [2, '委外加工',       '2-PH-03', ['2-PH-03-01', '2-PH-03-02', '2-PH-03-03']],
+        [3, '首件檢驗',       '2-QA-02', ['2-QA-02-01']],
+        [4, '檢驗與測試',     '2-QA-04', ['2-QA-01-06', '2-QA-01-09']],
+        [5, '不合格品管理',   '2-QA-01', ['2-QA-01-01', '2-QA-01-03']],
+    ]],
+    'COP4' => ['原物料管理', 1, [
+        [1, '採購管理',       '3-OB-01', ['3-OB-01-01', '3-OB-01-04', '3-OB-01-05']],
+        [1, '供應商管理',     '2-PH-01', ['2-PH-01-01', '2-PH-01-02', '2-PH-01-04']],
+        [2, '進料檢驗與測試', '2-QA-04', ['3-OB-01-02', '2-QA-01-06']],
+        [3, '倉儲出貨',       '2-WH-01', ['2-WH-01-01', '2-WH-01-04', '2-WH-01-07']],
+    ]],
+    'MP01' => ['經營管理', 0, [
+        [1, '管理責任與經營規劃', '2-GM-01', ['2-GM-01-01', '2-GM-01-02']],
+        [1, '績效衡量與管控',     '2-GM-04', ['2-GM-04-01']],
+        [1, '風險管理',           '2-GM-03', ['2-GM-03-01']],
+        [1, '問題分析與解決',     '2-QA-03', ['2-QA-01-04']],
+        [1, '內部稽核',           '2-GM-06', ['2-GM-06-01', '2-GM-06-02', '2-GM-06-03', '2-GM-06-04', '2-GM-06-06', '2-GM-06-07', '2-GM-06-08']],
+        [1, '管理審查',           '2-GM-05', ['2-GM-05-01', '2-GM-05-02', '2-GM-05-03']],
+    ]],
+    'MP02' => ['持續改善管理', 1, [
+        [1, '矯正與預防措施', '2-QA-05', ['2-QA-01-04']],
+    ]],
+    'SP01' => ['資源管理', 0, [
+        [1, '人力資源',   '2-MM-01', ['2-MM-01-01', '2-MM-01-04', '2-MM-01-05', '2-MM-01-08', '2-MM-01-09', '2-MM-01-10']],
+        [1, '基礎設施',   '2-MM-02', ['2-MM-02-01']],
+        [1, '環境管理',   '2-MM-03', ['2-MM-03-01']],
+        [1, '工安管理',   '2-MM-05', ['2-MM-05-01']],
+    ]],
+    'SP02' => ['品管輔助管理', 0, [
+        [1, '文件管理',       '2-DC-01', ['2-DC-01-01', '2-DC-01-02', '2-DC-01-03', '2-DC-01-04']],
+        [1, '記錄管理',       '2-DC-02', ['2-DC-02-01']],
+        [1, '檢測儀器校驗',   '3-QA-01', ['3-QA-01-01', '3-QA-01-02', '3-QA-01-07']],
+    ]],
 ];
 
 function ia_pgroup_ensure(PDO $db): void
@@ -5620,94 +5666,176 @@ function ia_pgroup_ensure(PDO $db): void
         $db->exec("CREATE TABLE IF NOT EXISTS ia_process_group (
             group_code VARCHAR(10) NOT NULL PRIMARY KEY,
             group_name VARCHAR(60) NOT NULL,
+            ordered    TINYINT NOT NULL DEFAULT 1 COMMENT '1=依順序（依階段排列）、0=不分順序',
             sort_order INT NOT NULL DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='過程導向查檢表的過程群組（COP/MP/SP）'");
-        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_group_doc (
+        $has = $db->query("SHOW COLUMNS FROM ia_process_group LIKE 'ordered'")->fetch();
+        if (!$has) $db->exec("ALTER TABLE ia_process_group ADD COLUMN ordered TINYINT NOT NULL DEFAULT 1 AFTER group_name");
+        // 流程步驟列的「條文」可能很長（一個步驟對到好幾條條文），col_a 原本是 VARCHAR(255) 會被截斷
+        $ct = $db->query("SHOW COLUMNS FROM ia_check_item LIKE 'col_a'")->fetch(PDO::FETCH_ASSOC);
+        if ($ct && stripos((string)$ct['Type'], 'varchar') !== false) $db->exec("ALTER TABLE ia_check_item MODIFY col_a TEXT NULL");
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_step (
+            step_id    INT AUTO_INCREMENT PRIMARY KEY,
             group_code VARCHAR(10) NOT NULL,
-            doc_id INT NOT NULL,
-            PRIMARY KEY (group_code, doc_id),
-            KEY idx_doc (doc_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='過程群組包含的程序書（as_document.id）'");
+            stage      INT NOT NULL DEFAULT 1 COMMENT '階段；同一個數字＝可並行（只在依順序的群組有意義）',
+            sort_order INT NOT NULL DEFAULT 0,
+            title      VARCHAR(100) NOT NULL COMMENT '流程步驟名稱（詢價、報價…）',
+            proc_doc_id INT NULL COMMENT '對應的 AS 程序書（as_document.id）',
+            form_doc_ids TEXT NULL COMMENT 'JSON：對應的 AS 文件表單 id 陣列',
+            clause_ids TEXT NULL COMMENT 'JSON：手動指定的條文 id；空＝由文件編號自動反查',
+            KEY idx_group (group_code, stage, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='過程群組的流程步驟'");
         if ((int)$db->query("SELECT COUNT(*) FROM ia_process_group")->fetchColumn() === 0) {
-            $sort = 0;
-            $insG = $db->prepare("INSERT INTO ia_process_group (group_code, group_name, sort_order) VALUES (?,?,?)");
-            $insD = $db->prepare("INSERT IGNORE INTO ia_process_group_doc (group_code, doc_id) VALUES (?,?)");
             $find = $db->prepare("SELECT id FROM as_document WHERE doc_no=? ORDER BY id LIMIT 1");
+            $docId = function (string $no) use ($find): int { $find->execute([$no]); return (int)$find->fetchColumn(); };
+            $insG = $db->prepare("INSERT INTO ia_process_group (group_code, group_name, ordered, sort_order) VALUES (?,?,?,?)");
+            $insS = $db->prepare("INSERT INTO ia_process_step (group_code, stage, sort_order, title, proc_doc_id, form_doc_ids)
+                                  VALUES (?,?,?,?,?,?)");
+            $gi = 0;
             foreach (IA_PGROUP_DEFAULTS as $code => $def) {
-                $insG->execute([$code, $def[0], ++$sort * 10]);
-                foreach ($def[1] as $no) {
-                    $find->execute([$no]);
-                    if ($id = (int)$find->fetchColumn()) $insD->execute([$code, $id]);
+                $insG->execute([$code, $def[0], $def[1], ++$gi * 10]);
+                foreach ($def[2] as $n => $s) {
+                    $forms = array_values(array_filter(array_map($docId, $s[3])));
+                    $insS->execute([$code, $s[0], ($n + 1) * 10, $s[1], $docId($s[2]) ?: null, json_encode($forms)]);
                 }
             }
         }
     } catch (Throwable $e) { error_log('ia_pgroup_ensure: ' . $e->getMessage()); }
 }
 
-/** 8 個群組＋各自包含的程序書（編號與名稱即時查 as_document） */
+/** 8 個群組＋各自的流程步驟（程序書／表單名稱即時查 as_document） */
 function ia_pgroup_list(PDO $db): array
 {
     ia_pgroup_ensure($db);
+    $docs = [];
+    try {
+        foreach ($db->query("SELECT id, doc_no, doc_name FROM as_document")->fetchAll(PDO::FETCH_ASSOC) as $d) $docs[(int)$d['id']] = $d;
+    } catch (Throwable $e) {}
     $out = [];
     try {
         foreach ($db->query("SELECT * FROM ia_process_group ORDER BY sort_order")->fetchAll(PDO::FETCH_ASSOC) as $g) {
-            $g['docs'] = [];
+            $g['ordered'] = (int)$g['ordered']; $g['steps'] = [];
             $out[$g['group_code']] = $g;
         }
-        $q = $db->query("SELECT g.group_code, d.id, d.doc_no, d.doc_name FROM ia_process_group_doc g
-                           JOIN as_document d ON d.id=g.doc_id ORDER BY d.doc_no");
-        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (isset($out[$r['group_code']])) $out[$r['group_code']]['docs'][] = ['id' => (int)$r['id'], 'doc_no' => $r['doc_no'], 'doc_name' => $r['doc_name']];
+        foreach ($db->query("SELECT * FROM ia_process_step ORDER BY group_code, stage, sort_order, step_id")->fetchAll(PDO::FETCH_ASSOC) as $s) {
+            if (!isset($out[$s['group_code']])) continue;
+            $pid = (int)$s['proc_doc_id'];
+            $s['proc'] = $pid && isset($docs[$pid]) ? $docs[$pid] : null;
+            $fid = json_decode((string)$s['form_doc_ids'], true); $fid = is_array($fid) ? $fid : [];
+            $s['forms'] = [];
+            foreach ($fid as $i) if (isset($docs[(int)$i])) $s['forms'][] = $docs[(int)$i];
+            $cid = json_decode((string)$s['clause_ids'], true); $s['clause_ids'] = is_array($cid) ? array_map('intval', $cid) : [];
+            $out[$s['group_code']]['steps'][] = $s;
         }
     } catch (Throwable $e) {}
     return array_values($out);
 }
 
-/** 可加入群組的程序書（二階／三階：編號只有三段，例 2-SM-01） */
+/** 可選的程序書（三段編號）與文件表單（四段編號）＋條文題庫，供設定畫面下拉 */
 function ia_pgroup_candidates(PDO $db): array
 {
+    $r = ['procs' => [], 'forms' => [], 'clauses' => []];
     try {
-        return $db->query("SELECT id, doc_no, doc_name FROM as_document
-                            WHERE doc_no REGEXP '^[0-9]-[A-Z]{2}-[0-9]{2}$' ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) { return []; }
+        $all = $db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no, id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($all as $d) {
+            if (preg_match('/^[0-9]-[A-Za-z]{2}-[0-9]{2}$/', (string)$d['doc_no'])) $r['procs'][] = $d;
+            elseif (preg_match('/^[0-9]-[A-Za-z]{2}-[0-9]{2}-[0-9]{2}/', (string)$d['doc_no'])) $r['forms'][] = $d;
+        }
+        foreach (ia_as_clauses($db) as $c) {
+            if ((int)$c['is_header']) continue;
+            $r['clauses'][] = ['clause_id' => (int)$c['clause_id'], 'clause_text' => (string)$c['clause_text']];
+        }
+    } catch (Throwable $e) {}
+    return $r;
 }
 
-function ia_pgroup_save(PDO $db, string $code, array $docIds): void
+/** 儲存一個群組：名稱／依順序與否／全部步驟（整批覆蓋） */
+function ia_pgroup_save(PDO $db, string $code, int $ordered, array $steps): void
 {
     ia_pgroup_ensure($db);
     $q = $db->prepare("SELECT 1 FROM ia_process_group WHERE group_code=?"); $q->execute([$code]);
     if (!$q->fetchColumn()) throw new RuntimeException('過程群組不存在');
+    foreach ($steps as $i => $s) {
+        if (trim((string)($s['title'] ?? '')) === '') throw new RuntimeException('第 ' . ($i + 1) . ' 個步驟沒有填名稱');
+    }
     $db->beginTransaction();
     try {
-        $db->prepare("DELETE FROM ia_process_group_doc WHERE group_code=?")->execute([$code]);
-        $ins = $db->prepare("INSERT IGNORE INTO ia_process_group_doc (group_code, doc_id)
-                             SELECT ?, id FROM as_document WHERE id=? AND doc_no REGEXP '^[0-9]-[A-Z]{2}-[0-9]{2}$'");
-        foreach (array_unique(array_map('intval', $docIds)) as $id) if ($id) $ins->execute([$code, $id]);
+        $db->prepare("UPDATE ia_process_group SET ordered=? WHERE group_code=?")->execute([$ordered ? 1 : 0, $code]);
+        $db->prepare("DELETE FROM ia_process_step WHERE group_code=?")->execute([$code]);
+        $ins = $db->prepare("INSERT INTO ia_process_step (group_code, stage, sort_order, title, proc_doc_id, form_doc_ids, clause_ids)
+                             VALUES (?,?,?,?,?,?,?)");
+        foreach ($steps as $i => $s) {
+            $forms = array_values(array_unique(array_filter(array_map('intval', (array)($s['form_doc_ids'] ?? [])))));
+            $cls   = array_values(array_unique(array_filter(array_map('intval', (array)($s['clause_ids'] ?? [])))));
+            $ins->execute([$code, max(1, (int)($s['stage'] ?? 1)), ($i + 1) * 10,
+                           mb_substr(trim((string)$s['title']), 0, 100),
+                           (int)($s['proc_doc_id'] ?? 0) ?: null, json_encode($forms), $cls ? json_encode($cls) : null]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
 }
 
+/** 某一步驟對應的條文列（手動指定優先；否則由 doc_ref 的文件編號反查：表單編號優先、再用程序書編號） */
+function ia_pgroup_step_clauses(array $step, array $clauses): array
+{
+    $want = [];
+    foreach ((array)($step['clause_ids'] ?? []) as $id) $want[(int)$id] = 1;
+    $nos = [];
+    foreach ((array)($step['forms'] ?? []) as $f) $nos[trim((string)$f['doc_no'])] = 1;
+    $proc = trim((string)($step['proc']['doc_no'] ?? ''));
+    $byForm = []; $byProc = [];
+    foreach ($clauses as $c) {
+        if ((int)$c['is_header']) continue;
+        $id = (int)$c['clause_id'];
+        if ($want) { if (isset($want[$id])) $byForm[] = $c; continue; }
+        $nn = ia_clause_doc_nos((string)($c['doc_ref'] ?? ''));
+        foreach ($nn as $no) if (isset($nos[$no])) { $byForm[] = $c; continue 2; }
+        if ($proc !== '' && in_array($proc, $nn, true)) $byProc[] = $c;
+    }
+    // 表單編號對得上的條文優先；一條都沒有才退回只看程序書編號（避免同一份程序書的每個步驟都列出一長串一樣的條文）
+    return $byForm ?: $byProc;
+}
+
 /**
- * 某過程群組對應的條文題庫 id（含所屬章節標題列，建查檢表時章節標題才會一起帶）。
- * 條文的 doc_ref 裡出現「群組程序書編號」或「其底下的表單編號」（2-SM-01-01 以 2-SM-01 開頭）就算命中。
+ * 某群組要建進 AS稽核查檢表的列（ia_check_item 欄位）。
+ *   col_a＝步驟名稱＋條文編號與名稱（一階手冊）
+ *   col_b＝「程序書：編號 名稱／表單：編號 名稱…」（與舊版 doc_ref 同格式，自動判定與列印沿用）
+ * 依順序的群組：每個階段前放一列標題「第 N 階段（可並行）」；不分順序的群組不分階段。
  */
+function ia_pgroup_build_items(PDO $db, string $code): array
+{
+    $grp = null;
+    foreach (ia_pgroup_list($db) as $g) if ($g['group_code'] === $code) { $grp = $g; break; }
+    if (!$grp || !$grp['steps']) return [];
+    $clauses = ia_as_clauses($db);
+    $items = []; $sort = 0; $lastStage = null;
+    $stageCnt = [];
+    foreach ($grp['steps'] as $s) $stageCnt[(int)$s['stage']] = ($stageCnt[(int)$s['stage']] ?? 0) + 1;
+    foreach ($grp['steps'] as $s) {
+        if ($grp['ordered'] && $lastStage !== (int)$s['stage']) {
+            $lastStage = (int)$s['stage'];
+            $items[] = ['sort_order' => ++$sort * 10, 'is_header' => 1,
+                        'col_a' => '第 ' . $lastStage . ' 階段' . ($stageCnt[$lastStage] > 1 ? '（可並行）' : ''),
+                        'col_b' => '', 'col_c' => null, 'col_d' => null, 'ref_kind' => 'as_step_hdr', 'ref_id' => null];
+        }
+        $cl = ia_pgroup_step_clauses($s, $clauses);
+        $a = '【' . $s['title'] . '】' . ($cl ? "\n" . implode("\n", array_map(function ($c) { return $c['clause_text']; }, $cl)) : '');
+        $b = '';
+        if (!empty($s['proc'])) $b .= "程序書：\n" . $s['proc']['doc_no'] . ' ' . $s['proc']['doc_name'] . "\n";
+        if (!empty($s['forms'])) $b .= "表單：\n" . implode("\n", array_map(function ($f) { return $f['doc_no'] . ' ' . $f['doc_name']; }, $s['forms']));
+        $items[] = ['sort_order' => ++$sort * 10, 'is_header' => 0, 'col_a' => $a, 'col_b' => trim($b),
+                    'col_c' => null, 'col_d' => null, 'ref_kind' => 'as_step', 'ref_id' => (int)$s['step_id']];
+    }
+    return $items;
+}
+
+/** 群組涵蓋的條文 id（畫面預覽用） */
 function ia_pgroup_clause_ids(PDO $db, string $code): array
 {
-    ia_pgroup_ensure($db);
-    $q = $db->prepare("SELECT d.doc_no FROM ia_process_group_doc g JOIN as_document d ON d.id=g.doc_id WHERE g.group_code=?");
-    $q->execute([$code]);
-    $nos = array_flip(array_map('trim', $q->fetchAll(PDO::FETCH_COLUMN)));
-    if (!$nos) return ['ids' => [], 'clauses' => 0];
-    $ids = []; $lastHdr = 0; $hdrAdded = false; $n = 0;
-    foreach (ia_as_clauses($db) as $c) {
-        if ((int)$c['is_header']) { $lastHdr = (int)$c['clause_id']; $hdrAdded = false; continue; }
-        $hit = false;
-        if (preg_match_all('/\b([0-9]-[A-Z]{2}-[0-9]{2})(?:-[0-9]{2})?\b/', (string)($c['doc_ref'] ?? ''), $m)) {
-            foreach ($m[1] as $no) if (isset($nos[$no])) { $hit = true; break; }
-        }
-        if (!$hit) continue;
-        if ($lastHdr && !$hdrAdded) { $ids[] = $lastHdr; $hdrAdded = true; }
-        $ids[] = (int)$c['clause_id']; $n++;
+    $clauses = ia_as_clauses($db); $ids = []; $n = 0;
+    foreach (ia_pgroup_list($db) as $g) {
+        if ($g['group_code'] !== $code) continue;
+        foreach ($g['steps'] as $s) foreach (ia_pgroup_step_clauses($s, $clauses) as $c) { $ids[(int)$c['clause_id']] = 1; }
     }
-    return ['ids' => $ids, 'clauses' => $n];
+    return ['ids' => array_keys($ids), 'clauses' => count($ids)];
 }

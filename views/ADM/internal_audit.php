@@ -1728,7 +1728,7 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-hint">依航太品質手冊「附件C 品質管理系統流程圖」，把程序書歸到 8 個過程群組。
             AS稽核查檢表建立時可<b>依群組一次勾選對應的條文與文件表單</b>，也可「每個群組各建一張」共 8 張。
             條文與表單由「AS條文題庫」每一條寫的文件編號自動反查（附錄B 條款對照），這裡只決定群組包含哪幾份程序書。
-            預設已依流程圖帶入，可自行增減；每個群組按「儲存」才生效。</div>
+            預設已依流程圖帶入，可自行增減；每個群組按「儲存這一組」才生效。<br>每個流程步驟＝一列查檢項目：<b>階段相同的步驟可並行</b>（例：詢價、報價同為第 1 階段）；群組可設「不分順序」；條文空白時依文件編號自動帶入。</div>
         <div id="pgBody"></div>
     </div>
     <div class="ia-mfoot"><button data-close>關閉</button></div>
@@ -4337,7 +4337,7 @@ function nkPicked(){
     return {ids:ids, real:real};
 }
 /* ---- 過程群組（COP／MP／SP）：依群組一次勾選條文，或每個群組各建一張 ---- */
-var PGROUPS = null;
+var PGROUPS = null, NK_GROUP = '';
 function loadPgroups(cb){
     if (PGROUPS) { if (cb) cb(); return; }
     $.getJSON(API, {action:'pgroup_get'}, function(res){
@@ -4346,7 +4346,7 @@ function loadPgroups(cb){
         var h = '';
         PGROUPS.forEach(function(g){
             h += '<button type="button" class="nkPgChip" data-code="'+esc(g.group_code)+'" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:12px;background:#fff;cursor:pointer;margin:0 3px;" title="'
-               + esc(g.group_name + '：' + (g.docs||[]).map(function(d){ return d.doc_no+' '+d.doc_name; }).join('、')) + '">'
+               + esc(g.group_name + '：' + (g.steps||[]).map(function(x){ return x.title; }).join('→')) + '">'
                + esc(g.group_code) + ' ' + esc(g.group_name) + '</button>';
         });
         $('#nkPgChips').html(h);
@@ -4355,6 +4355,14 @@ function loadPgroups(cb){
 }
 $(document).on('click', '.nkPgChip', function(){
     var code = $(this).data('code');
+    NK_GROUP = code;
+    $('.nkPgChip').css({background:'#fff', color:'inherit'});
+    $(this).css({background:'#F0A24B', color:'#fff'});
+    $('#errNkPick').removeClass('on').text('');
+    if (!$('#nkTitle').val()) {
+        var g = (PGROUPS||[]).filter(function(x){ return x.group_code === code; })[0];
+        $('#nkTitle').val(code + ' ' + (g ? g.group_name : ''));
+    }
     $.getJSON(API, {action:'pgroup_clauses', code:code}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         NK_CHECKED = {};
@@ -4380,7 +4388,7 @@ $(document).on('click', '#nkPgAll', function(){
         $.getJSON(API, {action:'pgroup_clauses', code:g.group_code}, function(r){
             if (!r.ok || !r.clauses) { skipped.push(g.group_code); next(i+1); return; }
             $.post(API, {action:'check_create', kind:'as', check_date:date, auditor_key:$('#nkAuditor').val(),
-                case_id:caseId, title:g.group_code + ' ' + g.group_name, src_check_ids:srcIds, pick:JSON.stringify(r.ids)},
+                case_id:caseId, title:g.group_code + ' ' + g.group_name, src_check_ids:srcIds, group_code:g.group_code, pick:'[]'},
                 function(res){
                     if (!res.ok) { alert(g.group_code + ' 建立失敗：' + (res.error||'')); return; }
                     made++; next(i+1);
@@ -4388,40 +4396,91 @@ $(document).on('click', '#nkPgAll', function(){
         });
     })(0);
 });
-/* 設定跳窗 */
+/* 設定跳窗：每個群組可設「依順序／不分順序」與流程步驟（階段相同＝可並行） */
+var PG_CAND = null;
 $('#btnPgroup').on('click', function(){ PGROUPS = null; loadPgSettings(); openMask('pgMask'); });
+function pgOpts(list, labelFn, sel){
+    var h = '<option value="">（請選擇）</option>';
+    list.forEach(function(x){ h += '<option value="'+x.id+'"'+(String(x.id)===String(sel)?' selected':'')+'>'+esc(labelFn(x))+'</option>'; });
+    return h;
+}
+function pgChip(cls, id, text){
+    return '<span class="nk-task '+cls+'" data-id="'+id+'" style="margin:2px;">'+esc(text)+' <a href="javascript:void(0)" class="pgChipDel" style="color:#C4442D;">×</a></span>';
+}
+function pgStepRow(s, ordered){
+    var c = PG_CAND, forms = '', cls = '';
+    (s.forms||[]).forEach(function(f){ forms += pgChip('pgForm', f.id, f.doc_no+' '+f.doc_name); });
+    (s.clause_ids||[]).forEach(function(id){
+        var cc = c.clauses.filter(function(x){ return x.clause_id === +id; })[0];
+        if (cc) cls += pgChip('pgCl', id, cc.clause_text);
+    });
+    return '<tr class="pgStep">'
+        + '<td class="pgStageCell"'+(ordered?'':' style="display:none;"')+'><input type="number" class="pgStage" min="1" value="'+(s.stage||1)+'" style="width:52px;"></td>'
+        + '<td><input type="text" class="pgTitle" value="'+esc(s.title||'')+'" style="width:130px;"></td>'
+        + '<td><select class="pgProc" data-eg-filter="輸入編號或名稱篩選…" style="max-width:190px;">'
+        +   pgOpts(c.procs, function(x){ return x.doc_no+' '+x.doc_name; }, s.proc_doc_id||'') + '</select></td>'
+        + '<td><div class="pgForms">'+forms+'</div><select class="pgFormAdd" data-eg-filter="輸入編號或名稱篩選…" style="max-width:190px;">'
+        +   pgOpts(c.forms, function(x){ return x.doc_no+' '+x.doc_name; }, '') + '</select></td>'
+        + '<td><div class="pgCls">'+cls+'</div><select class="pgClAdd" data-eg-filter="輸入條文篩選…" style="max-width:190px;">'
+        +   '<option value="">（空白＝依文件編號自動帶入）</option>'
+        +   c.clauses.map(function(x){ return '<option value="'+x.clause_id+'">'+esc(x.clause_text)+'</option>'; }).join('') + '</select></td>'
+        + '<td style="white-space:nowrap;"><a href="javascript:void(0)" class="pgUp">↑</a> <a href="javascript:void(0)" class="pgDn">↓</a> '
+        + '<a href="javascript:void(0)" class="pgRowDel" style="color:#C4442D;">刪</a></td></tr>';
+}
 function loadPgSettings(){
     $.getJSON(API, {action:'pgroup_get'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
-        var cands = res.candidates||[], h = '';
+        PG_CAND = res.candidates; var h = '';
         (res.groups||[]).forEach(function(g){
-            h += '<div class="pgBox" data-code="'+esc(g.group_code)+'" style="border:1px solid #E9C892;border-radius:6px;padding:8px 10px;margin-bottom:8px;">'
-               + '<b style="color:#8A5A2B;">'+esc(g.group_code)+'　'+esc(g.group_name)+'</b><div class="pgChips" style="margin:6px 0;">';
-            (g.docs||[]).forEach(function(d){
-                h += '<span class="nk-task pgDoc" data-id="'+d.id+'" style="margin:2px;">'+esc(d.doc_no+' '+d.doc_name)
-                   + ' <a href="javascript:void(0)" class="pgDel" style="color:#C4442D;">×</a></span>';
-            });
-            h += '</div><select class="pgAdd" data-eg-filter="輸入編號或名稱篩選…" style="min-width:260px;"><option value="">＋加入程序書…</option>';
-            cands.forEach(function(c){ h += '<option value="'+c.id+'">'+esc(c.doc_no+' '+c.doc_name)+'</option>'; });
-            h += '</select> <button class="pgSave" style="height:26px;">儲存</button></div>';
+            h += '<div class="pgBox" data-code="'+esc(g.group_code)+'" style="border:1px solid #E9C892;border-radius:6px;padding:8px 10px;margin-bottom:10px;">'
+               + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><b style="color:#8A5A2B;font-size:14px;">'+esc(g.group_code)+'　'+esc(g.group_name)+'</b>'
+               + '<select class="pgOrdered"><option value="1"'+(+g.ordered?' selected':'')+'>依順序（依階段排列，階段相同＝可並行）</option>'
+               + '<option value="0"'+(+g.ordered?'':' selected')+'>不分順序</option></select>'
+               + '<button class="pgAddStep" style="height:26px;">＋新增步驟</button>'
+               + '<button class="pgSave btn-warm" style="height:26px;">儲存這一組</button></div>'
+               + '<table class="ia-table" style="margin-top:6px;"><thead><tr><th class="pgStageTh"'+(+g.ordered?'':' style="display:none;"')+'>階段</th><th>流程步驟</th><th>對應 AS 程序書</th><th>對應 AS 文件表單</th><th>對應一階手冊條文</th><th>排序</th></tr></thead><tbody>';
+            (g.steps||[]).forEach(function(s){ h += pgStepRow(s, +g.ordered); });
+            h += '</tbody></table></div>';
         });
         $('#pgBody').html(h);
     });
 }
-$(document).on('click', '.pgDel', function(){ $(this).closest('.pgDoc').remove(); });
-$(document).on('change', '.pgAdd', function(){
-    var $b = $(this).closest('.pgBox'), id = $(this).val();
-    if (!id) return;
-    if (!$b.find('.pgDoc[data-id='+id+']').length) {
-        $b.find('.pgChips').append('<span class="nk-task pgDoc" data-id="'+id+'" style="margin:2px;">'+esc($(this).find('option:selected').text())
-            + ' <a href="javascript:void(0)" class="pgDel" style="color:#C4442D;">×</a></span>');
-    }
+$(document).on('change', '.pgOrdered', function(){
+    var on = $(this).val() === '1', $b = $(this).closest('.pgBox');
+    $b.find('.pgStageCell,.pgStageTh').toggle(on);
+});
+$(document).on('click', '.pgAddStep', function(){
+    var $b = $(this).closest('.pgBox'), on = $b.find('.pgOrdered').val() === '1';
+    var last = $b.find('.pgStage').last().val() || 1;
+    $b.find('tbody').append(pgStepRow({stage:+last, title:'', forms:[], clause_ids:[]}, on ? 1 : 0));
+});
+$(document).on('click', '.pgRowDel', function(){ $(this).closest('tr').remove(); });
+$(document).on('click', '.pgUp', function(){ var $r = $(this).closest('tr'); $r.prev().before($r); });
+$(document).on('click', '.pgDn', function(){ var $r = $(this).closest('tr'); $r.next().after($r); });
+$(document).on('click', '.pgChipDel', function(){ $(this).closest('.nk-task').remove(); });
+$(document).on('change', '.pgFormAdd', function(){
+    var id = $(this).val(); if (!id) return;
+    var $w = $(this).closest('td').find('.pgForms');
+    if (!$w.find('.pgForm[data-id='+id+']').length) $w.append(pgChip('pgForm', id, $(this).find('option:selected').text()));
+    $(this).val('');
+});
+$(document).on('change', '.pgClAdd', function(){
+    var id = $(this).val(); if (!id) return;
+    var $w = $(this).closest('td').find('.pgCls');
+    if (!$w.find('.pgCl[data-id='+id+']').length) $w.append(pgChip('pgCl', id, $(this).find('option:selected').text()));
     $(this).val('');
 });
 $(document).on('click', '.pgSave', function(){
-    var $b = $(this).closest('.pgBox');
-    var ids = $b.find('.pgDoc').map(function(){ return +$(this).data('id'); }).get();
-    $.post(API, {action:'pgroup_save', code:$b.data('code'), doc_ids:JSON.stringify(ids)}, function(res){
+    var $b = $(this).closest('.pgBox'), steps = [], bad = '';
+    $b.find('tr.pgStep').each(function(i){
+        var $r = $(this), t = $.trim($r.find('.pgTitle').val());
+        if (!t) { bad = '第 '+(i+1)+' 列沒有填步驟名稱'; return; }
+        steps.push({stage:+$r.find('.pgStage').val()||1, title:t, proc_doc_id:+$r.find('.pgProc').val()||0,
+            form_doc_ids:$r.find('.pgForm').map(function(){ return +$(this).data('id'); }).get(),
+            clause_ids:$r.find('.pgCl').map(function(){ return +$(this).data('id'); }).get()});
+    });
+    if (bad) { alert(bad); return; }
+    $.post(API, {action:'pgroup_save', code:$b.data('code'), ordered:$b.find('.pgOrdered').val(), steps:JSON.stringify(steps)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         PGROUPS = null; iaToast('已儲存 '+$b.data('code'));
     }, 'json');
@@ -4429,6 +4488,7 @@ $(document).on('click', '.pgSave', function(){
 function renderBank(){
     var kind = $('#nkKind').val();
     $('#nkPgRow').toggle(kind === 'as'); if (kind === 'as') loadPgroups();
+    if (kind !== 'as') NK_GROUP = '';
     var kw = $('#nkFilter').val().trim().toLowerCase();
     renderTaskPanel();
     var HDRCNT = nkHdrPicked();      // 每章勾了幾題（標題列上顯示）
@@ -4548,7 +4608,9 @@ $('#btnCheckCreate').on('click', function(){
                       $('#nkTypeDoc').val() ? '' : '請選擇要稽核的型態識別文件管制表') && ok;
     }
     var p = nkPicked(), picked = p.ids, real = p.real;
-    if (!real) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
+    var grp = (kind === 'as') ? (NK_GROUP || '') : '';
+    if (kind === 'as' && !grp) { $('#errNkPick').addClass('on').text('請先選擇過程群組（COP1～SP02），AS稽核查檢表依群組的流程步驟建立'); ok = false; }
+    else if (!real && !grp) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
     $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(),
         auditor_key:$('#nkAuditor').val(),
@@ -4559,6 +4621,7 @@ $('#btnCheckCreate').on('click', function(){
             : '[]'),
         src_doc_id:(kind==='type' ? ($('#nkTypeDoc').val()||'') : ''),
         order_no:(kind==='type' ? $('#nkOrderNo').val() : ''),
+        group_code:grp,
         pick:JSON.stringify(picked)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
         closeMask('checkNewMask');
@@ -4708,8 +4771,8 @@ function renderCheckItems(){
         if (k==='as') {
             // 作業項目：條文原文看不出實務上在查什麼，這裡用小徽章補上（列印版不帶，維持紙本版面）
             var tks = (it.tasks||[]).map(function(t){ return '<span class="nk-task">'+esc(t.task_name)+'</span>'; }).join('');
-            h += '<td>'+n+'</td><td class="l">'+esc(it.col_a)+(tks?('<div style="margin-top:2px;">'+tks+'</div>'):'')+'</td>'
-              + '<td class="l" style="font-size:12px;color:#7a6444;">'+esc(it.col_b||'')+'</td>'
+            h += '<td>'+n+'</td><td class="l" style="white-space:pre-line;">'+esc(it.col_a)+(tks?('<div style="margin-top:2px;">'+tks+'</div>'):'')+'</td>'
+              + '<td class="l" style="font-size:12px;color:#7a6444;white-space:pre-line;">'+esc(it.col_b||'')+'</td>'
               + '<td>'+okChk+'</td><td>'+ngChk+'</td>'
               + '<td><input type="text" class="ckF" data-id="'+it.item_id+'" data-f="evidence" value="'+esc(it.evidence||'')+'"'
               + (fro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;'

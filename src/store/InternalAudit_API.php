@@ -1132,7 +1132,10 @@ case 'check_create': {
     // 所以空陣列一定要在這裡先擋掉，否則直打 API 送 pick=[] 會安靜地建出一張 71 題的全表（前端擋得住、後端也要擋＝鐵律8）。
     $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
     $pick = is_array($pick) ? array_values(array_filter(array_map('intval', $pick))) : [];
-    if (!$pick) jerr('請至少勾選一個要查核的項目');
+    /* AS稽核查檢表依「過程群組」（COP1~SP02）的流程步驟建立（2026-11-23 老師建議）；
+       沒有指定群組時維持舊的依條文勾選（舊資料與舊呼叫端相容）。 */
+    $groupCode = ($kind === 'as') ? trim((string)($_POST['group_code'] ?? '')) : '';
+    if (!$groupCode && !$pick) jerr('請至少勾選一個要查核的項目');
     /* 產品型態稽核表一定要指定「對哪一張型態識別文件管制表稽核」——沒有它就沒有題目，
        也印不出表頭的客戶與產品編號。前端擋一次、這裡同規則再擋一次（鐵律8）。 */
     $srcDocId = iaInt($_POST['src_doc_id'] ?? '');
@@ -1143,7 +1146,9 @@ case 'check_create': {
         $srcDocId = 0;   // 別的種類用不到，不要讓前端亂送的值寫進去
     }
     $orderNo = ($kind === 'type') ? (mb_substr(trim((string)($_POST['order_no'] ?? '')), 0, 60) ?: null) : null;
-    $items = ia_check_build_items($db, $kind, $bankYear, $pick, $srcDocId);
+    $items = $groupCode ? ia_pgroup_build_items($db, $groupCode)
+                        : ia_check_build_items($db, $kind, $bankYear, $pick, $srcDocId);
+    if ($groupCode && !$items) jerr('過程群組「' . $groupCode . '」還沒有設定流程步驟，請先到「過程群組」設定');
     // 只勾到章節標題列也算沒勾（會建出一張只有標題沒有題目的空表）
     $real = 0; foreach ($items as $it) { if (!$it['is_header']) $real++; }
     if ($real === 0) jerr('請至少勾選一個要查核的項目（目前只勾到章節標題列）');
@@ -3019,8 +3024,8 @@ case 'pgroup_clauses': {
 }
 case 'pgroup_save': {
     iaReqAdmin($perms);
-    $docs = json_decode((string)($_POST['doc_ids'] ?? '[]'), true);
-    try { ia_pgroup_save($db, (string)($_POST['code'] ?? ''), is_array($docs) ? $docs : []); }
+    $steps = json_decode((string)($_POST['steps'] ?? '[]'), true);
+    try { ia_pgroup_save($db, (string)($_POST['code'] ?? ''), (int)($_POST['ordered'] ?? 1), is_array($steps) ? $steps : []); }
     catch (Throwable $e) { jerr($e->getMessage()); }
     jout(['saved' => true]);
 }
