@@ -3431,6 +3431,37 @@ function ia_report_data(PDO $db, int $year): array
             'stage'     => (string)$r['stage'],
         ];
     }
+    /* 績效執行稽核查檢表「沒達成」自動開立的異常矯正處理單也是這次稽核的缺失
+       （2026-11-23 使用者指出：矯正單中有 2 筆內稽異常轉開的，報告表卻只列 1 個缺失）。
+       來源＝ia_check_item.car_id；矯正單已不存在（被刪）或已停用的不列。
+       沒有嚴重度欄位，一律算「次」要缺點。 */
+    try {
+        $st = $db->prepare("SELECT it.col_a AS dept, it.col_b AS ind, it.col_c AS goal, o.id AS car_id, o.car_no, o.status,
+                                   o.correction_due, ck.check_id
+                              FROM ia_check_item it
+                              JOIN ia_check ck ON ck.check_id = it.check_id
+                              JOIN car_order o ON o.id = it.car_id
+                             WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND it.car_id IS NOT NULL
+                               AND o.status<>'stopped'
+                             ORDER BY it.col_a, o.car_no");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $d = (string)($r['dept'] ?: '（未指定單位）');
+            if (!isset($byDept[$d])) {
+                $cd = $caseDept[$d] ?? [];
+                $byDept[$d] = ['dept_name' => $d, 'major' => 0, 'minor' => 0, 'observe' => 0,
+                    'audited_date' => (string)($cd['audited_date'] ?? ''), 'audited_time' => (string)($cd['audited_time'] ?? ''),
+                    'auditor_name' => (string)($cd['auditor_name'] ?? ''), 'auditors' => $cd['auditors'] ?? [],
+                    'improve_due' => (string)($cd['improve_due'] ?? ''), 'auto_due' => '', 'closed' => 0, 'total' => 0];
+            }
+            $byDept[$d]['minor']++; $byDept[$d]['total']++;
+            $isClosed = ((string)$r['status'] === 'closed');
+            if ($isClosed) $byDept[$d]['closed']++;
+            $records[] = ['dept_name' => $d, 'nc_no' => (string)$r['car_no'], 'form_no' => '2-GM-06-03',
+                'form_name' => '績效執行稽核查檢表', 'fact' => (string)$r['ind'] . '未達標（異常矯正處理單）',
+                'nc_id' => 0, 'car_id' => (int)$r['car_id'], 'stage' => $isClosed ? 'closed' : 'issued'];
+        }
+    } catch (Throwable $e) {}
     foreach ($byDept as &$d) { if ($d['improve_due'] === '') $d['improve_due'] = $d['auto_due']; }
     unset($d);
 

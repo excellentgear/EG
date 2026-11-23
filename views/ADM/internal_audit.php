@@ -5788,7 +5788,7 @@ function loadReport(){
             var b = '';
             recs.forEach(function(r2){
                 b += '<tr><td>'+esc(r2.dept_name)+'</td>'
-                  + '<td><span class="ia-op" onclick="openNc('+r2.nc_id+')">'+esc(r2.nc_no)+'</span></td>'
+                  + '<td>'+(+r2.nc_id ? '<span class="ia-op" onclick="openNc('+r2.nc_id+')">'+esc(r2.nc_no)+'</span>' : '<span title="異常矯正處理單">'+esc(r2.nc_no)+'</span>')+'</td>'
                   + '<td class="l">'+esc(r2.form_no||'—')
                   + (r2.form_name ? '<br><span style="color:#8a6d45;font-size:11px;">'+esc(r2.form_name)+'</span>' : '')+'</td>'
                   + '<td class="l">'+esc(r2.fact||'')+'</td>'
