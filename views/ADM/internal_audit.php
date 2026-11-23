@@ -6492,23 +6492,43 @@ function clauseRowHtml(c){
       + '<td><span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span>'
       + '<div class="cl-st"></div></td></tr>';
 }
-/* 條文所屬過程群組（COP1~SP02，可複選）：勾了就直接存；標題列不用勾 */
+/* 條文所屬過程群組（COP1~SP02，可複選）：用下拉加入、標籤上的 × 移除，改了就直接存；標題列不用設 */
 var PG_CODES = ['COP1','COP2','COP3','COP4','MP01','MP02','SP01','SP02'];
-function clauseGroupHtml(c){
-    c = c || {};
-    if (+c.is_header || !c.clause_id) return '<span class="cl-task-hint">'+(+c.is_header ? '（標題列）' : '存檔後才能勾')+'</span>';
-    var on = {}; (c.groups||[]).forEach(function(g){ on[g] = 1; });
-    return PG_CODES.map(function(g){
-        return '<label class="cl-task-chk" style="display:inline-block;margin:1px 4px 1px 0;"><input type="checkbox" class="clGrp" data-eg-skip value="'+g+'"'+(on[g]?' checked':'')+'> '+g+'</label>';
+function clauseGroupChips(gs){
+    return (gs||[]).map(function(g){
+        return '<span class="nk-task clGrpChip" data-g="'+esc(g)+'" style="margin:1px 3px 1px 0;">'+esc(g)
+             + ' <a href="javascript:void(0)" class="clGrpDel" style="color:#C4442D;">×</a></span>';
     }).join('');
 }
-$('#clauseBody').on('change', '.clGrp', function(){
-    var $tr = $(this).closest('tr');
-    var gs = $tr.find('.clGrp:checked').map(function(){ return $(this).val(); }).get();
+function clauseGroupOpts(gs){
+    var h = '<option value="">＋加入過程群組…</option>';
+    PG_CODES.forEach(function(g){ if ((gs||[]).indexOf(g) < 0) h += '<option value="'+g+'">'+g+'</option>'; });
+    return h;
+}
+function clauseGroupHtml(c){
+    c = c || {};
+    if (+c.is_header || !c.clause_id) return '<span class="cl-task-hint">'+(+c.is_header ? '（標題列）' : '存檔後才能設定')+'</span>';
+    return '<div class="clGrpChips">'+clauseGroupChips(c.groups)+'</div>'
+         + '<select class="clGrpAdd" data-eg-skip style="max-width:130px;">'+clauseGroupOpts(c.groups)+'</select>';
+}
+function clauseGroupSave($tr, gs){
     $.post(API, {action:'clause_group_save', clause_id:$tr.data('id'), groups:JSON.stringify(gs)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        $tr.find('.clGrpChips').html(clauseGroupChips(gs));
+        $tr.find('.clGrpAdd').html(clauseGroupOpts(gs));
         $tr.find('.cl-st').text('已儲存');
     }, 'json');
+}
+function clauseGroupsOf($tr){ return $tr.find('.clGrpChip').map(function(){ return String($(this).data('g')); }).get(); }
+$('#clauseBody').on('change', '.clGrpAdd', function(){
+    var g = $(this).val(); if (!g) return;
+    var $tr = $(this).closest('tr'), gs = clauseGroupsOf($tr);
+    if (gs.indexOf(g) < 0) gs.push(g);
+    clauseGroupSave($tr, gs);
+});
+$('#clauseBody').on('click', '.clGrpDel', function(){
+    var g = String($(this).closest('.clGrpChip').data('g')), $tr = $(this).closest('tr');
+    clauseGroupSave($tr, clauseGroupsOf($tr).filter(function(x){ return x !== g; }));
 });
 $('#btnAppxSync').on('click', function(){
     if (!confirm('要依手冊「附錄B」同步條文題庫嗎？\n\n條文編號與名稱會改成附錄B 的寫法，沒有的條文會新增，順序依附錄B；已設定的文件、作業項目、過程群組都保留。')) return;
