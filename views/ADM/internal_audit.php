@@ -7297,11 +7297,25 @@ function printCheck(id){
                 var okM = it.result==='ok' ? 'V' : '';
                 var ngM = it.result==='ng' ? 'V' : '';
                 if (stepMode) {
-                    h += '<tr><td>'+n+'</td><td class="l" style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
-                      + '<td class="l pre" style="font-size:11px;">'+esc(it.col_a||'')+'</td>'
-                      + '<td class="l" style="font-size:11px;">'+esc(it.col_d||'')+'</td>'
-                      + '<td class="l pre" style="font-size:11px;">'+esc(it.col_b||'')+'</td>'
-                      + '<td>'+okM+'</td><td>'+ngM+'</td><td class="pre">'+esc(it.evidence||'')+'</td></tr>';
+                    /* 一條對應好幾份文件：每份文件各一列（劃線分隔），各自有合格／不合格（2026-11-23 使用者要求）。
+                       項次、標題、條文、程序書、所見證據用 rowspan 合併成一格。 */
+                    var dl = asDocLines(it), dmk = asDocMarksOf(it), rs = Math.max(dl.length, 1);
+                    var rsA = ' rowspan="'+rs+'"';
+                    var lead = '<td'+rsA+'>'+n+'</td><td class="l"'+rsA+' style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
+                      + '<td class="l pre"'+rsA+' style="font-size:11px;">'+esc(it.col_a||'')+'</td>'
+                      + '<td class="l"'+rsA+' style="font-size:11px;">'+esc(it.col_d||'')+'</td>';
+                    var tail = '<td class="pre"'+rsA+'>'+esc(it.evidence||'')+'</td>';
+                    if (!dl.length) {
+                        h += '<tr>'+lead+'<td></td><td>'+okM+'</td><td>'+ngM+'</td>'+tail+'</tr>';
+                    } else {
+                        dl.forEach(function(d, di){
+                            var v = dmk[d.no] || (it.result==='ok' && !Object.keys(dmk).length ? 'ok' : '');
+                            h += '<tr>' + (di===0 ? lead : '')
+                              + '<td class="l" style="font-size:11px;">'+esc(d.text)+'</td>'
+                              + '<td>'+(v==='ok'?'V':'')+'</td><td>'+(v==='ng'?'V':'')+'</td>'
+                              + (di===0 ? tail : '') + '</tr>';
+                        });
+                    }
                 } else if (k.kind==='as') {
                     h += '<tr><td>'+n+'</td><td class="l">'+esc(it.col_a)+'</td>'
                       + '<td class="pre" style="font-size:11px;">'+esc(it.col_b||'')+'</td>'
