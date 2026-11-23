@@ -1625,6 +1625,16 @@ case 'check_save_items': {
                     $updWho->execute([$u ?: null, $d2 ?: null, $p2 ?: null, $iid, $kid]);
                 }
             }
+            // AS稽核查檢表：一條對應多份文件，各份文件各自的合格／不合格（沒送這個欄位＝不動）
+            if (array_key_exists('doc_marks', $it)) {
+                $dm = is_array($it['doc_marks']) ? $it['doc_marks'] : (json_decode((string)$it['doc_marks'], true) ?: []);
+                $clean = [];
+                foreach ($dm as $no => $v) {
+                    if (in_array($v, ['ok', 'ng'], true) && preg_match('/^[\w\-\.]{1,40}$/', (string)$no)) $clean[(string)$no] = $v;
+                }
+                $db->prepare("UPDATE ia_check_item SET doc_marks=? WHERE item_id=? AND check_id=?")
+                   ->execute([$clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : null, $iid, $kid]);
+            }
             $res = (string)($it['result'] ?? '');
             if (!in_array($res, ['', 'ok', 'ng'], true)) $res = '';
             /* col_c／col_d 沒送就沿用原值（舊呼叫端與只改判定的情況都不該把姓名洗掉）。

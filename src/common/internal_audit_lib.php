@@ -496,6 +496,7 @@ function ia_ensure_schema(PDO $db): void
             ['ia_check_item', 'auditee_dept_id',    "INT NULL COMMENT '受稽人當時的部門'"],
             ['ia_check_item', 'auditee_position_id',"INT NULL COMMENT '受稽人當時的職稱'"],
             ['ia_check_item', 'doc_no_snap',        "VARCHAR(60) NULL COMMENT 'AS 文件編號快照（建立當下）'"],
+            ['ia_check_item', 'doc_marks',          "TEXT NULL COMMENT 'AS稽核查檢表：這一條對應的各份文件各自的判定 {文件編號:ok|ng}'"],
             ['ia_check_item', 'doc_name_snap',      "VARCHAR(150) NULL COMMENT 'AS 文件名稱快照（建立當下）'"],
             ['ia_nc',         'ref_form_name',      "VARCHAR(150) NULL COMMENT '相關表單名稱快照（編號存在 ref_form_no）'"],
             ['ia_case',      'approver_at',         "DATETIME NULL COMMENT '核准簽核的精確時間（業務日期在 approver_date）'"],

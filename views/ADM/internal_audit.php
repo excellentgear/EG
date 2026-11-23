@@ -4907,6 +4907,56 @@ var CK_HEADS = {
     // 產品型態稽核表＝紙本 2-DC-03-02 的欄位，只多「審查結果」＝合格／不合格兩欄
     type:   ['項次','型態項目名稱','型態生效日期','型態類別','版別／文件編號','合格','不合格','備註（內稽不符合通知單編號）']
 };
+/* AS稽核查檢表：一條對應好幾份文件／表單，每一份各自標合格(V)／不合格(X)（2026-11-23 使用者要求，
+   比照系統稽核紀錄表一份表單一列的勾法）。整列判定由這些標記推導：任何一份不合格＝不合格，
+   全部合格＝合格；「所見證據或建議」自動寫出不合格的是哪幾份文件（可再手動補充）。 */
+function asDocLines(it){
+    return String(it.col_b||'').split(/\n/).map(function(x){ return x.trim(); }).filter(Boolean).map(function(x){
+        var m = /^(\S+)\s*(.*)$/.exec(x);
+        return {no:m?m[1]:x, name:m?m[2]:'', text:x};
+    });
+}
+function asDocMarksOf(it){
+    var m = it.doc_marks; if (typeof m === 'string') { try { m = JSON.parse(m); } catch(e){ m = {}; } }
+    return m || {};
+}
+function asDocMarksHtml(it, ro){
+    var lines = asDocLines(it), marks = asDocMarksOf(it);
+    if (!lines.length) return '';
+    return lines.map(function(d, i){
+        var nm = 'd'+it.item_id+'_'+i, v = marks[d.no] || '';
+        return '<div class="ckDocLine" style="display:flex;gap:6px;align-items:center;margin:1px 0;">'
+          + '<span style="flex:1;">'+esc(d.text)+'</span>'
+          + '<label style="margin:0;font-weight:normal;white-space:nowrap;color:#2E7D32;"><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ok"'+(v==='ok'?' checked':'')+(ro?' disabled':'')+'> 合格</label>'
+          + '<label style="margin:0;font-weight:normal;white-space:nowrap;color:#C4442D;"><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ng"'+(v==='ng'?' checked':'')+(ro?' disabled':'')+'> 不合格</label></div>';
+    }).join('');
+}
+/* 標記一份文件 → 重算整列判定與證據欄（只動這一列，不整張重畫，免得別列還沒存的字被洗掉） */
+$('#ckBody').on('change', '.ckDoc', function(){
+    var id = +$(this).data('id'), $tr = $(this).closest('tr'), it = null;
+    (CHK.items||[]).forEach(function(x){ if (+x.item_id === id) it = x; });
+    if (!it) return;
+    var marks = {}, ng = [], total = 0, okN = 0;
+    asDocLines(it).forEach(function(d){
+        total++;
+        var v = $tr.find('.ckDoc[data-no="'+d.no.replace(/"/g,'')+'"]:checked').val() || '';
+        if (v) marks[d.no] = v;
+        if (v === 'ng') ng.push(d.text);
+        if (v === 'ok') okN++;
+    });
+    it.doc_marks = marks;
+    var res = ng.length ? 'ng' : (okN === total && total ? 'ok' : '');
+    it.result = res;
+    $tr.find('.ckR[value="ok"]').prop('checked', res==='ok');
+    $tr.find('.ckR[value="ng"]').prop('checked', res==='ng');
+    var $ev = $tr.find('.ckF[data-f="evidence"]'), cur = String($ev.val()||'');
+    // 證據欄：舊的「不合格：…」自動句整句換掉，使用者另外手寫的字保留
+    var rest = cur.replace(/^不合格文件：[^\n]*\n?/, '');
+    $ev.val((ng.length ? ('不合格文件：' + ng.join('；') + (rest ? '\n' : '')) : '') + rest);
+    $tr.find('td').last().find('.ia-op').remove();
+    var btn = ncBtnHtml(it, !CHK.can_edit); if (btn) $tr.find('td').last().append(btn);
+    renderCheckAutoBar(!CHK.can_edit);
+});
 function renderCheckItems(){
     var k = CHK.kind, ro = !CHK.can_edit;
     /* AS稽核查檢表＝全自動、內容一律唯讀（2026-09-22 使用者要求）：
@@ -4940,7 +4990,7 @@ function renderCheckItems(){
             h += '<td>'+n+'</td><td class="l" style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
               + '<td class="l" style="'+pre+'font-size:12px;">'+esc(it.col_a||'')+'</td>'
               + '<td class="l" style="font-size:12px;">'+esc(it.col_d||'')+'</td>'
-              + '<td class="l" style="'+pre+'font-size:12px;color:#7a6444;">'+esc(it.col_b||'')+'</td>'
+              + '<td class="l" style="font-size:12px;">'+asDocMarksHtml(it, fro)+'</td>'
               + '<td>'+okChk+'</td><td>'+ngChk+'</td>'
               + '<td><input type="text" class="ckF" data-id="'+it.item_id+'" data-f="evidence" value="'+esc(it.evidence||'')+'"'
               + (fro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;'
@@ -5339,6 +5389,17 @@ function collectCheckItems(){
         var id = $(this).data('id');
         map[id] = map[id] || {item_id:id};
         map[id].result = $(this).val();
+    });
+    // AS稽核查檢表：各份文件各自的判定一併存
+    var dm = {};
+    $('#ckBody .ckDoc:checked').each(function(){
+        var id = $(this).data('id'); dm[id] = dm[id] || {};
+        dm[id][String($(this).data('no'))] = $(this).val();
+    });
+    $('#ckBody tr').has('.ckDoc').each(function(){
+        var id = $(this).find('.ckDoc').first().data('id');
+        map[id] = map[id] || {item_id:id};
+        map[id].doc_marks = dm[id] || {};
     });
     return Object.keys(map).map(function(k){ return map[k]; });
 }
