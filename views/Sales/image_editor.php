@@ -9317,6 +9317,18 @@ function pushState() {
 function flushPendingState() {
     if (pushTimer) { clearTimeout(pushTimer); doPushState(); }
 }
+/* 工作檔內底圖／標籤的網址若存成絕對網址（http://主機/…），換成 https 或換主機開頁面時變成跨來源：
+   瀏覽器不帶登入 cookie → 被導回登入頁 → 底圖整張消失。一律改成相對於本頁的網址。 */
+function relinkEditorUrls(node) {
+    if (Array.isArray(node)) { node.forEach(relinkEditorUrls); return; }
+    if (!node || typeof node !== 'object') return;
+    for (const k in node) {
+        const v = node[k];
+        if (typeof v === 'string') {
+            if (v.length < 600 && v.indexOf('image_editor.php?action=') > 0 && /^https?:///i.test(v)) node[k] = v.slice(v.indexOf('image_editor.php?action='));
+        } else if (v && typeof v === 'object') relinkEditorUrls(v);
+    }
+}
 function restoreState(json) {
     restoring = true;
     const __t0 = performance.now();
@@ -9325,6 +9337,7 @@ function restoreState(json) {
         // undefined，destroy→setCoords→控制點 positionHandler 會連環拋例外（殘影/卡頓來源）
         try { canvas.discardActiveObject(); } catch (e) { /* 選取已壞掉就算了，下面照樣重建 */ }
         const j = (typeof json === 'string') ? JSON.parse(json) : json;
+        relinkEditorUrls(j);
         snapUnpoolify(j);   // 快照裡的池索引換回真正的 dataURL；未池化的舊格式原樣通過
         canvas.loadFromJSON(j, function () { restoreDone(); __egSlow('undo還原', __t0); });
     } catch (e) {
