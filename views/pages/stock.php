@@ -612,6 +612,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $where[] = 'si.qty>0 AND si.qty<ss.safety_qty';
             } elseif ($qtyF==='zero') { $where[]='si.qty=0'; }
             elseif ($qtyF==='has')    { $where[]='si.qty>0'; }
+            // 庫存列表預設不顯示庫存數=0（只有庫存列表主畫面送 hide_zero=1；選「庫存為0」篩選時仍可查）
+            if (intval($_POST['hide_zero'] ?? 0)===1 && $qtyF!=='zero') { $where[]='si.qty<>0'; }
 
             // 今日異動篩選
             if ($todayOnly) {
@@ -5005,6 +5007,39 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
   </div>
 </div>
 
+<!-- ══ 入庫單分頁 ══ -->
+<div id="tab-inb" style="display:none;">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+    <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-download"></i> 入庫單</h4>
+    <span class="text-muted" style="font-size:12px;">來源：包裝自主檢查表「成品入庫方式」的入庫數量；與包裝排程「待入庫」同步</span>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <div class="btn-group btn-group-sm" id="inb-status-btns">
+        <button type="button" class="btn btn-default inb-st" data-status="" onclick="setInbStatus('',this)">全部</button>
+        <button type="button" class="btn btn-primary inb-st" data-status="pending" onclick="setInbStatus('pending',this)">待入庫</button>
+        <button type="button" class="btn btn-default inb-st" data-status="partial" onclick="setInbStatus('partial',this)">部分入庫</button>
+        <button type="button" class="btn btn-default inb-st" data-status="done" onclick="setInbStatus('done',this)">已完成</button>
+      </div>
+      <div class="input-group input-group-sm" style="width:220px;">
+        <input type="text" id="inb-kw" class="form-control" placeholder="搜尋BOM/料號/客戶" oninput="clearTimeout(window._inbT);window._inbT=setTimeout(function(){loadInbound(1)},350)">
+        <span class="input-group-btn"><button class="btn btn-default" onclick="$('#inb-kw').val('');loadInbound(1)"><i class="fa fa-times"></i></button></span>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+    <button type="button" class="btn btn-xs btn-default" onclick="inbSelAll(true)">全選</button>
+    <button type="button" class="btn btn-xs btn-default" onclick="inbSelAll(false)">取消全選</button>
+    <button type="button" class="btn btn-xs btn-primary" id="inb-print-btn" onclick="inbPrintSel()" disabled><i class="fa fa-print"></i> 列印勾選（A4）</button>
+    <span class="text-muted" style="font-size:12px;">已勾選 <b id="inb-sel-cnt">0</b> 筆；部分入庫的只列剩餘未入庫數量。「全選」會選取目前篩選條件下所有尚未入庫完的項目。</span>
+  </div>
+  <div id="inb-pager" class="pg-btns" style="text-align:right;margin-bottom:6px;"></div>
+  <div style="overflow-x:auto;">
+  <table class="table tbl-sm" style="margin:0;">
+    <thead><tr><th style="width:28px;"></th><th>入庫日期(檢查表)</th><th>BOM號碼</th><th>客戶</th><th>料號</th><th class="text-right">應入庫數量</th><th>備註</th><th>目前狀態</th><th>入庫日期／儲位</th><th></th></tr></thead>
+    <tbody id="inb-body"><tr><td colspan="10" class="text-center text-muted">載入中...</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
 </div></div></div><!-- /right_col /main_container /container -->
 <div id="toast-wrap"></div>
 
@@ -5039,8 +5074,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
             <input type="hidden" id="cr-filter-client-val">
             <div id="cr-client-ac" style="display:none;position:absolute;z-index:9999;background:#fff;border:1px solid #ddd;border-radius:4px;max-height:160px;overflow-y:auto;width:220px;box-shadow:0 2px 8px rgba(0,0,0,.12);top:100%;left:0;"></div>
           </div>
-          <select id="cr-filter-cat" class="form-control input-sm" style="flex:0 0 110px;" onchange="searchReqItems()">
-            <option value="">全部種類</option>
+          <select id="cr-filter-cat" class="form-control input-sm" style="flex:0 0 110px;" onchange="onCrCatChange()">
+            <option value="">— 先選種類 —</option>
           </select>
           <input type="text" id="cr-item-search" class="form-control input-sm" placeholder="料號 / 備註搜尋" style="flex:1;min-width:120px;" oninput="searchReqItems()">
           <button type="button" class="btn btn-default btn-sm" onclick="clearReqFilters()" title="清除所有篩選條件"><i class="fa fa-times"></i> 取消篩選</button>
@@ -5300,33 +5335,6 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div>
-  </div>
-</div>
-
-<!-- ══ 入庫單分頁 ══ -->
-<div id="tab-inb" style="display:none;">
-  <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
-    <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-download"></i> 入庫單</h4>
-    <span class="text-muted" style="font-size:12px;">來源：包裝自主檢查表「成品入庫方式」的入庫數量；與包裝排程「待入庫」同步</span>
-    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <div class="btn-group btn-group-sm" id="inb-status-btns">
-        <button type="button" class="btn btn-default inb-st" data-status="" onclick="setInbStatus('',this)">全部</button>
-        <button type="button" class="btn btn-primary inb-st" data-status="pending" onclick="setInbStatus('pending',this)">待入庫</button>
-        <button type="button" class="btn btn-default inb-st" data-status="partial" onclick="setInbStatus('partial',this)">部分入庫</button>
-        <button type="button" class="btn btn-default inb-st" data-status="done" onclick="setInbStatus('done',this)">已完成</button>
-      </div>
-      <div class="input-group input-group-sm" style="width:220px;">
-        <input type="text" id="inb-kw" class="form-control" placeholder="搜尋BOM/料號/客戶" oninput="clearTimeout(window._inbT);window._inbT=setTimeout(function(){loadInbound(1)},350)">
-        <span class="input-group-btn"><button class="btn btn-default" onclick="$('#inb-kw').val('');loadInbound(1)"><i class="fa fa-times"></i></button></span>
-      </div>
-    </div>
-  </div>
-  <div id="inb-pager" class="pg-btns" style="text-align:right;margin-bottom:6px;"></div>
-  <div style="overflow-x:auto;">
-  <table class="table tbl-sm" style="margin:0;">
-    <thead><tr><th>入庫日期(檢查表)</th><th>BOM號碼</th><th>客戶</th><th>料號</th><th class="text-right">應入庫數量</th><th>備註</th><th>目前狀態</th><th>入庫日期／儲位</th><th></th></tr></thead>
-    <tbody id="inb-body"><tr><td colspan="9" class="text-center text-muted">載入中...</td></tr></tbody>
-  </table>
   </div>
 </div>
 
@@ -6802,7 +6810,11 @@ function loadMasterData(){
         $('#item-cat').html(h2);
         var h3='<option value="">全部種類</option>';
         r.data.forEach(function(c){ h3+='<option value="'+c.category_id+'">'+esc(c.category_name)+'</option>'; });
-        $('#cr-filter-cat,#edit-filter-cat').html(h3);
+        $('#edit-filter-cat').html(h3);
+        // 新增需求單：必須先選種類（沒有「全部種類」），之後搜尋只會出現該種類
+        var h4='<option value="">— 先選種類 —</option>';
+        r.data.forEach(function(c){ h4+='<option value="'+c.category_id+'">'+esc(c.category_name)+'</option>'; });
+        $('#cr-filter-cat').html(h4);
         var catCards='';
         r.data.forEach(function(c){
             var showDash=(c.show_in_dashboard===undefined||c.show_in_dashboard===null||parseInt(c.show_in_dashboard)===1);
@@ -6925,7 +6937,7 @@ function loadList(page){
         search:($('#f-search').val()||'').trim(), category_id:$('#f-cat').val(),
         location_id:$('#f-loc').val(), qty_filter:$('#f-qty').val(),
         client_id:$('#f-client').val(), stale_years:$('#f-stale').val()||0,
-        today_only:G._todayOnly?1:0,
+        today_only:G._todayOnly?1:0, hide_zero:1,
         label_filters: G.lblf.applied.length ? JSON.stringify(G.lblf.applied) : '',
         sort_col:G.sortCol, sort_dir:G.sortDir
     }, function(r){
@@ -11518,7 +11530,7 @@ function collapseAllReq(){
 function openCreateReqModal(){
     _reqCreateItems = [];
     $('#cr-title,#cr-remark,#cr-item-search').val('');
-    $('#cr-filter-client,#cr-filter-client-val').val(''); $('#cr-client-ac').hide().empty(); $('#cr-filter-cat').val('');
+    $('#cr-filter-client,#cr-filter-client-val').val(''); $('#cr-client-ac').hide().empty(); $('#cr-filter-cat').val(''); _crCatPrev='';
     $('#cr-item-results').hide().empty();
     $('#cr-user-display').val(CURRENT_USER_NAME||'—');
     renderCreateReqItems();
@@ -11562,7 +11574,11 @@ function searchReqItems(){
     var kw = $('#cr-item-search').val().trim();
     var clientFilter = ($('#cr-filter-client-val').val()||$('#cr-filter-client').val()||'').trim();
     var catFilter = parseInt($('#cr-filter-cat').val()||0)||0;
-    if(!kw && !clientFilter && !catFilter){ $('#cr-item-results').hide().empty(); return; }
+    if(!catFilter){
+        if(kw||clientFilter) $('#cr-item-results').html('<div style="padding:8px 12px;color:#c0392b;font-size:12px;">請先選擇種類，再搜尋料號</div>').show();
+        else $('#cr-item-results').hide().empty();
+        return;
+    }
     _reqSearchTimer = setTimeout(function(){
         ajx({action:'req_search_items', kw:kw, client_filter:clientFilter, cat_filter:catFilter}, function(r){
             var box = $('#cr-item-results');
@@ -11615,9 +11631,23 @@ function clearReqSearch(){
 }
 
 function clearReqFilters(){
+    // 種類屬於這張需求單，取消篩選不清除種類
     $('#cr-filter-client').val(''); $('#cr-filter-client-val').val(''); $('#cr-client-ac').hide().empty();
-    $('#cr-filter-cat').val(''); $('#cr-item-search').val('');
+    $('#cr-item-search').val('');
     $('#cr-item-results').hide().empty();
+    searchReqItems();
+}
+
+var _crCatPrev = '';
+function onCrCatChange(){
+    var nv = $('#cr-filter-cat').val()||'';
+    if(_reqCreateItems.length && nv!==_crCatPrev){
+        if(!confirm('一張需求單只能有同一種類，切換種類會清空目前已加入的料號，確定要切換嗎？')){ $('#cr-filter-cat').val(_crCatPrev); return; }
+        _reqCreateItems = []; renderCreateReqItems();
+    }
+    _crCatPrev = nv;
+    $('#cr-item-results').hide().empty();
+    searchReqItems();
 }
 
 function crClientAcInput(){
@@ -13140,26 +13170,75 @@ function debounce(fn, ms) {
 }
 
 // ── 入庫單 ──────────────────────────────────────
-var INB={status:'pending',page:1,per:20,rows:{},locs:null,cur:null};
+var INB={status:'pending',page:1,per:20,rows:{},locs:null,cur:null,sel:{}};
 var INB_ST={pending:'<span class="label label-warning">待入庫</span>',partial:'<span class="label label-info">部分入庫</span>',done:'<span class="label label-success">已完成</span>'};
+// ── 勾選待入庫項目＋列印 A4 確認清單 ──
+function inbSelCount(){ var n=Object.keys(INB.sel).length; $('#inb-sel-cnt').text(n); $('#inb-print-btn').prop('disabled',!n); }
+$(document).on('change','.inb-chk',function(){
+    var id=$(this).data('id');
+    if(this.checked){ if(INB.rows[id]) INB.sel[id]=INB.rows[id]; } else delete INB.sel[id];
+    inbSelCount();
+});
+function inbSelAll(on){
+    if(!on){ INB.sel={}; $('.inb-chk').prop('checked',false); inbSelCount(); return; }
+    // 依目前狀態／關鍵字取全部符合的（不只這一頁），只選還有剩餘未入庫的
+    ajx({action:'inbound_list',status:INB.status,kw:$('#inb-kw').val(),page:1,per:500},function(r){
+        if(!r.success){ toast(r.message||'載入失敗','error'); return; }
+        (r.rows||[]).forEach(function(x){ if(x.remain_qty>0) INB.sel[x.packing_inspection_id]=x; });
+        $('.inb-chk').each(function(){ $(this).prop('checked',!!INB.sel[$(this).data('id')]); });
+        inbSelCount();
+        if(r.total>500) toast('符合條件共 '+r.total+' 筆，全選最多取前 500 筆','warning');
+    });
+}
+function inbPrintSel(){
+    var rows=Object.keys(INB.sel).map(function(k){ return INB.sel[k]; });
+    if(!rows.length){ toast('請先勾選要列印的項目','warning'); return; }
+    rows.sort(function(a,b){ return String(a.inspection_date).localeCompare(String(b.inspection_date)) || a.packing_inspection_id-b.packing_inspection_id; });
+    stockDocMeta('stock_in','',function(meta){
+        var today=new Date(), ds=today.getFullYear()+'.'+String(today.getMonth()+1).padStart(2,'0')+'.'+String(today.getDate()).padStart(2,'0');
+        var title='待入庫確認清單';
+        var head='<div class="p-comp">'+esc(meta.company||'')+'</div><div class="p-title">'+title+'</div>';
+        var metaTbl='<table class="p-meta"><tr><th style="width:12%">列印日期</th><td style="width:38%">'+ds+'</td><th style="width:12%">筆數</th><td>'+rows.length+' 筆</td></tr></table>';
+        var tb='', sum=0;
+        rows.forEach(function(x,i){
+            sum+=x.remain_qty;
+            var part=x.received_qty>0?'<br><small>部分入庫（應入 '+x.warehouse_qty+'，已入 '+x.received_qty+'）</small>':'';
+            tb+='<tr><td class="c">'+(i+1)+'</td><td>'+esc(egFmtDate(x.inspection_date))+'</td><td class="tl">'+esc(x.bom)+'</td><td class="tl">'+esc(x.customer_name||'')+'</td><td class="tl">'+esc(x.part_no||'')+'</td>'
+              +'<td class="tr"><b>'+x.remain_qty+'</b></td><td class="tl">'+esc(x.note||'')+inbStockHtml(x).replace(/color:#7a4a12;/,'')+part+'</td><td></td><td></td></tr>';
+        });
+        var tbl='<table class="p-tb"><colgroup><col style="width:4%"><col style="width:9%"><col style="width:13%"><col style="width:10%"><col style="width:16%"><col style="width:9%"><col style="width:23%"><col style="width:8%"><col style="width:8%"></colgroup>'
+          +'<thead><tr><th>#</th><th>檢查表日期</th><th>BOM號碼</th><th>客戶</th><th>料號</th><th>待入庫數量</th><th>備註／入庫容器</th><th>入庫儲位</th><th>確認</th></tr></thead><tbody>'+tb+'</tbody>'
+          +'<tfoot><tr><td colspan="5" style="text-align:right;">待入庫合計</td><td class="tr">'+sum+'</td><td colspan="3"></td></tr></tfoot></table>';
+        stockDocPrintWindow(title, head+metaTbl+tbl, '');
+    });
+}
+// 入庫容器與數量（包裝自主檢查表填的「入庫容器」）：例 鐵桶 超正 12號 × 50
+function inbStockHtml(x){
+    var rows=x.stock_rows||[]; if(!rows.length) return '';
+    var ow={internal:'超正',noprint:'無印刷',customer:'客供',recycle:'回收紙箱'};
+    return '<div style="font-size:12px;color:#7a4a12;margin-top:2px;">容器：'+rows.map(function(r){
+        return esc(r.type||'')+' '+esc(ow[r.owner]||r.owner||'')+(r.no?' '+esc(r.no)+'號':'')+' × '+esc(r.qty);
+    }).join('；')+'</div>';
+}
 function setInbStatus(st,btn){ INB.status=st; $('.inb-st').removeClass('btn-primary').addClass('btn-default'); $(btn).removeClass('btn-default').addClass('btn-primary'); loadInbound(1); }
 function loadInbound(page){
     INB.page=page||1;
     ajx({action:'inbound_list',status:INB.status,kw:$('#inb-kw').val(),page:INB.page,per:INB.per},function(r){
-        if(!r.success){ $('#inb-body').html('<tr><td colspan="9" class="text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
+        if(!r.success){ $('#inb-body').html('<tr><td colspan="10" class="text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
         var pend=(r.counts.pending||0)+(r.counts.partial||0);
         $('#inb-badge').text(pend).toggle(pend>0);
-        if(!r.rows.length){ $('#inb-body').html('<tr><td colspan="9" class="text-center text-muted" style="padding:20px;">目前沒有符合的入庫單</td></tr>'); $('#inb-pager').html(''); return; }
+        if(!r.rows.length){ $('#inb-body').html('<tr><td colspan="10" class="text-center text-muted" style="padding:20px;">目前沒有符合的入庫單</td></tr>'); $('#inb-pager').html(''); return; }
         INB.rows={}; var h='';
         r.rows.forEach(function(x){
             INB.rows[x.packing_inspection_id]=x;
             var rc=(x.receipts||[]).map(function(a){ return esc(egFmtDate(a.received_date))+'　'+esc(a.location_code||'')+' × '+a.qty; }).join('<br>');
-            h+='<tr><td>'+esc(egFmtDate(x.inspection_date))+'</td><td>'+esc(x.bom)+'</td><td>'+esc(x.customer_name||'')+'</td><td>'+esc(x.part_no||'')+'</td>'
+            h+='<tr><td>'+(x.remain_qty>0?'<input type="checkbox" class="inb-chk" data-id="'+x.packing_inspection_id+'"'+(INB.sel[x.packing_inspection_id]?' checked':'')+'>':'')+'</td><td>'+esc(egFmtDate(x.inspection_date))+'</td><td>'+esc(x.bom)+'</td><td>'+esc(x.customer_name||'')+'</td><td>'+esc(x.part_no||'')+'</td>'
               +'<td class="text-right">'+x.warehouse_qty+(x.received_qty>0?'<br><small class="text-muted">已入 '+x.received_qty+'／尚餘 '+x.remain_qty+'</small>':'')+'</td>'
-              +'<td>'+esc(x.note||'')+'</td><td>'+(INB_ST[x.st]||'')+'</td><td style="font-size:12px;">'+(rc||'—')+'</td>'
+              +'<td>'+esc(x.note||'')+inbStockHtml(x)+'</td><td>'+(INB_ST[x.st]||'')+'</td><td style="font-size:12px;">'+(rc||'—')+'</td>'
               +'<td>'+(x.remain_qty>0&&hasF('stock_req_issue')?'<button class="btn btn-xs btn-primary" onclick="openInbound('+x.packing_inspection_id+')">入庫</button>':'')+'</td></tr>';
         });
         $('#inb-body').html(h);
+        inbSelCount();
         var pages=Math.ceil(r.total/INB.per), p='';
         if(pages>1){ for(var i=1;i<=pages;i++) p+='<button class="btn btn-xs '+(i===INB.page?'btn-primary':'btn-default')+'" onclick="loadInbound('+i+')">'+i+'</button> '; }
         $('#inb-pager').html('共 '+r.total+' 筆　'+p);
@@ -13182,7 +13261,7 @@ function inbSum(){
 function openInbound(id){
     var x=INB.rows[id]; if(!x) return; INB.cur=x;
     $('#inb-err').text('');
-    $('#inb-info').html('<strong>'+esc(x.bom)+'</strong>　'+esc(x.customer_name||'')+'　'+esc(x.part_no||'')+'<br>應入庫 '+x.warehouse_qty+'，尚未入庫 <strong>'+x.remain_qty+'</strong>'+(x.note?'<br><span style="color:#b8651b;">備註：'+esc(x.note)+'</span>':''));
+    $('#inb-info').html('<strong>'+esc(x.bom)+'</strong>　'+esc(x.customer_name||'')+'　'+esc(x.part_no||'')+'<br>應入庫 '+x.warehouse_qty+'，尚未入庫 <strong>'+x.remain_qty+'</strong>'+(x.note?'<br><span style="color:#b8651b;">備註：'+esc(x.note)+'</span>':'')+inbStockHtml(x));
     var d=new Date(); $('#inb-date').val(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));
     var go=function(){ $('#inb-splits').empty(); inbAddRow('',x.remain_qty); $('#inbModal').modal('show'); };
     if(INB.locs) go(); else ajx({action:'get_locations',category_id:1,page:0},function(r){ INB.locs=(r&&r.data)||[]; go(); });
