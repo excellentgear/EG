@@ -990,7 +990,8 @@ $roleLabel = ia_role_label($perms);
 <!-- ============================ AS 條文題庫 ============================ -->
 <div class="ia-mask" id="clauseMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-list-ol"></i> AS 稽核查檢表　條文題庫</h4>
-        <button id="btnAppxSync" style="margin-left:auto;" title="依手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」帶入條文編號與名稱、作業程序編號，順序也依附錄B"><i class="fa fa-refresh"></i> 立即同步手冊附錄B</button>
+        <label style="margin-left:auto;font-weight:normal;font-size:12px;" title="早期匯入留下、附錄B 已經沒有的舊條文（已停用，不影響稽核）"><input type="checkbox" id="clShowOld" data-eg-skip> 顯示附錄B 已沒有的舊條文 <span id="clOldCnt"></span></label>
+        <button id="btnAppxSync" style="margin-left:8px;" title="依手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」帶入條文編號與名稱、作業程序編號，順序也依附錄B"><i class="fa fa-refresh"></i> 立即同步手冊附錄B</button>
         <span class="x" data-close style="margin-left:10px;">&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-hint">這是<b>AS稽核查檢表</b>的題目來源，<b>內容全部由手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」自動同步</b>（開啟本視窗就會同步）：
@@ -6787,6 +6788,7 @@ function loadClauses(){
         });
         $('#clauseBody').html(h || '<tr><td colspan="7" class="ia-empty">題庫是空的</td></tr>');
         clauseRenumber();
+        clauseOldRefresh();
         openMask('clauseMask');
         // 開題庫就已經依手冊附錄B 自動同步過一次，有變動要講出來（否則之後手按同步只會看到「更新 0 條」）
         var as = res.auto_sync;
@@ -6795,6 +6797,13 @@ function loadClauses(){
                     +(+as.pruned ? '，清除過程群組殘留勾選 '+as.pruned+' 筆' : ''), 7000);
     });
 }
+/* 附錄B 已經沒有的舊條文預設收起來，要看再勾 */
+function clauseOldRefresh(){
+    var show = $('#clShowOld').is(':checked'), n = $('#clauseBody tr.cl-orphan').length;
+    $('#clauseBody tr.cl-orphan').css('display', show ? '' : 'none');
+    $('#clOldCnt').text(n ? '（'+n+' 條）' : '');
+}
+$(document).on('change', '#clShowOld', clauseOldRefresh);
 /* 一列的 HTML（新增列與載入共用同一份，避免兩邊欄位走鐘＝鐵律4） */
 /* 文件欄：程序書（附錄B，唯讀）與表單（可在這裡設定）分開列 */
 function clauseDocsHtml(c){
@@ -6817,7 +6826,8 @@ function clauseRowHtml(c){
     // 順序／標題列／品質管理系統要求／文件表單／作業項目全部由手冊附錄B 決定，只能看；只有過程群組與啟用可以改（2026-11-23 使用者要求）
     var tasks = (c.tasks||[]).map(function(t){ return '<span class="nk-task" style="margin:1px 3px 1px 0;">'+esc(t.task_name)+'</span>'; }).join('')
               || '<span class="cl-task-hint">—</span>';
-    return '<tr data-id="'+(c.clause_id||'')+'"'+(+c.is_active?'':' style="opacity:.55;"')+'>'
+    var orphan = (!+c.is_active && !String(c.clause_no||'').trim() && c.clause_id);   // 附錄B 已經沒有的舊條文
+    return '<tr data-id="'+(c.clause_id||'')+'"'+(orphan?' class="cl-orphan"':'')+(+c.is_active?'':' style="opacity:.55;"')+'>'
       + '<td><span class="cl-seq"></span></td>'
       + '<td>'+(+c.is_header?'<i class="fa fa-check"></i>':'')+'</td>'
       + '<td class="l" style="white-space:pre-wrap;">'+esc(c.clause_text||'')+'</td>'
