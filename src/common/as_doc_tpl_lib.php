@@ -873,7 +873,17 @@ function adt_split_pages(?string $html): array
     $h = trim((string)$html);
     if ($h === '') return [];
     $parts = preg_split('#<hr[^>]*page-break-after[^>]*>#i', $h);
-    return is_array($parts) ? $parts : [$h];
+    if (!is_array($parts)) return [$h];
+    /* 完全空白的頁（只剩空段落、換行、&nbsp;）不印：編輯器存檔時，遇到比一頁高的長表格會在後面補一串空白頁來「佔位」，
+       列印時就變成好幾張只有抬頭與外框的空白紙（2026-11-24 實際發生：附錄B 後面 8 張）。
+       有圖片、表格、影片等內容的頁不算空白。至少保留一頁。 */
+    $keep = [];
+    foreach ($parts as $p) {
+        $t = preg_replace('/(&nbsp;|<br\s*\/?>|\s|\x{00A0}|\x{3000})+/u', '', strip_tags((string)$p, '<img><table><svg><video><canvas><iframe>'));
+        if ($t === '' ) continue;
+        $keep[] = $p;
+    }
+    return $keep ?: [$h];
 }
 
 } // EG_AS_DOC_TPL_LIB
