@@ -5911,7 +5911,7 @@ function ia_appendixb_sync(PDO $db): array
     $upd = 0; $ins = 0; $off = 0;
     $db->beginTransaction();
     try {
-        $u = $db->prepare("UPDATE ia_as_clause SET clause_text=?, clause_no=?, proc_nos=?, is_header=?, sort_order=?, is_active=1, updated_at=NOW(), updated_by='附錄B同步' WHERE clause_id=?");
+        $u = $db->prepare("UPDATE ia_as_clause SET clause_text=?, clause_no=?, proc_nos=?, is_header=?, sort_order=?, updated_at=NOW(), updated_by=IF(updated_by='附錄B停用','附錄B停用','附錄B同步') WHERE clause_id=?");
         $i = $db->prepare("INSERT INTO ia_as_clause (sort_order, is_header, clause_text, doc_ref, is_active, clause_no, proc_nos, updated_at, updated_by)
                            VALUES (?,?,?,?,1,?,?,NOW(),'附錄B同步')");
         $used = [];
@@ -5922,9 +5922,8 @@ function ia_appendixb_sync(PDO $db): array
             if (isset($exist[$r['no']])) {
                 $c = $exist[$r['no']]; $cid = (int)$c['clause_id'];
                 $used[$cid] = 1;
-                $revive = ((int)($c['is_active'] ?? 1) === 0 && (string)($c['updated_by'] ?? '') === '附錄B停用');
                 // 內容完全沒變就不寫（開題庫就會自動同步，不要每次都洗 updated_at）
-                if (!$revive && (string)$c['clause_text'] === $text && (string)($c['clause_no'] ?? '') === (string)$r['no']
+                if ((string)$c['clause_text'] === $text && (string)($c['clause_no'] ?? '') === (string)$r['no']
                     && (string)($c['proc_nos'] ?? '') === $procs && (int)$c['is_header'] === (int)$r['is_header']
                     && (int)$c['sort_order'] === $sort) continue;
                 $u->execute([$text, $r['no'], $procs ?: null, $r['is_header'], $sort, $cid]);
@@ -5933,6 +5932,17 @@ function ia_appendixb_sync(PDO $db): array
                 $i->execute([$sort, $r['is_header'], $text, null, $r['no'], $procs ?: null]);
                 $used[(int)$db->lastInsertId()] = 1; $ins++;
             }
+        }
+        // 附錄B 沒有對應程序書、也沒有設定任何對應表單的條文（不適用或排除）→ 自動取消啟用；之後有了會自動恢復。
+        // 自動恢復只針對「附錄B停用」標記的；人工取消啟用的不會被自動勾回。
+        $on = $db->prepare("UPDATE ia_as_clause SET is_active=1, updated_by='附錄B同步', updated_at=NOW() WHERE clause_id=?");
+        $offSt = $db->prepare("UPDATE ia_as_clause SET is_active=0, updated_by='附錄B停用', updated_at=NOW() WHERE clause_id=?");
+        foreach (ia_as_clauses($db, false) as $c) {
+            if (!isset($used[(int)$c['clause_id']]) || (int)$c['is_header'] === 1) continue;
+            $hasRef = (bool)ia_clause_proc_list(['proc_nos' => $c['proc_nos'] ?? '', 'doc_ref' => ia_clause_ref_strip_procs((string)($c['doc_ref'] ?? ''))]);   // 舊的程序書段不算
+            $act = (int)($c['is_active'] ?? 1) === 1; $by = (string)($c['updated_by'] ?? '');
+            if (!$hasRef && $act) { $offSt->execute([(int)$c['clause_id']]); $off++; }
+            elseif ($hasRef && !$act && $by === '附錄B停用') { $on->execute([(int)$c['clause_id']]); $upd++; }
         }
         // doc_ref 裡匯入 xls 留下的舊「程序書：」段清掉（程序書以附錄B 為準，否則畫面會把已從附錄B 拿掉的程序書一直列著）
         $cl = $db->prepare("UPDATE ia_as_clause SET doc_ref=? WHERE clause_id=?");
