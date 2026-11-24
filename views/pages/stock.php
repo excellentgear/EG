@@ -3728,7 +3728,7 @@ LBLSQL;
             $hasLocIdDet=in_array('location_id',$siColsDet);
             $locSelDet=$hasLocIdDet?"COALESCE(sl.location_code,si.storage_location,'')":"COALESCE(si.storage_location,'')";
             $locJoinDet=$hasLocIdDet?"LEFT JOIN stock_locations sl ON sl.location_id=si.location_id":"";
-            $allLocQ=$pdo->prepare("SELECT $locSelDet AS loc FROM stock_items si $locJoinDet WHERE si.d_id=? AND si.is_active=1 AND (si.group_id IS NULL OR si.group_id=0)");
+            $allLocQ=$pdo->prepare("SELECT $locSelDet AS loc FROM stock_items si $locJoinDet WHERE si.d_id=? AND si.is_active=1 AND si.qty>0 AND (si.group_id IS NULL OR si.group_id=0)");
             foreach($reqItems as &$ri){
                 if(!empty($ri['group_id'])){
                     // 組合件：floor(qty/pcs_per_set) 最小值 = 可領組數
@@ -8101,6 +8101,10 @@ function openDetail(id){
 
         // 所有儲位庫存
         var locs=r.other_locations||[];
+        // 庫存=0 的儲位不顯示（除非列表正在篩選「零庫存」）
+        if($('#f-qty').val()!=='zero'){
+            locs=locs.filter(function(l){ return parseFloat(l.qty||0)>0; });
+        }
         if(locs.length){
             infoHtml+='<div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:5px;"><i class="fa fa-map-marker"></i> 各儲位庫存</div>';
             var totalQty=0;
@@ -11894,7 +11898,7 @@ function openReqDetail(reqId){
                 +'<td>'+urgBadge+'<strong>'+esc(it.d_id||'')+'</strong>'+grpBadgeDtl+'</td>'
                 +'<td style="font-size:11px;">'+esc(it.client_name||'')+'</td>'
                 +'<td>'+catBadgeHtml(it.category_name||'—','font-size:10px;')+'</td>'
-                +'<td style="font-size:11px;">'+esc(it.storage_location||'')+'</td>'
+                +'<td style="font-size:11px;">'+esc(it.group_id?(it.storage_location||''):(it.all_locations||''))+'</td>'
                 +'<td>'+esc(it.qty_requested)+(it.group_id?'<small class="text-muted"> 組</small>':'')+'</td>'
                 +'<td>'+(done?'<span style="color:var(--accent);font-weight:700;">':'')+esc(it.qty_issued)+(done?'</span>':'')+'</td>'
                 +'<td style="'+(rem>0?'color:var(--info);font-weight:600;':'color:#aaa;')+'">'+rem+'</td>'
@@ -12512,7 +12516,7 @@ function buildReqPrintWindow(req, meta, onDone){
             +'<td class="tl">'+esc(it.client_name||'')+'</td>'
             +'<td class="tl">'+urg+esc(it.d_id||'')+'</td>'
             +'<td>'+esc(it.category_name||'')+'</td>'
-            +'<td class="tl">'+esc(it.storage_location||it.all_locations||'')+'</td>'
+            +'<td class="tl">'+esc(it.group_id?(it.storage_location||''):(it.all_locations||''))+'</td>'
             +'<td class="c">'+esc(it.qty_requested)+'</td>'
             +'<td class="c">'+esc(it.current_qty||0)+'</td>'
             +'<td class="p-sign">'+(issued>0?'<div class="p-qty">'+issued+'</div>'+reqStampHtml(keeper, stampDate, meta):'')+'</td>'
