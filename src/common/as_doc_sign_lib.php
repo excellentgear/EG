@@ -573,6 +573,18 @@ function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $una
     if ($submitDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitDate) && $submitDate <= $today) {
         $today = $submitDate;
     }
+    /* 「不新增制修訂紀錄」（改的內容併進現行版、版別與修訂日都不變）：業務日期＝這份文件最後一次修訂日，不是今天——
+       否則簽章與制修訂紀錄書上會冒出一個今天的日期，跟版次履歷對不上（2026-11-24 使用者回報）。
+       管理員自己指定了日期（$submitDate）就尊重他。 */
+    if ((($rev['kind'] ?? '') === 'none') && $submitDate === '') {
+        try {
+            $lastRev = (string)$db->query("SELECT v2.revised_date FROM as_document_version v2
+                                           WHERE v2.doc_id=(SELECT doc_id FROM as_document_version WHERE id=" . (int)$versionId . ")
+                                             AND COALESCE(v2.is_draft,0)=0 AND v2.revised_date IS NOT NULL
+                                           ORDER BY v2.revised_date DESC, v2.id DESC LIMIT 1")->fetchColumn();
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $lastRev) && $lastRev <= $today) $today = $lastRev;
+        } catch (Throwable $e) {}
+    }
     $allAuto = true;
     foreach ($rows as $r) if (empty($r['s']['auto_sign'])) { $allAuto = false; break; }
 

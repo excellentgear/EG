@@ -2026,7 +2026,7 @@ function revAutoKind() { return revSelected().length > REV.data.minor_max ? 'maj
 function revPaint() {
     var d = REV.data, h = '<div class="sg-pick" style="margin-top:6px;border-color:#E8890C">'
       + '<div class="sg-h">制修訂紀錄（簽核完成後自動新增一列）</div>'
-      + (CAN_ADMIN ? '<div class="sg-f" style="margin-bottom:6px"><b>制修訂日期</b>（管理員可改；留空＝今天）：<input type="date" id="revDate" class="form-control input-sm" style="display:inline-block;width:auto" value="' + esc(REV.date || '') + '"></div>' : '');
+      + (CAN_ADMIN ? '<div class="sg-f" style="margin-bottom:6px"><b>制修訂日期</b>（管理員可改；留空＝今天，選「不新增制修訂紀錄」時＝最後一次修訂日）：<input type="date" id="revDate" class="form-control input-sm" style="display:inline-block;width:auto" value="' + esc(REV.date || '') + '"></div>' : '');
     if (!d.baseline) {
         h += '<div class="sg-f" style="color:#DD5138;margin-bottom:6px">這份文件還沒有「上一次簽核通過的內容」可以比對，'
            + '系統無法判斷大小改版與修訂項目，請自己選擇並填寫摘要。</div>';
