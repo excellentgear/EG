@@ -3365,6 +3365,8 @@ function ia_year_checklist(PDO $db, int $year): array
     foreach ($rows as &$gr) {
         $gk = $gateOf[$gr['key'] ?? ''] ?? '';
         $gr['blocked'] = $gk !== '' ? ia_flow_gate($db, $year, $gk) : '';
+        // 前面的步驟還沒完成、這一步就還沒開始：先前建的草稿不算進度，不能顯示「進行中」
+        if ($gr['blocked'] !== '' && ($gr['state'] ?? '') === 'doing') $gr['state'] = 'todo';
     }
     unset($gr);
     usort($rows, function ($a, $b) {
@@ -4311,7 +4313,21 @@ function ia_year_status(PDO $db): array
         $hasAny = ($s['plan'] || $s['cases'] || $s['checks'] || $s['reports'] || $s['nc_open']);
         if (!$hasAny) { $s['state'] = 'none'; continue; }
 
+        /* 2026 年起流程是「通知單→事前會議→查檢表→不符合通知單→結束會議→報告表」（見 ia_flow_gate）。
+           還沒有任何稽核通知單＝這一年的稽核**還沒開始**：就算已經有年度計畫表、
+           或零星的查檢表草稿（通知單之前建的不算進度），也不可標「進行中」、更不可只寫「還差 1 項」。 */
+        if ($y >= IA_ROUND_START_YEAR && $s['cases'] === 0) {
+            $s['state'] = 'none';
+            $s['why']   = [$s['plan']
+                ? '已有年度計畫表，但還沒開始執行稽核（還沒有稽核通知單；查檢表、不符合通知單、報告表都要等通知單與事前會議完成後才會開放）'
+                : '還沒有年度計畫表'];
+            continue;
+        }
         $why = [];
+        if ($y >= IA_ROUND_START_YEAR) {
+            if ($s['cases_done'] < $s['cases'])           $why[] = '還有 ' . ($s['cases'] - $s['cases_done']) . ' 張稽核通知單尚未執行完成';
+            if ($s['checks'] === 0)                       $why[] = '還沒有查檢表';
+        }
         // 報告表 2026-09-17 起走「送出」不走核准（使用者拍板不要核准也不要製表人），
         // 舊資料若還是 approved 也一律算數，不然以前核准過的年度會突然變回進行中。
         if ($s['reports'] === 0)                          $why[] = '還沒有稽核報告表';
