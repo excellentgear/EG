@@ -35,19 +35,44 @@ setTimeout(()=>{console.error('逾時');done(2)},100000);
   var mm=96/25.4,t=(typeof ADT_PAGE_H_MM!=='undefined'?ADT_PAGE_H_MM:0)*mm,log=[];
   if(!t)return 'no-target';
   var pages=Array.prototype.slice.call(document.querySelectorAll('.adt-page'));
-  /* ① 長表格頁：把「文件抬頭」放進表格的表頭列，這樣表格被印到好幾張紙時每一張都有抬頭（thead 會跨頁重複） */
-  pages.forEach(function(p,i){
-    var h=p.getBoundingClientRect().height; if(h<=t*1.5)return;
-    var hdr=p.querySelector(':scope > .adt-hdr'), tb=null;
-    p.querySelectorAll(':scope > .adt-body table').forEach(function(x){ if(!tb||x.getBoundingClientRect().height>tb.getBoundingClientRect().height) tb=x; });
-    if(!hdr||!tb)return;
-    var th=tb.querySelector('thead'); if(!th){ th=document.createElement('thead'); var f=tb.querySelector('tr'); if(!f)return; var rows=Array.prototype.slice.call(tb.querySelectorAll(':scope > tbody > tr, :scope > tr')); tb.insertBefore(th,tb.firstChild); }
-    var r0=th.querySelector('tr')||tb.querySelector('tr'), cols=0;
-    Array.prototype.forEach.call((r0?r0.children:[]),function(c){cols+=parseInt(c.getAttribute('colspan')||'1',10)});
-    var tr=document.createElement('tr'), td=document.createElement('td');
-    td.colSpan=Math.max(cols,1); td.style.cssText='padding:0;border:0;background:#fff'; td.appendChild(hdr.cloneNode(true)); tr.appendChild(td);
-    th.insertBefore(tr,th.firstChild); hdr.parentNode.removeChild(hdr); log.push('hdr→thead p'+(i+1));
+  /* ① 長表格頁：真的拆成好幾張「頁」，每一張都有自己的文件抬頭（頁次 N / 總頁數 各自編號）、表格表頭、完整外框與頁尾。
+        （只靠 thead 重複的話，抬頭上的頁次每張都一樣、表格上下外框線也會在換頁處消失） */
+  var added=0, addedAfter=[];
+  function hdrNum(p){var ks=p.querySelectorAll(':scope > .adt-hdr .adt-hdr-k');for(var k=0;k<ks.length;k++){if(ks[k].textContent.replace(/\s|　/g,'')==='頁次'&&ks[k].nextElementSibling){var sp=ks[k].nextElementSibling.querySelector('.adt-fit')||ks[k].nextElementSibling;return sp}}return null}
+  pages.slice().forEach(function(p,i){
+    var h=p.getBoundingClientRect().height; if(h<=t*1.2)return;
+    var b=p.querySelector(':scope > .adt-body'); if(!b)return;
+    var tb=null; Array.prototype.forEach.call(b.children,function(x){ if(x.tagName==='TABLE'&&(!tb||x.getBoundingClientRect().height>tb.getBoundingClientRect().height)) tb=x; });
+    if(!tb)return;
+    var origNo=0, hs=hdrNum(p); if(hs){origNo=parseInt(hs.textContent,10)||0}
+    var cur=p, curB=b, curTb=tb, guard=0;
+    while(cur.getBoundingClientRect().height>t+0.5 && guard++<80){
+      var tbody=curTb.tBodies[curTb.tBodies.length-1], rows=Array.prototype.slice.call(tbody.rows), moved=[];
+      while(rows.length>1 && cur.getBoundingClientRect().height>t+0.5){ var r=rows.pop(); moved.unshift(r); tbody.removeChild(r); }
+      if(!moved.length)break;
+      var nxt=cur.cloneNode(false);
+      Array.prototype.forEach.call(cur.children,function(c){
+        if(c===curB){ var nb=c.cloneNode(false), nt=curTb.cloneNode(false);
+          Array.prototype.forEach.call(curTb.children,function(cc){ if(cc.tagName==='COLGROUP'||cc.tagName==='THEAD') nt.appendChild(cc.cloneNode(true)); });
+          var ntb=document.createElement('tbody'); moved.forEach(function(r){ntb.appendChild(r)}); nt.appendChild(ntb); nb.appendChild(nt); nxt.appendChild(nb); curB=nb; curTb=nt; }
+        else if(c.classList&&(c.classList.contains('adt-hdr')||c.classList.contains('adt-ftr'))) nxt.appendChild(c.cloneNode(true));
+        else if(c.tagName==='TABLE'&&c.classList.contains('adt-ftr')) nxt.appendChild(c.cloneNode(true));
+      });
+      cur.parentNode.insertBefore(nxt,cur.nextSibling);
+      curTb.style.pageBreakBefore='auto'; curTb.style.breakBefore='auto';
+      cur=nxt; added++;
+    }
+    if(origNo) addedAfter.push({orig:origNo,span:guard>0?(guard):0});
+    log.push('split p'+(i+1)+' +'+Math.max(0,added));
   });
+  if(added){
+    /* 重新編頁次：所有有頁首的頁依出現順序 1..N，總頁數 N */
+    var hp=Array.prototype.slice.call(document.querySelectorAll('.adt-page')).filter(function(p){return hdrNum(p)});
+    hp.forEach(function(p,idx){ var sp=hdrNum(p); if(sp) sp.textContent=(idx+1)+' / '+hp.length; });
+    /* 目錄的頁碼：拆表格之後面的頁往後移 */
+    var firstOrig=addedAfter.length?addedAfter[0].orig:0, k=added;
+    document.querySelectorAll('td.adt-toc-p').forEach(function(td){ var n=parseInt(td.textContent,10); if(n>firstOrig && firstOrig>0) td.textContent=String(n+k); });
+  }
   /* ② 比一張紙高一點點的頁（整頁圖片、單一大區塊、簽章區）：等比縮到剛好放進去，不再多印只有頁尾的空白紙 */
   pages.forEach(function(p,i){
     var h=p.getBoundingClientRect().height;

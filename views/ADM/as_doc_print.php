@@ -309,6 +309,10 @@ function adtReflow(){
         var p = pages[i], b = p.querySelector(':scope > .adt-body'), lim = avail(p);
         var carry = [];
         while (b.children.length > 1 && used(b) > lim && moved < 400) {
+            /* 本身就比一頁高的長表格不搬：搬到下一頁也放不下，只會讓上面的標題孤零零留一整頁
+               （附錄B 標題與表格被拆開）；留在原處由列印引擎／PDF 產生程式依列拆頁 */
+            var lastEl = b.lastElementChild;
+            if (lastEl.tagName === 'TABLE' && lastEl.getBoundingClientRect().height > lim) break;
             carry.unshift(b.lastElementChild);
             b.removeChild(b.lastElementChild); moved++;
         }
