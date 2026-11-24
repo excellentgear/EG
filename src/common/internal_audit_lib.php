@@ -6082,9 +6082,83 @@ function ia_appendixb_sync(PDO $db): array
 }
 
 /** 8 個群組＋各自的流程步驟（程序書／表單名稱即時查 as_document） */
+/**
+ * 過程群組的「流程步驟」完全依 AS稽核查檢表條文題庫自動產生（2026-11-24 使用者要求，不可人工修改）：
+ *   條文題庫每一條「過程群組」欄勾了哪些群組、各群組指定哪幾份程序書／表單（ia_clause_group_proc）
+ *   → 該群組的步驟＝每一份程序書一列（名稱取程序書名稱）；表單（四段編號）掛在它所屬的程序書（前三段）底下；
+ *   → 順序依附錄B 條文順序（該程序書或其表單最早出現的條文）；依順序的群組每份程序書各自一個階段，不分順序的全為第 1 階段；
+ *   → 對應條文＝該群組裡指定了這份程序書或其表單的條文。
+ * 只有內容真的不同才改寫資料表；沒有任何群組指定紀錄時（還沒設定過）不動，避免把現有步驟清空。
+ */
+function ia_pgroup_sync(PDO $db): void
+{
+    static $busy = false, $done = false;
+    if ($busy || $done) return;
+    $busy = true;
+    try {
+        $gpm = ia_clause_group_procs_map($db);
+        if (!$gpm) return;
+        $docs = [];
+        foreach ($db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 AND COALESCE(is_obsolete,0)=0")->fetchAll(PDO::FETCH_ASSOC) as $d)
+            if (!isset($docs[$d['doc_no']])) $docs[$d['doc_no']] = $d;
+        $clauses = [];
+        foreach (ia_as_clauses($db, true) as $c) if (!(int)$c['is_header']) $clauses[(int)$c['clause_id']] = $c;
+        $codes = $db->query("SELECT group_code FROM ia_process_group ORDER BY sort_order")->fetchAll(PDO::FETCH_COLUMN);
+        $curSt = $db->prepare("SELECT stage, title, proc_doc_id, form_doc_ids, clause_ids FROM ia_process_step WHERE group_code=? ORDER BY stage, sort_order, step_id");
+        $del = $db->prepare("DELETE FROM ia_process_step WHERE group_code=?");
+        $ins = $db->prepare("INSERT INTO ia_process_step (group_code, stage, sort_order, title, proc_doc_id, form_doc_ids, clause_ids) VALUES (?,?,?,?,?,?,?)");
+        $ordSt = $db->prepare("SELECT ordered FROM ia_process_group WHERE group_code=?");
+        foreach ($codes as $code) {
+            // 這個群組：程序書／表單編號 → 條文 id、最早順序
+            $first = []; $cl = [];
+            foreach ($clauses as $cid => $c) {
+                foreach (($gpm[$cid][$code] ?? []) as $no) {
+                    $cl[$no][$cid] = 1;
+                    $so = (int)$c['sort_order'];
+                    if (!isset($first[$no]) || $so < $first[$no]) $first[$no] = $so;
+                }
+            }
+            $procs = [];
+            foreach ($first as $no => $so) {
+                $parent = preg_match('/^(\d-[A-Za-z]{2,3}-\d{2})-\d{2}/', $no, $m) ? $m[1] : $no;
+                if (!isset($procs[$parent])) $procs[$parent] = ['so' => $so, 'forms' => [], 'cl' => []];
+                $procs[$parent]['so'] = min($procs[$parent]['so'], $so);
+                foreach (array_keys($cl[$no]) as $cid) $procs[$parent]['cl'][$cid] = 1;
+                if ($parent !== $no) $procs[$parent]['forms'][] = $no;
+            }
+            uasort($procs, function ($a, $b) { return $a['so'] <=> $b['so']; });
+            $ordSt->execute([$code]); $ordered = (int)$ordSt->fetchColumn() === 1;
+            $want = []; $stage = 0;
+            foreach ($procs as $pno => $p) {
+                $stage++;
+                $fids = [];
+                sort($p['forms']);
+                foreach ($p['forms'] as $fn) if (isset($docs[$fn])) $fids[] = (int)$docs[$fn]['id'];
+                $cids = array_map('intval', array_keys($p['cl'])); sort($cids);
+                $want[] = [$ordered ? $stage : 1, isset($docs[$pno]) ? (string)$docs[$pno]['doc_name'] : $pno,
+                           isset($docs[$pno]) ? (int)$docs[$pno]['id'] : null, json_encode($fids), $cids ? json_encode($cids) : null];
+            }
+            $curSt->execute([$code]);
+            $have = [];
+            foreach ($curSt->fetchAll(PDO::FETCH_ASSOC) as $r)
+                $have[] = [(int)$r['stage'], (string)$r['title'], $r['proc_doc_id'] === null ? null : (int)$r['proc_doc_id'], (string)$r['form_doc_ids'], $r['clause_ids']];
+            if ($have === $want) continue;
+            $db->beginTransaction();
+            try {
+                $del->execute([$code]);
+                foreach ($want as $i => $w) $ins->execute([$code, $w[0], ($i + 1) * 10, mb_substr($w[1], 0, 100), $w[2], $w[3], $w[4]]);
+                $db->commit();
+            } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+        }
+        $done = true;
+    } catch (Throwable $e) { error_log('ia_pgroup_sync: ' . $e->getMessage()); }
+    finally { $busy = false; }
+}
+
 function ia_pgroup_list(PDO $db): array
 {
     ia_pgroup_ensure($db);
+    ia_pgroup_sync($db);
     $docs = [];
     try {
         foreach ($db->query("SELECT id, doc_no, doc_name FROM as_document")->fetchAll(PDO::FETCH_ASSOC) as $d) $docs[(int)$d['id']] = $d;
@@ -6183,6 +6257,8 @@ function ia_pgroup_candidates(PDO $db): array
 /** 儲存一個群組：名稱／依順序與否／全部步驟（整批覆蓋） */
 function ia_pgroup_save(PDO $db, string $code, int $ordered, array $steps): void
 {
+    // 2026-11-24 使用者要求：步驟完全依條文題庫自動產生、不可人工修改（見 ia_pgroup_sync）
+    throw new RuntimeException('過程群組的流程步驟已改為依「AS稽核查檢表條文題庫」自動產生，不可手動修改；請到條文題庫調整條文的過程群組與指定的程序書／表單');
     ia_pgroup_ensure($db);
     $q = $db->prepare("SELECT 1 FROM ia_process_group WHERE group_code=?"); $q->execute([$code]);
     if (!$q->fetchColumn()) throw new RuntimeException('過程群組不存在');

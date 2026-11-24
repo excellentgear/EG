@@ -1738,8 +1738,8 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mbody">
         <div class="ia-hint">依航太品質手冊「附件C 品質管理系統流程圖」，把程序書歸到 8 個過程群組。
             AS稽核查檢表建立時可<b>依群組一次勾選對應的條文與文件表單</b>，也可「每個群組各建一張」共 8 張。
-            條文與表單由「AS條文題庫」每一條寫的文件編號自動反查（附錄B 條款對照），這裡只決定群組包含哪幾份程序書。
-            預設已依流程圖帶入，可自行增減；每個群組按「儲存這一組」才生效。<br>每個流程步驟＝一列查檢項目：<b>階段相同的步驟可並行</b>（例：詢價、報價同為第 1 階段）；群組可設「不分順序」；條文空白時依文件編號自動帶入。</div>
+            <b>本畫面完全依「AS稽核查檢表　條文題庫」自動產生，不可在這裡修改</b>：每一條條文勾了哪些過程群組、各群組指定了哪幾份程序書／表單，這裡就自動長出對應的步驟
+            （一份程序書一列、表單掛在它所屬的程序書底下、順序依附錄B 條文順序）。要調整請到<b>條文題庫</b>改，改完這裡下次開啟即自動更新。</div>
         <div id="pgBody"></div>
     </div>
     <div class="ia-mfoot"><button data-close>關閉</button></div>
@@ -4525,82 +4525,37 @@ function pgChip(cls, id, text){
 }
 function pgStepRow(s, ordered){
     var c = PG_CAND, forms = '', cls = '';
-    (s.forms||[]).forEach(function(f){ forms += pgChip('pgForm', f.id, f.doc_no+' '+f.doc_name); });
+    (s.forms||[]).forEach(function(f){ forms += '<div>'+esc(f.doc_no+' '+f.doc_name)+'</div>'; });
     (s.clause_ids||[]).forEach(function(id){
         var cc = c.clauses.filter(function(x){ return x.clause_id === +id; })[0];
-        if (cc) cls += pgChip('pgCl', id, cc.clause_text);
+        if (cc) cls += '<div>'+esc(cc.clause_text)+'</div>';
     });
     return '<tr class="pgStep">'
-        + '<td class="pgStageCell"'+(ordered?'':' style="display:none;"')+'><input type="number" class="pgStage" min="1" value="'+(s.stage||1)+'" style="width:52px;"></td>'
-        + '<td><input type="text" class="pgTitle" value="'+esc(s.title||'')+'" style="width:130px;"></td>'
-        + '<td><select class="pgProc" data-eg-filter="輸入編號或名稱篩選…" style="max-width:190px;">'
-        +   pgOpts(c.procs, function(x){ return x.doc_no+' '+x.doc_name; }, s.proc_doc_id||'') + '</select></td>'
-        + '<td><div class="pgForms">'+forms+'</div><select class="pgFormAdd" data-eg-filter="輸入編號或名稱篩選…" style="max-width:190px;">'
-        +   pgOpts(c.forms, function(x){ return x.doc_no+' '+x.doc_name; }, '') + '</select></td>'
-        + '<td><div class="pgCls">'+cls+'</div><select class="pgClAdd" data-eg-filter="輸入條文篩選…" style="max-width:190px;">'
-        +   '<option value="">（空白＝依文件編號自動帶入）</option>'
-        +   c.clauses.map(function(x){ return '<option value="'+x.clause_id+'">'+esc(x.clause_text)+'</option>'; }).join('') + '</select></td>'
-        + '<td style="white-space:nowrap;"><a href="javascript:void(0)" class="pgUp">↑</a> <a href="javascript:void(0)" class="pgDn">↓</a> '
-        + '<a href="javascript:void(0)" class="pgRowDel" style="color:#C4442D;">刪</a></td></tr>';
+        + (ordered ? '<td style="text-align:center;">'+(s.stage||1)+'</td>' : '')
+        + '<td class="l">'+esc(s.title||'')+'</td>'
+        + '<td class="l">'+(s.proc ? esc(s.proc.doc_no+' '+s.proc.doc_name) : '<span class="cl-task-hint">—</span>')+'</td>'
+        + '<td class="l" style="font-size:12px;">'+(forms || '<span class="cl-task-hint">—</span>')+'</td>'
+        + '<td class="l" style="font-size:12px;">'+(cls || '<span class="cl-task-hint">—</span>')+'</td></tr>';
 }
+/* 唯讀：內容全由條文題庫自動產生（pgroup_get 每次都會依條文題庫重新同步） */
 function loadPgSettings(){
     $.getJSON(API, {action:'pgroup_get'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         PG_CAND = res.candidates; var h = '';
         (res.groups||[]).forEach(function(g){
+            var ord = +g.ordered === 1;
             h += '<div class="pgBox" data-code="'+esc(g.group_code)+'" style="border:1px solid #E9C892;border-radius:6px;padding:8px 10px;margin-bottom:10px;">'
                + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><b style="color:#8A5A2B;font-size:14px;">'+esc(g.group_code)+'　'+esc(g.group_name)+'</b>'
-               + '<select class="pgOrdered"><option value="1"'+(+g.ordered?' selected':'')+'>依順序（依階段排列，階段相同＝可並行）</option>'
-               + '<option value="0"'+(+g.ordered?'':' selected')+'>不分順序</option></select>'
-               + '<button class="pgAddStep" style="height:26px;">＋新增步驟</button>'
-               + '<button class="pgSave btn-warm" style="height:26px;">儲存這一組</button></div>'
-               + '<table class="ia-table" style="margin-top:6px;"><thead><tr><th class="pgStageTh"'+(+g.ordered?'':' style="display:none;"')+'>階段</th><th>流程步驟</th><th>對應 AS 程序書</th><th>對應 AS 文件表單</th><th>對應一階手冊條文</th><th>排序</th></tr></thead><tbody>';
-            (g.steps||[]).forEach(function(s){ h += pgStepRow(s, +g.ordered); });
+               + '<span class="nk-task">'+(ord ? '依順序（每份程序書一個階段）' : '不分順序')+'</span>'
+               + '<span style="color:#8a6d45;font-size:12px;">自動產生，共 '+(g.steps||[]).length+' 個步驟</span></div>'
+               + '<table class="ia-table" style="margin-top:6px;"><thead><tr>'+(ord ? '<th>階段</th>' : '')+'<th>流程步驟</th><th>對應 AS 程序書</th><th>對應 AS 文件表單</th><th>對應一階手冊條文</th></tr></thead><tbody>';
+            (g.steps||[]).forEach(function(s){ h += pgStepRow(s, ord); });
+            if (!(g.steps||[]).length) h += '<tr><td colspan="'+(ord?5:4)+'" class="ia-empty">條文題庫還沒有條文指定到這個群組</td></tr>';
             h += '</tbody></table></div>';
         });
         $('#pgBody').html(h);
     });
 }
-$(document).on('change', '.pgOrdered', function(){
-    var on = $(this).val() === '1', $b = $(this).closest('.pgBox');
-    $b.find('.pgStageCell,.pgStageTh').toggle(on);
-});
-$(document).on('click', '.pgAddStep', function(){
-    var $b = $(this).closest('.pgBox'), on = $b.find('.pgOrdered').val() === '1';
-    var last = $b.find('.pgStage').last().val() || 1;
-    $b.find('tbody').append(pgStepRow({stage:+last, title:'', forms:[], clause_ids:[]}, on ? 1 : 0));
-});
-$(document).on('click', '.pgRowDel', function(){ $(this).closest('tr').remove(); });
-$(document).on('click', '.pgUp', function(){ var $r = $(this).closest('tr'); $r.prev().before($r); });
-$(document).on('click', '.pgDn', function(){ var $r = $(this).closest('tr'); $r.next().after($r); });
-$(document).on('click', '.pgChipDel', function(){ $(this).closest('.nk-task').remove(); });
-$(document).on('change', '.pgFormAdd', function(){
-    var id = $(this).val(); if (!id) return;
-    var $w = $(this).closest('td').find('.pgForms');
-    if (!$w.find('.pgForm[data-id='+id+']').length) $w.append(pgChip('pgForm', id, $(this).find('option:selected').text()));
-    $(this).val('');
-});
-$(document).on('change', '.pgClAdd', function(){
-    var id = $(this).val(); if (!id) return;
-    var $w = $(this).closest('td').find('.pgCls');
-    if (!$w.find('.pgCl[data-id='+id+']').length) $w.append(pgChip('pgCl', id, $(this).find('option:selected').text()));
-    $(this).val('');
-});
-$(document).on('click', '.pgSave', function(){
-    var $b = $(this).closest('.pgBox'), steps = [], bad = '';
-    $b.find('tr.pgStep').each(function(i){
-        var $r = $(this), t = $.trim($r.find('.pgTitle').val());
-        if (!t) { bad = '第 '+(i+1)+' 列沒有填步驟名稱'; return; }
-        steps.push({stage:+$r.find('.pgStage').val()||1, title:t, proc_doc_id:+$r.find('.pgProc').val()||0,
-            form_doc_ids:$r.find('.pgForm').map(function(){ return +$(this).data('id'); }).get(),
-            clause_ids:$r.find('.pgCl').map(function(){ return +$(this).data('id'); }).get()});
-    });
-    if (bad) { alert(bad); return; }
-    $.post(API, {action:'pgroup_save', code:$b.data('code'), ordered:$b.find('.pgOrdered').val(), steps:JSON.stringify(steps)}, function(res){
-        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        PGROUPS = null; iaToast('已儲存 '+$b.data('code'));
-    }, 'json');
-});
 function renderBank(){
     var kind = $('#nkKind').val();
     $('#nkPgRow').toggle(kind === 'as'); if (kind === 'as') loadPgroups();
