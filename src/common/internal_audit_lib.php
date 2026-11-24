@@ -5785,6 +5785,25 @@ function ia_clause_proc_list(array $clause): array
         if (preg_match('/^[2-9]-[A-Za-z]{2,3}-\d{2}(-\d{2})?$/', $no)) $out[$no] = $no;
     return array_values($out);
 }
+/**
+ * 各過程群組已勾選、但已經不在該條文程序書／表單清單裡的紀錄一律刪除
+ * （附錄B 拿掉程序書、取消對應表單後，勾選紀錄會殘留，造成計數像「6/5」且受稽單位多帶）。回刪除筆數。
+ */
+function ia_clause_group_proc_prune(PDO $db): int
+{
+    ia_pgroup_ensure($db);
+    $valid = [];
+    foreach (ia_as_clauses($db, false) as $c) $valid[(int)$c['clause_id']] = ia_clause_proc_list($c);
+    $del = $db->prepare("DELETE FROM ia_clause_group_proc WHERE clause_id=? AND group_code=? AND proc_no=?");
+    $n = 0;
+    foreach ($db->query("SELECT clause_id, group_code, proc_no FROM ia_clause_group_proc")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if (in_array($r['proc_no'], $valid[(int)$r['clause_id']] ?? [], true)) continue;
+        $del->execute([(int)$r['clause_id'], $r['group_code'], $r['proc_no']]);
+        $n++;
+    }
+    return $n;
+}
+
 function ia_clause_group_procs_save(PDO $db, int $clauseId, string $code, array $procs): void
 {
     ia_pgroup_ensure($db);
@@ -5934,6 +5953,8 @@ function ia_appendixb_sync(PDO $db): array
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    $pruned = 0;
+    try { $pruned = ia_clause_group_proc_prune($db); } catch (Throwable $e) { error_log('ia_clause_group_proc_prune: ' . $e->getMessage()); }
     // 作業項目：尚未挑過的條文，預設帶它列的文件底下全部作業項目（之後固定顯示、不再人工挑）
     try {
         $picked = ia_clause_task_map($db, []);
@@ -5945,7 +5966,7 @@ function ia_appendixb_sync(PDO $db): array
             if ($ids) ia_clause_tasks_save($db, (int)$c['clause_id'], $ids, trim((string)($c['doc_ref'] ?? '') . ' ' . (string)($c['proc_nos'] ?? '')));
         }
     } catch (Throwable $e) {}
-    return ['updated' => $upd, 'inserted' => $ins, 'deactivated' => $off, 'total' => count($rows)];
+    return ['updated' => $upd, 'inserted' => $ins, 'deactivated' => $off, 'pruned' => $pruned, 'total' => count($rows)];
 }
 
 /** 8 個群組＋各自的流程步驟（程序書／表單名稱即時查 as_document） */

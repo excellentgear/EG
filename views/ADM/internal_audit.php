@@ -6790,8 +6790,9 @@ function loadClauses(){
         openMask('clauseMask');
         // 開題庫就已經依手冊附錄B 自動同步過一次，有變動要講出來（否則之後手按同步只會看到「更新 0 條」）
         var as = res.auto_sync;
-        if (as && (+as.updated || +as.inserted || +as.deactivated))
-            iaToast('已依手冊附錄B 自動同步：更新 '+as.updated+' 條、新增 '+as.inserted+' 條、停用 '+(as.deactivated||0)+' 條', 6000);
+        if (as && (+as.updated || +as.inserted || +as.deactivated || +as.pruned))
+            iaToast('已依手冊附錄B 自動同步：更新 '+as.updated+' 條、新增 '+as.inserted+' 條、停用 '+(as.deactivated||0)+' 條'
+                    +(+as.pruned ? '，清除過程群組殘留勾選 '+as.pruned+' 筆' : ''), 7000);
     });
 }
 /* 一列的 HTML（新增列與載入共用同一份，避免兩邊欄位走鐘＝鐵律4） */
