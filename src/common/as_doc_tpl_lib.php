@@ -609,7 +609,28 @@ function adt_revlog_pages_html(array $ctx): array
         . '<tr><td>文件類別：' . adt_e($ctx['kind']) . '</td></tr></table>';
 
     // 一頁最多放 ADT_REVLOG_MIN_ROWS 筆真實紀錄；超過才會有第二頁、第三頁…
-    $chunks = array_chunk($ctx['versions'], ADT_REVLOG_MIN_ROWS);
+    /* 依「行數」分頁，不是依筆數（2026-11-24 使用者回報：2.2 的摘要很長，整頁被撐高、簽章區被擠出頁面）。
+       一筆摘要約 22 字一行，行數＝那一列的高度；中間頁最多 ADT_REVLOG_MIN_ROWS 行，
+       最後一頁因為還要放抬頭與簽章區，最多 ADT_REVLOG_MIN_ROWS-2 行，超過就把尾端的紀錄移到新的一頁
+       （新的一頁也有同一份抬頭與簽章區）。單一筆自己就超過一頁時沒辦法再拆，維持原狀。 */
+    $lineOf = function ($v) { return max(1, (int)ceil(mb_strlen((string)($v['revised_summary'] ?? ''), 'UTF-8') / 22)); };
+    $chunks = []; $cur = []; $curL = 0;
+    foreach ($ctx['versions'] as $v) {
+        $l = $lineOf($v);
+        if ($cur && $curL + $l > ADT_REVLOG_MIN_ROWS) { $chunks[] = $cur; $cur = []; $curL = 0; }
+        $cur[] = $v; $curL += $l;
+    }
+    if ($cur) $chunks[] = $cur;
+    // 最後一頁要留位置給簽章區：放不下就把尾端的紀錄推到新的一頁，直到放得下
+    while ($chunks) {
+        $last = $chunks[count($chunks) - 1];
+        $lines = 0; foreach ($last as $v) $lines += $lineOf($v);
+        if ($lines <= ADT_REVLOG_MIN_ROWS - 2 || count($last) <= 1) break;
+        $moved = array_pop($chunks[count($chunks) - 1]);
+        $chunks[] = [$moved];
+        // 只推一筆就夠了：被推走的那一筆自己一頁，原本那一頁剩下的下一圈再檢查
+        if (count($chunks) > 60) break;
+    }
     if (!$chunks) $chunks = [[]];   // 一筆版次都沒有時仍要有第一頁（全部留白）
     $lastIdx = count($chunks) - 1;
 
