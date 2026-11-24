@@ -283,45 +283,7 @@ function adtFitWide(){
     });
 }
 var ADT_PAGE_H_MM = <?= (float)($printContentH ?? 0) ?>;
-function adtReflow(){ adtReflow0(); adtFitOverflow(); }
-/* 自動修正「超出一張紙」（2026-11-24 使用者要求：不要只提示，要自己修）：
-   adtReflow0 只會把「一個一個區塊」搬到下一頁，整頁只有一個大區塊（整頁圖片、一張大表格）或超出只差幾 mm 時搬不動，
-   於是印出來多一張只有頁尾的空白紙。這裡對仍然比一張紙高的頁，把內容區等比縮小剛好放進去（只縮超出的那一頁，其他頁完全不動）。 */
-var ADT_IS_CHECK = <?= $isCheck ? 'true' : 'false' ?>;
-function adtFitOverflow(){
-    /* 只在「排版檢查」或「真正進入列印排版」時量：一般畫面（預覽）的頁有螢幕用的內距、本來就比一張紙高，
-       在那裡量會把每一頁都縮成一小塊（2026-11-24 實際發生過）。 */
-    if (!ADT_IS_CHECK && !window.__adtPrintMode) return;
-    if (!(ADT_PAGE_H_MM > 0)) return;
-    var mmPx = 96 / 25.4, target = ADT_PAGE_H_MM * mmPx;
-    Array.prototype.forEach.call(document.querySelectorAll('.adt-page'), function(p){
-        var h = p.getBoundingClientRect().height;
-        if (h <= target + 0.5) return;
-        if (h > target * 1.5) return;               // 高得離譜＝長表格，列印時瀏覽器會自己分頁（表頭重複），不可以縮成一頁
-        var b = p.querySelector(':scope > .adt-body');
-        if (!b) {                                   // 系統頁（封面／制修訂紀錄書）沒有 .adt-body：取最高的直屬子元素
-            Array.prototype.forEach.call(p.children, function(c){ if (!b || c.getBoundingClientRect().height > b.getBoundingClientRect().height) b = c; });
-        }
-        if (!b) return;
-        for (var n = 0; n < 4; n++) {               // 縮放後字型換行會變，量了再縮，最多 4 輪
-            h = p.getBoundingClientRect().height;
-            if (h <= target + 0.5) break;
-            var bh = b.getBoundingClientRect().height, cur = parseFloat(b.style.zoom) || 1;
-            if (bh < 40) break;
-            var f = Math.max(0.5, (bh - (h - target) - 2) / bh);
-            b.style.zoom = String(cur * f);
-        }
-    });
-}
-(function(){
-    function on(){ window.__adtPrintMode = 1; try { adtFitOverflow(); } catch (e) {} }
-    function off(){ window.__adtPrintMode = 0; Array.prototype.forEach.call(document.querySelectorAll('.adt-page > *'), function(c){ if (c.style.zoom) c.style.zoom = ''; }); }
-    try { var mql = window.matchMedia('print'); var h = function(e){ if (e.matches) on(); else off(); };
-          if (mql.addEventListener) mql.addEventListener('change', h); else if (mql.addListener) mql.addListener(h); } catch (e) {}
-    /* ⚠ 不要掛 beforeprint：它觸發時還是螢幕版面（頁比一張紙高），量了會把每一頁都縮小；
-       matchMedia('print') 的 change 事件才是列印版面（寬 180mm 那一版）。 */
-})();
-function adtReflow0(){
+function adtReflow(){
     var mmPx = 96 / 25.4, safe = 2 * mmPx;
     var pages = Array.prototype.slice.call(document.querySelectorAll('.adt-page')).filter(function(p){ return p.querySelector('.adt-hdr') && p.querySelector(':scope > .adt-body'); });
     if (!pages.length || !(ADT_PAGE_H_MM > 0)) return;
@@ -401,7 +363,6 @@ function startCheck(){
         Array.prototype.forEach.call(pages, function(p, i){
             var h = p.getBoundingClientRect().height;
             if (h <= limit) return;
-            if (h > limit * 1.5 && !p.querySelector('.adt-body table')) { /* 無表格卻高得離譜才需要處理 */ } else if (h > limit * 1.5) { var wb = p.querySelector(':scope > .adt-body'), ww = 0; if (wb) Array.prototype.forEach.call(wb.querySelectorAll('table'), function(t){ if (t.getBoundingClientRect().width > wb.clientWidth + 2) ww++; }); if (!ww) return; }   // 長表格（沒有比頁寬寬）列印時瀏覽器會自己分頁，不是問題
             var no = '', ks = p.querySelectorAll('.adt-hdr .adt-hdr-k');
             for (var k = 0; k < ks.length; k++) {
                 if (ks[k].textContent.replace(/\s|　/g, '') === '頁次' && ks[k].nextElementSibling) { no = ks[k].nextElementSibling.textContent.replace(/\s+/g, ' ').trim(); break; }
