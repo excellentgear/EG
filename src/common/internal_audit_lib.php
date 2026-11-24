@@ -604,6 +604,7 @@ function ia_ensure_schema(PDO $db): void
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
             ['ia_admin',   '內稽管理員（管理代表）'],
+            ['ia_audit_admin', '稽核管理員（權限同管理代表）'],
             ['ia_auditor', '稽核員'],
             ['ia_view',    '內稽檢閱'],
         ] as $r) {
@@ -667,7 +668,7 @@ function ia_perms(PDO $db, ?array $u): array
     } catch (Throwable $e) {}
     if (!$isAdmin && $uid === 1) $isAdmin = true;      // 超級管理員固定 id=1
 
-    $canAdmin = $isAdmin || ia_has_role($db, $uid, ['ia_admin']);
+    $canAdmin = $isAdmin || ia_has_role($db, $uid, ['ia_admin', 'ia_audit_admin']);   // 稽核管理員＝與管理代表同權限
     $canAudit = $canAdmin || ia_has_role($db, $uid, ['ia_auditor']);
     $canView  = $canAudit || ia_has_role($db, $uid, ['ia_view']);
     return ['isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canAudit'=>$canAudit,
@@ -5802,6 +5803,107 @@ function ia_clause_group_proc_prune(PDO $db): int
         $n++;
     }
     return $n;
+}
+
+/* ---- 條文題庫「預設值」：把目前設定存成預設，被改亂了可一鍵還原 ----
+ * 快照內容＝每一條條文的 啟用／文件表單(doc_ref)／附錄B程序書／順序／過程群組／各群組指定的程序書／作業項目。
+ * 只存一份（最新一次「設為預設值」覆蓋舊的）。還原時以條文編號對應；還原後才新增的條文不動。 */
+function ia_clause_default_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $db->exec("CREATE TABLE IF NOT EXISTS ia_clause_default (
+        id TINYINT NOT NULL PRIMARY KEY,
+        snapshot_json MEDIUMTEXT NOT NULL,
+        clause_cnt INT NOT NULL DEFAULT 0,
+        saved_by VARCHAR(60) NULL,
+        saved_at DATETIME NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS稽核查檢表條文題庫的預設值快照'");
+    $done = true;
+}
+
+function ia_clause_default_info(PDO $db): ?array
+{
+    ia_clause_default_ensure($db);
+    $r = $db->query("SELECT clause_cnt, saved_by, saved_at FROM ia_clause_default WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+    return $r ?: null;
+}
+
+function ia_clause_default_save(PDO $db, string $by): array
+{
+    ia_clause_default_ensure($db);
+    ia_pgroup_ensure($db);
+    $groups = ia_clause_groups_map($db);
+    $gprocs = ia_clause_group_procs_map($db);
+    $tasks = [];
+    foreach ($db->query("SELECT clause_id, task_id FROM ia_as_clause_task")->fetchAll(PDO::FETCH_ASSOC) as $t)
+        $tasks[(int)$t['clause_id']][] = (int)$t['task_id'];
+    $snap = [];
+    foreach (ia_as_clauses($db, false) as $c) {
+        $id = (int)$c['clause_id'];
+        $snap[] = ['clause_id' => $id, 'clause_no' => (string)($c['clause_no'] ?? ''), 'sort_order' => (int)$c['sort_order'],
+                   'is_header' => (int)$c['is_header'], 'clause_text' => (string)$c['clause_text'], 'doc_ref' => $c['doc_ref'],
+                   'is_active' => (int)$c['is_active'], 'proc_nos' => $c['proc_nos'], 'updated_by' => $c['updated_by'] ?? null,
+                   'groups' => $groups[$id] ?? [], 'group_procs' => $gprocs[$id] ?? new stdClass(), 'tasks' => $tasks[$id] ?? []];
+    }
+    $json = json_encode($snap, JSON_UNESCAPED_UNICODE);
+    $db->prepare("REPLACE INTO ia_clause_default (id, snapshot_json, clause_cnt, saved_by, saved_at) VALUES (1,?,?,?,NOW())")
+       ->execute([$json, count($snap), $by]);
+    return ['count' => count($snap)];
+}
+
+/** 還原成預設值。回 ['restored'=>還原筆數,'recreated'=>被刪掉又補回的條文,'untouched'=>預設之後新增而未動的條文] */
+function ia_clause_default_restore(PDO $db): array
+{
+    ia_clause_default_ensure($db);
+    ia_pgroup_ensure($db);
+    $js = $db->query("SELECT snapshot_json FROM ia_clause_default WHERE id=1")->fetchColumn();
+    if (!$js) throw new RuntimeException('還沒有設定過預設值，請先按「設為預設值」');
+    $snap = json_decode((string)$js, true);
+    if (!is_array($snap)) throw new RuntimeException('預設值資料損毀，請重新設為預設值');
+    // 現有條文：以 clause_id 優先、其次條文編號對應
+    $byId = []; $byNo = [];
+    foreach (ia_as_clauses($db, false) as $c) {
+        $byId[(int)$c['clause_id']] = $c;
+        $no = trim((string)($c['clause_no'] ?? ''));
+        if ($no !== '' && !isset($byNo[$no])) $byNo[$no] = $c;
+    }
+    $validGroups = $db->query("SELECT group_code FROM ia_process_group")->fetchAll(PDO::FETCH_COLUMN);
+    $validTasks  = array_map('intval', $db->query("SELECT task_id FROM as_doc_task")->fetchAll(PDO::FETCH_COLUMN));
+    $restored = 0; $recreated = 0; $seen = [];
+    $db->beginTransaction();
+    try {
+        $upd = $db->prepare("UPDATE ia_as_clause SET sort_order=?, is_header=?, clause_text=?, doc_ref=?, is_active=?, clause_no=?, proc_nos=?, updated_at=NOW(), updated_by=? WHERE clause_id=?");
+        $ins = $db->prepare("INSERT INTO ia_as_clause (sort_order, is_header, clause_text, doc_ref, is_active, clause_no, proc_nos, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,NOW(),?)");
+        $dg = $db->prepare("DELETE FROM ia_clause_group WHERE clause_id=?");
+        $dp = $db->prepare("DELETE FROM ia_clause_group_proc WHERE clause_id=?");
+        $dt = $db->prepare("DELETE FROM ia_as_clause_task WHERE clause_id=?");
+        $ig = $db->prepare("INSERT IGNORE INTO ia_clause_group (clause_id, group_code) VALUES (?,?)");
+        $ip = $db->prepare("INSERT IGNORE INTO ia_clause_group_proc (clause_id, group_code, proc_no) VALUES (?,?,?)");
+        $it = $db->prepare("INSERT IGNORE INTO ia_as_clause_task (clause_id, task_id) VALUES (?,?)");
+        foreach ($snap as $r) {
+            $no = trim((string)($r['clause_no'] ?? ''));
+            $cur = $byId[(int)$r['clause_id']] ?? null;
+            if ($cur && $no !== '' && trim((string)($cur['clause_no'] ?? '')) !== $no) $cur = null;   // id 被別條佔用就改用編號找
+            if (!$cur && $no !== '') $cur = $byNo[$no] ?? null;
+            $vals = [(int)$r['sort_order'], (int)$r['is_header'], (string)$r['clause_text'], $r['doc_ref'], (int)$r['is_active'],
+                     $no !== '' ? $no : null, $r['proc_nos'], $r['updated_by'] ?? '還原預設值'];
+            if ($cur) {
+                $cid = (int)$cur['clause_id'];
+                $upd->execute(array_merge($vals, [$cid]));
+            } else {
+                $ins->execute($vals); $cid = (int)$db->lastInsertId(); $recreated++;
+            }
+            $seen[$cid] = 1; $restored++;
+            $dg->execute([$cid]); $dp->execute([$cid]); $dt->execute([$cid]);
+            foreach (($r['groups'] ?? []) as $g) if (in_array($g, $validGroups, true)) $ig->execute([$cid, $g]);
+            foreach ((array)($r['group_procs'] ?? []) as $g => $nos)
+                if (in_array($g, $validGroups, true)) foreach ((array)$nos as $n) $ip->execute([$cid, $g, $n]);
+            foreach (($r['tasks'] ?? []) as $t) if (in_array((int)$t, $validTasks, true)) $it->execute([$cid, (int)$t]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    return ['restored' => $restored, 'recreated' => $recreated, 'untouched' => count(array_diff_key($byId, $seen))];
 }
 
 function ia_clause_group_procs_save(PDO $db, int $clauseId, string $code, array $procs): void
