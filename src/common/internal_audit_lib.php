@@ -941,7 +941,7 @@ function ia_clause_doc_tasks(PDO $db, ?string $docRef): array
     if (!$nos) return [];
     try {
         $in = implode(',', array_fill(0, count($nos), '?'));
-        $st = $db->prepare("SELECT id, doc_no, doc_name FROM as_document
+        $st = $db->prepare("SELECT id, doc_no, doc_name, COALESCE(is_obsolete,0) AS is_obsolete FROM as_document
                              WHERE is_deleted=0 AND doc_no IN ($in) ORDER BY doc_no");
         $st->execute($nos);
         $docs = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -955,7 +955,7 @@ function ia_clause_doc_tasks(PDO $db, ?string $docRef): array
     $out = [];
     foreach ($docs as $d) {
         $out[] = ['doc_id'=>(int)$d['id'], 'doc_no'=>(string)$d['doc_no'], 'doc_name'=>(string)$d['doc_name'],
-                  'tasks'=>$byDoc[(int)$d['id']] ?? []];
+                  'is_obsolete'=>(int)$d['is_obsolete'], 'tasks'=>$byDoc[(int)$d['id']] ?? []];
     }
     return $out;
 }
@@ -5915,6 +5915,14 @@ function ia_appendixb_sync(PDO $db): array
                 $used[(int)$db->lastInsertId()] = 1; $ins++;
             }
         }
+        // doc_ref 裡匯入 xls 留下的舊「程序書：」段清掉（程序書以附錄B 為準，否則畫面會把已從附錄B 拿掉的程序書一直列著）
+        $cl = $db->prepare("UPDATE ia_as_clause SET doc_ref=? WHERE clause_id=?");
+        foreach (ia_as_clauses($db, false) as $c) {
+            if (!isset($used[(int)$c['clause_id']])) continue;
+            $old = (string)($c['doc_ref'] ?? '');
+            $new = ia_clause_ref_strip_procs($old);
+            if ($new !== $old) { $cl->execute([$new !== '' ? $new : null, (int)$c['clause_id']]); $upd++; }
+        }
         // 附錄B 已經沒有的條文：停用（不刪，已設定的過程群組與舊查檢表的引用都保留；之後附錄B 又加回來會自動復原）
         $max = (count($rows) + 1) * 10;
         foreach (ia_as_clauses($db, false) as $c) {
@@ -6164,6 +6172,23 @@ function ia_clause_forms_rewrite(?string $docRef, array $items): string
     $items = array_values(array_filter(array_map(function ($s) { return trim(preg_replace('/\s+/u', ' ', (string)$s)); }, $items), 'strlen'));
     if (!$items) return $head;
     return ($head !== '' ? $head . "\n" : '') . '表單：' . implode("；\n", $items);
+}
+
+/**
+ * 去掉 doc_ref 裡的「手冊：／程序書：」段（那是當年匯入 xls 留下的舊資料；程序書一律以手冊附錄B 為準，存在 proc_nos）。
+ * 保留這段之前的其他說明文字（例：「認證範圍為…」）與「表單：」段。
+ */
+function ia_clause_ref_strip_procs(?string $docRef): string
+{
+    $docRef = (string)$docRef;
+    if (!preg_match('/(手冊|程序書)：/u', $docRef, $m, PREG_OFFSET_CAPTURE)) return $docRef;
+    $start = mb_strlen(substr($docRef, 0, $m[0][1]));
+    $fpos  = mb_strpos($docRef, '表單：');
+    $head  = rtrim(mb_substr($docRef, 0, $start));
+    $tail  = ($fpos !== false && $fpos > $start) ? mb_substr($docRef, $fpos) : ($fpos !== false && $fpos < $start ? mb_substr($docRef, $start) : '');
+    // 表單段在程序書之前的格式不存在；保險起見只處理「程序書在前、表單在後」與「只有程序書」兩種
+    if ($fpos !== false && $fpos < $start) return $docRef;
+    return trim(($head !== '' ? $head . "\n" : '') . $tail);
 }
 
 /** 把 doc_ref 的「表單：」段拆成項目（以「；」分隔）。沒有表單段回 [] */

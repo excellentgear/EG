@@ -6617,12 +6617,14 @@ $('#btnSettingSave').on('click', function(){
    ②IA 不符合通知單的「相關表單編號」：輸入後即時列出 AS 文件供選
    ③IA 不符合通知單的「違反條文」：從 AS 條文題庫（品質管理系統要求）自動建議
    三處共用同一份資料，各只抓一次就快取起來，不重複打 API。 */
-var ASDOCS = null, CLAUSE_BANK = null, DOCPICK_TR = null;
+var ASDOCS = null, ASDOCS_ALL = null, CLAUSE_BANK = null, DOCPICK_TR = null;
 
 function loadAsDocs(cb){
     if (ASDOCS) { cb(ASDOCS); return; }
     $.getJSON(API, {action:'asdoc_pick_list'}, function(res){
         ASDOCS = (res && res.ok) ? (res.rows||[]) : [];
+        ASDOCS_ALL = ASDOCS;
+        ASDOCS = ASDOCS_ALL.filter(function(d){ return !+d.is_obsolete; });   // 一般挑選（IA 單相關表單等）不列已廢止
         cb(ASDOCS);
     }).fail(function(){ ASDOCS = []; cb(ASDOCS); });
 }
@@ -6667,12 +6669,15 @@ function openDocPick(el){
 }
 function renderDocPick(){
     var kw = $('#docPickKw').val(), h = '', n = 0;
-    (ASDOCS||[]).forEach(function(d){
+    (ASDOCS_ALL||[]).forEach(function(d){
         if (!isFormNo(d.doc_no)) return;                       // 只列表單（四段以上編號）；程序書由手冊附錄B 決定
-        if (!kwHit(d.doc_no + ' ' + d.doc_name, kw)) return;
+        // 已廢止的表單預設不列；但這一條已經掛著的要列出來，才取消得掉
+        if (+d.is_obsolete && !DOCPICK_CHECKED[d.doc_no]) return;
+        if (!kwHit(d.doc_no + ' ' + d.doc_name + (+d.is_obsolete ? ' 已廢止' : ''), kw)) return;
         n++;
         h += '<label><input type="checkbox" class="dpck" data-eg-skip value="'+esc(d.doc_no)+'" data-name="'+esc(d.doc_name)+'"'+(DOCPICK_CHECKED[d.doc_no]?' checked':'')+'>'
            + '<span class="dp-no">'+esc(d.doc_no)+'</span><span>'+esc(d.doc_name)+'</span>'
+           + (+d.is_obsolete ? '<span class="dp-type" style="background:#fde2db;color:#C4442D;">已廢止，建議取消勾選</span>' : '')
            + (d.doc_type?'<span class="dp-type">'+esc(d.doc_type)+'</span>':'')+'</label>';
     });
     $('#docPickBox').html(h || '<div style="color:#b0a390;font-size:12px;padding:6px;">查無符合的文件</div>');
@@ -6686,8 +6691,11 @@ $('#btnDocPickOk').on('click', function(){
     var nos = Object.keys(DOCPICK_CHECKED);
     $.post(API, {action:'clause_forms_save', clause_id:$tr.data('id'), forms:JSON.stringify(nos)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        if (c) { c.doc_ref = res.doc_ref; c.docs_view = res.docs_view; c.form_nos = res.form_nos; }
+        if (c) { c.doc_ref = res.doc_ref; c.docs_view = res.docs_view; c.form_nos = res.form_nos; if (res.procs) c.procs = res.procs; if (res.group_procs) c.group_procs = res.group_procs; }
         $tr.find('.cl-docs').html(clauseDocsHtml(c));
+        // 群組標籤的「(n/總數)」與開著的勾選面板跟著新清單重畫
+        $tr.find('.clGrpPanel').hide().empty().removeData('g');
+        if (c) $tr.find('.clGrpChips').html(clauseGroupChips(c.groups, c));
         $tr.find('.cl-st').text('已儲存');
         closeMask('docPickMask');
         CLAUSE_BANK = null;   // 違反條文建議清單要重新抓
@@ -6774,6 +6782,10 @@ function loadClauses(){
         $('#clauseBody').html(h || '<tr><td colspan="7" class="ia-empty">題庫是空的</td></tr>');
         clauseRenumber();
         openMask('clauseMask');
+        // 開題庫就已經依手冊附錄B 自動同步過一次，有變動要講出來（否則之後手按同步只會看到「更新 0 條」）
+        var as = res.auto_sync;
+        if (as && (+as.updated || +as.inserted || +as.deactivated))
+            iaToast('已依手冊附錄B 自動同步：更新 '+as.updated+' 條、新增 '+as.inserted+' 條、停用 '+(as.deactivated||0)+' 條', 6000);
     });
 }
 /* 一列的 HTML（新增列與載入共用同一份，避免兩邊欄位走鐘＝鐵律4） */
@@ -6783,7 +6795,7 @@ function clauseDocsHtml(c){
     var forms = {}; (c.form_nos||[]).forEach(function(n){ forms[n] = 1; });
     var pr = '', fm = '';
     (c.docs_view||[]).forEach(function(d){
-        var line = '<div title="'+esc(d.doc_name||'')+'">'+esc(d.doc_no)+' '+esc(d.doc_name||'')+'</div>';
+        var line = '<div title="'+esc(d.doc_name||'')+'"'+(+d.is_obsolete?' style="color:#C4442D;"':'')+'>'+esc(d.doc_no)+' '+esc(d.doc_name||'')+(+d.is_obsolete?'（已廢止）':'')+'</div>';
         if (forms[d.doc_no] || isFormNo(d.doc_no)) fm += line; else pr += line;
     });
     var h = pr ? '<div style="color:#8a6d45;">程序書／辦法（附錄B）</div>'+pr : '';
@@ -6896,7 +6908,9 @@ $('#btnAppxSync').on('click', function(){
     if (!confirm('要依手冊「附錄B」同步條文題庫嗎？\n\n條文編號與名稱會改成附錄B 的寫法，沒有的條文會新增，順序依附錄B；已設定的文件、作業項目、過程群組都保留。')) return;
     $.post(API, {action:'appendixb_sync'}, function(res){
         if (!res.ok) { alert(res.error||'同步失敗'); return; }
-        iaToast('已同步：更新 '+res.updated+' 條、新增 '+res.inserted+' 條（附錄B 共 '+res.total+' 條）', 5000);
+        iaToast((+res.updated || +res.inserted || +res.deactivated)
+            ? '已同步：更新 '+res.updated+' 條、新增 '+res.inserted+' 條、停用 '+(res.deactivated||0)+' 條（附錄B 共 '+res.total+' 條）'
+            : '已是最新：附錄B 共 '+res.total+' 條，內容都已同步（每次開啟題庫就會自動同步，所以通常按這顆是 0）', 7000);
         loadClauses();
     }, 'json');
 });

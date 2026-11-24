@@ -1800,7 +1800,8 @@ case 'check_delete': {
 case 'clause_list': {
     iaReqView($perms);
     // 條文題庫以手冊附錄B 為準：每次開題庫自動同步（內容沒變就不寫），不必再手按同步
-    try { ia_appendixb_sync($db); } catch (Throwable $e) { error_log('ia_appendixb_sync: ' . $e->getMessage()); }
+    $autoSync = null;
+    try { $autoSync = ia_appendixb_sync($db); } catch (Throwable $e) { error_log('ia_appendixb_sync: ' . $e->getMessage()); }
     $rows = ia_as_clauses($db, false);
     // 每一條帶上「可挑的作業項目（依它列的文件）」與「已挑的」——題庫畫面要一次畫得出來
     $picked = ia_clause_task_map($db, array_column($rows, 'clause_id'));
@@ -1816,13 +1817,13 @@ case 'clause_list': {
         $r['group_procs'] = $gpm[(int)$r['clause_id']] ?? new stdClass();
         $r['doc_tasks'] = ia_clause_doc_tasks($db, $r['doc_ref'] ?? '');
         // 唯讀顯示用：doc_ref 與附錄B 作業程序編號合併後的文件（編號＋名稱）
-        $r['docs_view'] = array_map(function($d){ return ['doc_no'=>$d['doc_no'],'doc_name'=>$d['doc_name']]; },
+        $r['docs_view'] = array_map(function($d){ return ['doc_no'=>$d['doc_no'],'doc_name'=>$d['doc_name'],'is_obsolete'=>$d['is_obsolete'] ?? 0]; },
                             ia_clause_doc_tasks($db, trim((string)($r['doc_ref'] ?? '') . ' ' . (string)($r['proc_nos'] ?? ''))));
         $r['form_nos']  = ia_clause_doc_nos(implode(' ', ia_clause_forms_items($r['doc_ref'] ?? '')));
         $r['tasks']     = $picked[(int)$r['clause_id']] ?? [];
     }
     unset($r);
-    jout(['rows' => $rows]);
+    jout(['rows' => $rows, 'auto_sync' => $autoSync]);
 }
 /* 手冊附錄B 同步進條文題庫、條文所屬過程群組（2026-11-23 老師建議） */
 case 'appendixb_sync': {
@@ -1873,8 +1874,9 @@ case 'asdoc_pick_list': {
     iaReqView($perms);
     $rows = [];
     try {
-        $rows = $db->query("SELECT id, doc_no, doc_name, doc_type FROM as_document
-                             WHERE COALESCE(is_obsolete,0)=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
+        // 已廢止的也回傳（標 is_obsolete），前端預設不列、但條文已掛著的要能看到並取消；已刪除的一律不回
+        $rows = $db->query("SELECT id, doc_no, doc_name, doc_type, COALESCE(is_obsolete,0) AS is_obsolete FROM as_document
+                             WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {
         try { $rows = $db->query("SELECT id, doc_no, doc_name, doc_type FROM as_document
                                    ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e2) {}
@@ -1962,9 +1964,21 @@ case 'clause_forms_save': {
     $ref = ia_clause_forms_rewrite($row['doc_ref'], $items);
     $db->prepare("UPDATE ia_as_clause SET doc_ref=?, updated_at=NOW(), updated_by=? WHERE clause_id=?")
        ->execute([$ref !== '' ? $ref : null, $uname, $id]);
-    $docs = array_map(function ($d) { return ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']]; },
+    $docs = array_map(function ($d) { return ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name'], 'is_obsolete' => $d['is_obsolete'] ?? 0]; },
         ia_clause_doc_tasks($db, trim($ref . ' ' . (string)($db->query("SELECT proc_nos FROM ia_as_clause WHERE clause_id=$id")->fetchColumn()))));
-    jout(['doc_ref' => $ref, 'docs_view' => $docs, 'form_nos' => ia_clause_doc_nos(implode(' ', ia_clause_forms_items($ref)))]);
+    // 過程群組勾選面板用的清單（程序書＋表單）也要一起回，否則新加的表單要重新整理才挑得到
+    $rowNew = $db->prepare("SELECT proc_nos, doc_ref FROM ia_as_clause WHERE clause_id=?"); $rowNew->execute([$id]);
+    $pl = ia_clause_proc_list($rowNew->fetch(PDO::FETCH_ASSOC) ?: []);
+    $procsNew = $pl ? array_map(function ($d) { return ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']]; },
+                          ia_clause_doc_tasks($db, implode(' ', $pl))) : [];
+    // 取消掉的表單／程序書，各過程群組裡已勾選的紀錄也要一併清掉（否則計數與受稽單位會留著舊的）
+    $validNos = array_column($procsNew, 'doc_no');
+    $stOld = $db->prepare("SELECT group_code, proc_no FROM ia_clause_group_proc WHERE clause_id=?"); $stOld->execute([$id]);
+    $delGp = $db->prepare("DELETE FROM ia_clause_group_proc WHERE clause_id=? AND group_code=? AND proc_no=?");
+    foreach ($stOld->fetchAll(PDO::FETCH_ASSOC) as $o)
+        if (!in_array($o['proc_no'], $validNos, true)) $delGp->execute([$id, $o['group_code'], $o['proc_no']]);
+    jout(['doc_ref' => $ref, 'docs_view' => $docs, 'form_nos' => ia_clause_doc_nos(implode(' ', ia_clause_forms_items($ref))), 'procs' => $procsNew,
+          'group_procs' => ia_clause_group_procs_map($db)[$id] ?? new stdClass()]);
 }
 case 'clause_active': {
     iaReqAdmin($perms);
