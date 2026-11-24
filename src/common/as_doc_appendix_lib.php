@@ -157,6 +157,81 @@ function adx_strip_stored(string $html): array
     return [$html, false];
 }
 
+/** 已存的派令區塊位置（標題 h1 起到派令表格結束）。找不到回 null */
+function adx_find_stored(string $html): ?array
+{
+    if (!preg_match_all('#<h1\b[^>]*>.*?</h1>#is', $html, $m, PREG_OFFSET_CAPTURE)) return null;
+    foreach ($m[0] as $one) {
+        $t = preg_replace('/[\s\x{00A0}\x{3000}]+/u', '', strip_tags($one[0]));
+        if (!preg_match('/^' . ADX_PREFIX_RE . '[A-Z]管理代表派令/u', (string)$t)) continue;
+        $start = $one[1];
+        $te = stripos($html, '</table>', $start);
+        if ($te === false || $te - $start > 6000) continue;
+        $end = $te + 8;
+        if (mb_strpos(strip_tags(substr($html, $start, $end - $start)), '派', 0, 'UTF-8') === false) continue;
+        return [$start, $end];
+    }
+    return null;
+}
+
+/** 保留已存派令區塊的版面，只更新資料。標記不齊全時回 null（呼叫端改整段重新產生） */
+function adx_refresh_stored(PDO $db, string $html): ?string
+{
+    $pos = adx_find_stored($html);
+    if (!$pos) return null;
+    [$st, $en] = $pos;
+    $blk = substr($html, $st, $en - $st);
+    if (strpos($blk, '茲遴派') === false || strpos($blk, '為本公司') === false || strpos($blk, '生效日期') === false) return null;
+    if (!preg_match('#<td\b[^>]*data-sign="appx_gm"#i', $blk) && substr_count(strtolower($blk), '<td') < 2) return null;
+
+    $i = adx_mgmt_rep_info($db);
+    $repTxt = $i['rep_name'] !== ''
+        ? adx_e(trim($i['rep_dept'] . '　' . $i['rep_pos'])) . '　<b>' . adx_e($i['rep_name']) . '</b>'
+        : '<b>（尚未於「組織角色綁定」設定管理代表）</b>';
+    $effTxt = $i['eff'] ? adx_e(eg_fmt_date($i['eff'])) : '（尚未設定生效日）';
+    $n = 0;
+    $blk = preg_replace_callback('/茲遴派.*?為本公司/us', function () use ($repTxt) { return '茲遴派　' . $repTxt . '　為本公司'; }, $blk, 1, $n);
+    if ($n !== 1) return null;
+    $blk = preg_replace_callback('/(生效日期：)([^<]*)/u', function ($m) use ($effTxt) { return $m[1] . $effTxt; }, $blk, 1, $n);
+    if ($n !== 1) return null;
+    // 附錄編號（A／B／C…）：依其他附錄的最後一個往下跳號，只換字母，標題其餘文字與版面保留
+    $rest = substr($html, 0, $st) . substr($html, $en);
+    $sc = adx_scan_appendix(preg_split('#<hr[^>]*page-break-after[^>]*>#i', $rest) ?: [$rest]);
+    $last = $sc['letters'] ? end($sc['letters']) : '';
+    $letter = $last === '' ? 'A' : chr(min(ord('Z'), ord($last) + 1));
+    $blk = preg_replace_callback('#(<h1\b[^>]*>.*?)(附[錄件][\s\x{00A0}\x{3000}]*)([A-Z])#us', function ($m) use ($letter) { return $m[1] . $m[2] . $letter; }, $blk, 1);
+    // 總經理圖章：整格重建（存檔時儲存格內會混進已渲染的圖章文字，且清洗器不留自訂屬性），保留使用者調過的 style
+    $tdDone = false;
+    $rebuild = function ($m) use ($i, &$tdDone) {
+        if ($tdDone) return $m[0];
+        $attrs = $m[1];
+        if (stripos($attrs, 'data-sign="appx_gm"') === false) return $m[0];   // 只換圖章那一格
+        $tdDone = true;
+        $a = preg_replace('/\s+data-(sign|stamp-[a-z]+)="[^"]*"/i', '', $attrs);
+        if ($i['eff'] && $i['gm_name'] !== '') {
+            $a .= ' data-sign="appx_gm" data-stamp-name="' . adx_e($i['gm_name']) . '"'
+                . ' data-stamp-dept="' . adx_e($i['gm_dept']) . '" data-stamp-pos="' . adx_e($i['gm_pos']) . '"'
+                . ' data-stamp-date="' . adx_e(eg_fmt_date($i['eff'])) . '"';
+        }
+        return '<td' . $a . '>&nbsp;</td>';
+    };
+    $blk = preg_replace_callback('#<td\b([^>]*)>.*?</td>#is', $rebuild, $blk);
+    if (!$tdDone) {                       // 沒有圖章屬性可認：改用「第二格」（總經理：標籤的右邊）
+        $cnt = 0;
+        $blk = preg_replace_callback('#<td\b([^>]*)>.*?</td>#is', function ($m) use (&$cnt, $i) {
+            if (++$cnt !== 2) return $m[0];
+            $a = $m[1];
+            if ($i['eff'] && $i['gm_name'] !== '') {
+                $a .= ' data-sign="appx_gm" data-stamp-name="' . adx_e($i['gm_name']) . '"'
+                    . ' data-stamp-dept="' . adx_e($i['gm_dept']) . '" data-stamp-pos="' . adx_e($i['gm_pos']) . '"'
+                    . ' data-stamp-date="' . adx_e(eg_fmt_date($i['eff'])) . '"';
+            }
+            return '<td' . $a . '>&nbsp;</td>';
+        }, $blk);
+    }
+    return substr($html, 0, $st) . $blk . substr($html, $en);
+}
+
 /**
  * 一階文件：把內容裡的「管理代表派令附錄」換成依目前設定產生的版本，放在整份文件最後一頁。
  * 非一階、或沒有內容時原樣回傳。
@@ -167,6 +242,11 @@ function adx_apply(PDO $db, string $html, ?string $docLevel): string
     if ((string)$docLevel !== '一階') return $html;
     if (trim($html) === '') return $html;
     try {
+        /* 2026-11-24 使用者要求：派令的字體大小、段落位置自己調整後，存檔不要又跳回原本的版面。
+           內容裡已經有派令附錄時保留使用者調過的版面，只更新會變動的資料（管理代表、部門職稱、生效日、總經理圖章、附錄編號）；
+           找不到那幾個標記（整段被改寫）才退回整段重新產生。 */
+        $kept = adx_refresh_stored($db, $html);
+        if ($kept !== null) return $kept;
         [$rest, ] = adx_strip_stored($html);
         $parts = preg_split('#<hr[^>]*page-break-after[^>]*>#i', $rest);
         if (!is_array($parts)) return $html;
