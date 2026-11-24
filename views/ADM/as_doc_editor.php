@@ -3702,7 +3702,7 @@ function lckShow(d) {
       + '<div style="color:#555;margin-bottom:6px">下列頁面在<b>實際列印</b>時比一張紙高，會被切成兩張，第二張只剩半截框線。編輯畫面看起來沒問題，是因為編輯器把超出的部分框住了。</div>'
       + '<table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="background:#F5E9D6"><th style="padding:3px 6px;text-align:left;width:70px">頁次</th><th style="padding:3px 6px;text-align:left;width:80px">印出高度</th><th style="padding:3px 6px;text-align:left;width:110px">原因</th><th style="padding:3px 6px;text-align:left">內容開頭</th></tr>';
     d.bad.forEach(function(x){
-        h += '<tr><td style="padding:3px 6px;border-top:1px solid #eadfcb"><a href="#" class="lck-go" data-k="' + apxEsc(x.key || '') + '" data-n="' + (x.nth || 0) + '" title="點一下跳到這一頁的位置" style="color:#B8480A;font-weight:bold;text-decoration:underline">第 ' + apxEsc(String(x.page || x.idx).split('/')[0].trim()) + ' 頁 ➜</a></td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + x.mm + ' mm</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + (x.wide ? '表格比頁寬寬（' + x.wide + ' 個）' : '內容太高') + '</td><td style="padding:3px 6px;border-top:1px solid #eadfcb;color:#555">' + apxEsc(x.text) + '…</td></tr>';
+        h += '<tr><td style="padding:3px 6px;border-top:1px solid #eadfcb"><a href="#" class="lck-go" data-k="' + apxEsc(x.key || '') + '" data-p="' + apxEsc(String(x.page || x.idx).split('/')[0].trim()) + '" data-n="' + (x.nth || 0) + '" title="點一下跳到這一頁的位置" style="color:#B8480A;font-weight:bold;text-decoration:underline">第 ' + apxEsc(String(x.page || x.idx).split('/')[0].trim()) + ' 頁 ➜</a></td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + x.mm + ' mm</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + (x.wide ? '表格比頁寬寬（' + x.wide + ' 個）' : '內容太高') + '</td><td style="padding:3px 6px;border-top:1px solid #eadfcb;color:#555">' + apxEsc(x.text) + '…</td></tr>';
     });
     h += '</table><div style="margin-top:8px;background:#FBF3E4;border:1px solid #eadfcb;border-radius:6px;padding:8px 10px;font-size:12px"><b>處理方式（擇一）：</b>'
       + '<ol style="margin:4px 0 0 18px;padding:0"><li><b>先按「存檔」</b>：編輯器已自動把長表格拆到好幾頁，但<u>沒存檔前列印看到的還是沒拆的版本</u>（列印是照存檔的分頁印的）。存完會自動重新檢查，多半就消失了；</li>'
@@ -3717,12 +3717,12 @@ function lckShow(d) {
     dg.innerHTML = h; document.body.appendChild(dg);
     document.getElementById('lckClose').onclick = function(){ dg.remove(); };
     Array.prototype.forEach.call(dg.querySelectorAll('.lck-go'), function(a){
-        a.onclick = function(ev){ ev.preventDefault(); dg.remove(); lckGo(a.getAttribute('data-k'), parseInt(a.getAttribute('data-n'), 10) || 0); };
+        a.onclick = function(ev){ ev.preventDefault(); dg.remove(); lckGo(a.getAttribute('data-k'), parseInt(a.getAttribute('data-n'), 10) || 0, parseInt(a.getAttribute('data-p'), 10) || 0); };
     });
     document.getElementById('lckRe').onclick = function(){ dg.remove(); apxToast('重新檢查中…'); layoutCheck(); };
 }
 /** 依列印檢查回報的「那個表格／區塊的開頭文字」找到編輯器裡的位置：捲到畫面中間、游標放進去、閃一下框線 */
-function lckGo(key, nth) {
+function lckGo(key, nth, pageNo) {
     var hits = [];
     key = String(key || '');
     if (key) apxSheets().forEach(function(sh){
@@ -3736,6 +3736,11 @@ function lckGo(key, nth) {
     // 同一個 key 可能 block 與 table 都命中：只留最內層的（table），照出現順序取第 nth 個
     hits = hits.filter(function(e, i){ return !hits.some(function(o, j){ return j !== i && e.contains(o) && o !== e; }); });
     var el = hits[nth] || hits[0];
+    if (!el && pageNo > 0) {
+        // 比對不到內文（空白頁、整頁是圖片，或編輯器與列印排出的表格文字不同）：改依頁次跳到那一頁
+        var shs = apxSheets();
+        el = shs[Math.min(pageNo, shs.length) - 1] || null;
+    }
     if (!el) { apxToast('找不到那個位置（內容可能已改過），請按「重新檢查」'); return; }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     try {
