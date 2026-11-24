@@ -171,6 +171,7 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         'hr_form_skill_assess'  => ['專業技能鑑定考核表',            'ADM/hr_position_forms.php'],
         'hr_form_competency'    => ['職能鑑定表',                    'ADM/hr_position_forms.php'],
         'business_trip'         => ['公出單',                        'ADM/business_trip.php'],
+        'memo_request'          => ['簽呈',                          'ADM/memo_request.php'],
         'doc_apply'             => ['文件制、修申請單',              'ADM/doc_apply.php'],
         'training_record_card'  => ['教育訓練 · 員工教育訓練紀錄卡', 'ADM/training_record.php'],
         'kpi_as'                => ['KPI 關鍵績效指標',              'news/KPI.php'],
@@ -206,6 +207,7 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         'rm_context'            => ['風險與機會管理 · 組織處境分析表',         'GM/risk_mgmt.php'],
         'rm_risk'               => ['風險與機會管理 · 風險與機會因應措施管制表', 'GM/risk_mgmt.php'],
         'eng_change'            => ['工程變更申請單',                'TD/eng_change.php'],
+        'stamp_list'            => ['圖章管理 · 圖章管理記錄表',     'ADM/stamp_management.php'],
         // 出貨單做在快速出貨(新版)；該頁已登記進選單，權限照它自己算。
         'shipping_note'         => ['快速出貨 · 出貨單',             'Sales/Shipping_Quick.php'],
         'equip_machine_service_log' => ['機器設備履歷表',            'pm/equipment_machine_list.php'],
