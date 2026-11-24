@@ -6150,3 +6150,28 @@ function ia_pgroup_clause_ids(PDO $db, string $code): array
     foreach ($gm as $cid => $_) $ids[$cid] = 1;
     return ['ids' => array_keys($ids), 'clauses' => count($ids)];
 }
+
+/**
+ * 條文題庫「對應表單」的唯一寫入點（2026-11-24 使用者要求：附錄B 只有程序書，表單改在查檢表這邊設定）。
+ * doc_ref 的格式維持「手冊：…／程序書：…／表單：…」，這裡只重寫「表單：」那一段，前面的手冊／程序書行原樣保留；
+ * $items 是已經組好的文字（「編號 名稱」）。傳空陣列＝移除表單段。
+ */
+function ia_clause_forms_rewrite(?string $docRef, array $items): string
+{
+    $docRef = (string)$docRef;
+    $pos = mb_strpos($docRef, '表單：');
+    $head = rtrim($pos === false ? $docRef : mb_substr($docRef, 0, $pos));
+    $items = array_values(array_filter(array_map(function ($s) { return trim(preg_replace('/\s+/u', ' ', (string)$s)); }, $items), 'strlen'));
+    if (!$items) return $head;
+    return ($head !== '' ? $head . "\n" : '') . '表單：' . implode("；\n", $items);
+}
+
+/** 把 doc_ref 的「表單：」段拆成項目（以「；」分隔）。沒有表單段回 [] */
+function ia_clause_forms_items(?string $docRef): array
+{
+    $docRef = (string)$docRef;
+    $pos = mb_strpos($docRef, '表單：');
+    if ($pos === false) return [];
+    $seg = mb_substr($docRef, $pos + 3);
+    return array_values(array_filter(array_map(function ($s) { return trim(preg_replace('/\s+/u', ' ', $s)); }, preg_split('/[；;\n]+/u', $seg)), 'strlen'));
+}

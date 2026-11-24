@@ -1818,6 +1818,7 @@ case 'clause_list': {
         // 唯讀顯示用：doc_ref 與附錄B 作業程序編號合併後的文件（編號＋名稱）
         $r['docs_view'] = array_map(function($d){ return ['doc_no'=>$d['doc_no'],'doc_name'=>$d['doc_name']]; },
                             ia_clause_doc_tasks($db, trim((string)($r['doc_ref'] ?? '') . ' ' . (string)($r['proc_nos'] ?? ''))));
+        $r['form_nos']  = ia_clause_doc_nos(implode(' ', ia_clause_forms_items($r['doc_ref'] ?? '')));
         $r['tasks']     = $picked[(int)$r['clause_id']] ?? [];
     }
     unset($r);
@@ -1933,6 +1934,37 @@ case 'clause_save': {
     }
     $tasks = ia_clause_task_map($db, [$id])[$id] ?? [];
     jout(['clause_id' => $id, 'tasks' => $tasks, 'doc_tasks' => ia_clause_doc_tasks($db, $ref)]);
+}
+case 'clause_forms_save': {
+    // 條文的「對應表單」：只重寫 doc_ref 的「表單：」段（手冊／程序書行不動），附錄B 同步不會洗掉
+    iaReqAdmin($perms);
+    $id = (int)($_POST['clause_id'] ?? 0);
+    $st = $db->prepare("SELECT doc_ref, is_header FROM ia_as_clause WHERE clause_id=?"); $st->execute([$id]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) jerr('找不到這一條');
+    if ((int)$row['is_header'] === 1) jerr('標題列不能設定表單');
+    $nos = json_decode((string)($_POST['forms'] ?? '[]'), true);
+    if (!is_array($nos)) jerr('資料格式錯誤');
+    if (count($nos) > 60) jerr('一條最多 60 份表單');
+    $items = [];
+    $q = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE doc_no=? AND is_deleted=0 LIMIT 1");
+    foreach ($nos as $no) {
+        $no = trim((string)$no);
+        if ($no === '') continue;
+        $q->execute([$no]); $d = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$d) jerr('AS 文件管理裡找不到「' . $no . '」');
+        $items[] = $d['doc_no'] . ' ' . $d['doc_name'];
+    }
+    // 非 AS 文件的佐證（例：外校報告、客戶提供的 FAI 表）原本寫在表單段裡的，沒有編號就原樣保留
+    foreach (ia_clause_forms_items($row['doc_ref']) as $old) {
+        if (!preg_match('/\d-[A-Za-z]{2,3}-\d{2}/u', $old)) $items[] = $old;
+    }
+    $ref = ia_clause_forms_rewrite($row['doc_ref'], $items);
+    $db->prepare("UPDATE ia_as_clause SET doc_ref=?, updated_at=NOW(), updated_by=? WHERE clause_id=?")
+       ->execute([$ref !== '' ? $ref : null, $uname, $id]);
+    $docs = array_map(function ($d) { return ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']]; },
+        ia_clause_doc_tasks($db, trim($ref . ' ' . (string)($db->query("SELECT proc_nos FROM ia_as_clause WHERE clause_id=$id")->fetchColumn()))));
+    jout(['doc_ref' => $ref, 'docs_view' => $docs, 'form_nos' => ia_clause_doc_nos(implode(' ', ia_clause_forms_items($ref)))]);
 }
 case 'clause_active': {
     iaReqAdmin($perms);

@@ -3412,6 +3412,11 @@ function caseRequiredCheck(){
         if (src.dept_ids && grpCodeOf(src) && !src.dept_ids.length) { $tr.find('td').eq(2).addClass('err-cell'); miss.push('受稽單位'); }
         if (!(src.auditor_keys || []).length) { $tr.find('td').eq(3).addClass('err-cell'); miss.push('稽核員'); }
         if (!(src.escort_keys  || []).length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員'); }
+        else {
+            // 每個受稽單位都要有陪檢員；同一人兼任多個單位時一個人可涵蓋多個單位（不要求每單位不同人）
+            var noEsc = escortUncoveredUnits(src);
+            if (noEsc.length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員（' + noEsc.join('、') + ' 還沒有陪檢員）'); }
+        }
         if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
     });
     var gm = grpCompleteMsg(); if (gm) bad.push(gm);
@@ -6650,38 +6655,43 @@ function kwHit(hay, kw){
 }
 
 /* ---- ①「＋選文件」跳窗 ---- */
+var DOCPICK_CHECKED = {};   // 對應表單模式：目前已勾的編號
+function isFormNo(no){ return /^\d-[A-Za-z]{2,3}-\d{2}-\d{2}/.test(String(no||'')); }
 function openDocPick(el){
     DOCPICK_TR = $(el).closest('tr');
+    var c = CL[DOCPICK_TR.data('id')] || {};
+    DOCPICK_CHECKED = {};
+    (c.form_nos||[]).forEach(function(n){ DOCPICK_CHECKED[n] = 1; });
     $('#docPickKw').val('');
     loadAsDocs(function(){ renderDocPick(); openMask('docPickMask'); $('#docPickKw').focus(); });
 }
 function renderDocPick(){
     var kw = $('#docPickKw').val(), h = '', n = 0;
     (ASDOCS||[]).forEach(function(d){
+        if (!isFormNo(d.doc_no)) return;                       // 只列表單（四段以上編號）；程序書由手冊附錄B 決定
         if (!kwHit(d.doc_no + ' ' + d.doc_name, kw)) return;
         n++;
-        h += '<label><input type="checkbox" class="dpck" data-eg-skip value="'+esc(d.doc_no)+'" data-name="'+esc(d.doc_name)+'">'
+        h += '<label><input type="checkbox" class="dpck" data-eg-skip value="'+esc(d.doc_no)+'" data-name="'+esc(d.doc_name)+'"'+(DOCPICK_CHECKED[d.doc_no]?' checked':'')+'>'
            + '<span class="dp-no">'+esc(d.doc_no)+'</span><span>'+esc(d.doc_name)+'</span>'
            + (d.doc_type?'<span class="dp-type">'+esc(d.doc_type)+'</span>':'')+'</label>';
     });
     $('#docPickBox').html(h || '<div style="color:#b0a390;font-size:12px;padding:6px;">查無符合的文件</div>');
     $('#docPickCnt').text('符合 '+n+' 筆'+((ASDOCS||[]).length?('／共 '+ASDOCS.length+' 筆'):''));
 }
+$('#docPickBox').on('change', '.dpck', function(){ if (this.checked) DOCPICK_CHECKED[this.value] = 1; else delete DOCPICK_CHECKED[this.value]; });
 $('#docPickKw').on('input', renderDocPick);
 $('#btnDocPickOk').on('click', function(){
     if (!DOCPICK_TR) { closeMask('docPickMask'); return; }
-    var add = [];
-    $('#docPickBox .dpck:checked').each(function(){
-        add.push($(this).data('name') + '(' + $(this).val() + ')');   // 沿用題庫既有的「名稱(編號)」寫法
-    });
-    if (!add.length) { alert('請先勾選要加入的文件'); return; }
-    var $ta = DOCPICK_TR.find('textarea[data-f="doc_ref"]');
-    var cur = String($ta.val()||'').trim();
-    // 已經有的不重複加
-    add = add.filter(function(x){ return cur.indexOf(x) < 0; });
-    $ta.val((cur ? cur + ' ' : '') + add.join(' '));
-    closeMask('docPickMask');
-    if (add.length) autoSaveClause(DOCPICK_TR);   // 自動儲存，不再要求使用者按「存」
+    var $tr = DOCPICK_TR, c = CL[$tr.data('id')];
+    var nos = Object.keys(DOCPICK_CHECKED);
+    $.post(API, {action:'clause_forms_save', clause_id:$tr.data('id'), forms:JSON.stringify(nos)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        if (c) { c.doc_ref = res.doc_ref; c.docs_view = res.docs_view; c.form_nos = res.form_nos; }
+        $tr.find('.cl-docs').html(clauseDocsHtml(c));
+        $tr.find('.cl-st').text('已儲存');
+        closeMask('docPickMask');
+        CLAUSE_BANK = null;   // 違反條文建議清單要重新抓
+    }, 'json');
 });
 
 /* ---- ②③ 打字即時建議（附掛在既有 input 上，不改欄位本身） ---- */
@@ -6767,19 +6777,32 @@ function loadClauses(){
     });
 }
 /* 一列的 HTML（新增列與載入共用同一份，避免兩邊欄位走鐘＝鐵律4） */
+/* 文件欄：程序書（附錄B，唯讀）與表單（可在這裡設定）分開列 */
+function clauseDocsHtml(c){
+    c = c || {};
+    var forms = {}; (c.form_nos||[]).forEach(function(n){ forms[n] = 1; });
+    var pr = '', fm = '';
+    (c.docs_view||[]).forEach(function(d){
+        var line = '<div title="'+esc(d.doc_name||'')+'">'+esc(d.doc_no)+' '+esc(d.doc_name||'')+'</div>';
+        if (forms[d.doc_no] || isFormNo(d.doc_no)) fm += line; else pr += line;
+    });
+    var h = pr ? '<div style="color:#8a6d45;">程序書／辦法（附錄B）</div>'+pr : '';
+    if (+c.is_header) return h || '<span class="cl-task-hint">—</span>';
+    h += '<div style="color:#8a6d45;margin-top:3px;">對應表單</div>' + (fm || '<span class="cl-task-hint">尚未設定</span>');
+    if (c.clause_id) h += '<div><a href="javascript:void(0)" class="clFormPick" style="font-size:12px;"><i class="fa fa-pencil"></i> 設定表單</a></div>';
+    return h;
+}
+$('#clauseBody').on('click', '.clFormPick', function(){ openDocPick(this); });
 function clauseRowHtml(c){
     c = c || {};
     // 順序／標題列／品質管理系統要求／文件表單／作業項目全部由手冊附錄B 決定，只能看；只有過程群組與啟用可以改（2026-11-23 使用者要求）
-    var docs = (c.docs_view||[]).map(function(d){
-        return '<div title="'+esc(d.doc_name||'')+'">'+esc(d.doc_no)+' '+esc(d.doc_name||'')+'</div>';
-    }).join('') || '<span class="cl-task-hint">—</span>';
     var tasks = (c.tasks||[]).map(function(t){ return '<span class="nk-task" style="margin:1px 3px 1px 0;">'+esc(t.task_name)+'</span>'; }).join('')
               || '<span class="cl-task-hint">—</span>';
     return '<tr data-id="'+(c.clause_id||'')+'"'+(+c.is_active?'':' style="opacity:.55;"')+'>'
       + '<td><span class="cl-seq"></span></td>'
       + '<td>'+(+c.is_header?'<i class="fa fa-check"></i>':'')+'</td>'
       + '<td class="l" style="white-space:pre-wrap;">'+esc(c.clause_text||'')+'</td>'
-      + '<td class="l" style="font-size:12px;">'+docs+'</td>'
+      + '<td class="l cl-docs" style="font-size:12px;">'+clauseDocsHtml(c)+'</td>'
       + '<td class="l cl-task">'+tasks+'</td>'
       + '<td class="cl-grp">'+clauseGroupHtml(c)+'</td>'
       + '<td><input type="checkbox" class="clAct"'+(+c.is_active?' checked':'')+' title="附錄B已沒有的條文會自動停用"></td>'
@@ -7320,11 +7343,31 @@ function printCase(id){
               + '<th>稽核起始主過程</th><th style="width:140px;">受稽單位</th>'
               + '<th style="width:140px;">稽核員</th><th style="width:140px;">陪檢員</th>'
               + '</tr></thead><tbody>';
+            // 2026-11-24 使用者要求：起始主過程相同的列合併成一列，受稽單位／稽核員／陪檢員也各自合併（去重）
+            var pGroups = [], pIdx = {};
             ds.forEach(function(d){
-                h += '<tr><td class="l">'+esc(d.start_process||'')+'</td>'
-                   + '<td>'+esc(d.dept_name||'')+'</td>'
-                   + '<td>'+nameLines(d.auditors, d.auditor_name)+'</td>'
-                   + '<td>'+nameLines(d.escorts, d.escort_name)+'</td></tr>';
+                var k = String(d.start_process||'');
+                if (!(k in pIdx)) { pIdx[k] = pGroups.length; pGroups.push({sp:k, units:[], aud:[], esc:[], audFb:[], escFb:[]}); }
+                var g = pGroups[pIdx[k]];
+                var un = String(d.dept_name||'');
+                if (un && g.units.indexOf(un) < 0) g.units.push(un);
+                var addP = function(dst, fbDst, list, fb){
+                    var had = false;
+                    (list||[]).forEach(function(x){
+                        had = true;
+                        var key = String(x.user_id||'') + '|' + String(x.user_name||'');
+                        if (!dst.some(function(y){ return (String(y.user_id||'') + '|' + String(y.user_name||'')) === key; })) dst.push(x);
+                    });
+                    if (!had && fb) String(fb).split(/[、／\/]/).forEach(function(n){ if (n && fbDst.indexOf(n) < 0) fbDst.push(n); });
+                };
+                addP(g.aud, g.audFb, d.auditors, d.auditor_name);
+                addP(g.esc, g.escFb, d.escorts, d.escort_name);
+            });
+            pGroups.forEach(function(g){
+                h += '<tr><td class="l" style="vertical-align:middle;font-size:15px;font-weight:bold;">'+esc(g.sp)+'</td>'
+                   + '<td>'+g.units.map(esc).join('<br>')+'</td>'
+                   + '<td>'+nameLines(g.aud, g.audFb.join('、'))+'</td>'
+                   + '<td>'+nameLines(g.esc, g.escFb.join('、'))+'</td></tr>';
             });
             if (!ds.length) h += '<tr><td style="height:22px;">&nbsp;</td><td></td><td></td><td></td></tr>';
             h += '</tbody></table>';
@@ -8483,6 +8526,27 @@ function escortCandsFor(r){
         var ds = (p.dept_ids && p.dept_ids.length) ? p.dept_ids : [p.dept_id];
         return ds.some(function(d){ return ids[String(d)]; });
     });
+}
+/** 已選陪檢員沒涵蓋到的受稽單位名稱。涵蓋＝他（含兼任）任一部門落在該單位內；一人可涵蓋多個單位 */
+function escortUncoveredUnits(r){
+    var keys = (grpCodeOf(r) && r.dept_ids) ? r.dept_ids : (r.dept_id ? [r.dept_id] : []);
+    var chosen = {}; (r.escort_keys||[]).forEach(function(k){ chosen[String(k).split(':')[0]] = 1; });
+    var out = [];
+    keys.forEach(function(k){
+        var ids = {}; ids[String(k)] = 1;
+        (META.units||[]).forEach(function(u){
+            if (String(u.key) === String(k)) (u.dept_ids||[u.key]).forEach(function(d){ ids[String(d)] = 1; });
+        });
+        var inUnit = function(p){
+            var ds = (p.dept_ids && p.dept_ids.length) ? p.dept_ids : [p.dept_id];
+            return ds.some(function(d){ return ids[String(d)]; });
+        };
+        // 這個單位根本沒有合格陪檢員（例如文管中心、技術課）時不苛求，由別人兼任即可
+        if (!(META.escorts||[]).some(inUnit)) return;
+        var hit = (META.escorts||[]).some(function(p){ return chosen[String(p.id)] && inUnit(p); });
+        if (!hit) out.push(unitName(k));
+    });
+    return out;
 }
 /** 單位增減後，已選的陪檢員若不在受稽單位內就移除 */
 function pruneEscorts(r){
