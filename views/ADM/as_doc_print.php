@@ -287,7 +287,11 @@ function adtReflow(){ adtReflow0(); adtFitOverflow(); }
 /* 自動修正「超出一張紙」（2026-11-24 使用者要求：不要只提示，要自己修）：
    adtReflow0 只會把「一個一個區塊」搬到下一頁，整頁只有一個大區塊（整頁圖片、一張大表格）或超出只差幾 mm 時搬不動，
    於是印出來多一張只有頁尾的空白紙。這裡對仍然比一張紙高的頁，把內容區等比縮小剛好放進去（只縮超出的那一頁，其他頁完全不動）。 */
+var ADT_IS_CHECK = <?= $isCheck ? 'true' : 'false' ?>;
 function adtFitOverflow(){
+    /* 只在「排版檢查」或「真正進入列印排版」時量：一般畫面（預覽）的頁有螢幕用的內距、本來就比一張紙高，
+       在那裡量會把每一頁都縮成一小塊（2026-11-24 實際發生過）。 */
+    if (!ADT_IS_CHECK && !window.__adtPrintMode) return;
     if (!(ADT_PAGE_H_MM > 0)) return;
     var mmPx = 96 / 25.4, target = ADT_PAGE_H_MM * mmPx;
     Array.prototype.forEach.call(document.querySelectorAll('.adt-page'), function(p){
@@ -309,6 +313,14 @@ function adtFitOverflow(){
         }
     });
 }
+(function(){
+    function on(){ window.__adtPrintMode = 1; try { adtFitOverflow(); } catch (e) {} }
+    function off(){ window.__adtPrintMode = 0; Array.prototype.forEach.call(document.querySelectorAll('.adt-page > *'), function(c){ if (c.style.zoom) c.style.zoom = ''; }); }
+    try { var mql = window.matchMedia('print'); var h = function(e){ if (e.matches) on(); else off(); };
+          if (mql.addEventListener) mql.addEventListener('change', h); else if (mql.addListener) mql.addListener(h); } catch (e) {}
+    /* ⚠ 不要掛 beforeprint：它觸發時還是螢幕版面（頁比一張紙高），量了會把每一頁都縮小；
+       matchMedia('print') 的 change 事件才是列印版面（寬 180mm 那一版）。 */
+})();
 function adtReflow0(){
     var mmPx = 96 / 25.4, safe = 2 * mmPx;
     var pages = Array.prototype.slice.call(document.querySelectorAll('.adt-page')).filter(function(p){ return p.querySelector('.adt-hdr') && p.querySelector(':scope > .adt-body'); });
