@@ -6669,18 +6669,24 @@ function openDocPick(el){
 }
 function renderDocPick(){
     var kw = $('#docPickKw').val(), h = '', n = 0;
+    // 已勾選的排最上面（方便取消或確認），其餘維持編號順序；勾選當下不重排，免得畫面跳動，下次開啟／搜尋才排
+    var hc = '', nc = 0;
     (ASDOCS_ALL||[]).forEach(function(d){
         if (!isFormNo(d.doc_no)) return;                       // 只列表單（四段以上編號）；程序書由手冊附錄B 決定
         // 已廢止的表單預設不列；但這一條已經掛著的要列出來，才取消得掉
         if (+d.is_obsolete && !DOCPICK_CHECKED[d.doc_no]) return;
         if (!kwHit(d.doc_no + ' ' + d.doc_name + (+d.is_obsolete ? ' 已廢止' : ''), kw)) return;
         n++;
-        h += '<label><input type="checkbox" class="dpck" data-eg-skip value="'+esc(d.doc_no)+'" data-name="'+esc(d.doc_name)+'"'+(DOCPICK_CHECKED[d.doc_no]?' checked':'')+'>'
+        var one = '<label><input type="checkbox" class="dpck" data-eg-skip value="'+esc(d.doc_no)+'" data-name="'+esc(d.doc_name)+'"'+(DOCPICK_CHECKED[d.doc_no]?' checked':'')+'>'
            + '<span class="dp-no">'+esc(d.doc_no)+'</span><span>'+esc(d.doc_name)+'</span>'
            + (+d.is_obsolete ? '<span class="dp-type" style="background:#fde2db;color:#C4442D;">已廢止，建議取消勾選</span>' : '')
            + (d.doc_type?'<span class="dp-type">'+esc(d.doc_type)+'</span>':'')+'</label>';
+        if (DOCPICK_CHECKED[d.doc_no]) { hc += one; nc++; } else h += one;
     });
-    $('#docPickBox').html(h || '<div style="color:#b0a390;font-size:12px;padding:6px;">查無符合的文件</div>');
+    if (nc) hc = '<div style="font-size:12px;color:#8a6d45;background:#FFF3D1;padding:3px 6px;border-bottom:1px solid #D8BE93;">已選擇 '+nc+' 筆（置頂，可直接取消勾選）</div>' + hc
+               + (h ? '<div style="font-size:12px;color:#8a6d45;background:#f7efe0;padding:3px 6px;border-top:1px solid #D8BE93;border-bottom:1px solid #D8BE93;">其他表單</div>' : '');
+    $('#docPickBox').html((hc + h) || '<div style="color:#b0a390;font-size:12px;padding:6px;">查無符合的文件</div>');
+    $('#docPickBox').scrollTop(0);
     $('#docPickCnt').text('符合 '+n+' 筆'+((ASDOCS||[]).length?('／共 '+ASDOCS.length+' 筆'):''));
 }
 $('#docPickBox').on('change', '.dpck', function(){ if (this.checked) DOCPICK_CHECKED[this.value] = 1; else delete DOCPICK_CHECKED[this.value]; });
