@@ -30,7 +30,8 @@ $uid = (int)($_SESSION['id'] ?? 0);
 $P   = adc_perms($db, $uid);
 
 $versionId = (int)($_GET['version_id'] ?? 0);
-$isCheck   = !empty($_GET['check']);     // 排版檢查（編輯器背景載入）：量「印出來哪幾頁會超出一張紙」後回報給編輯器，不跳列印、不並排
+$isPdfGen  = !empty($_GET['pdfgen']);   // 產生 PDF 用（as_doc_pdf.php 的無頭 Chrome 載入）：版面同排版檢查、不跳列印
+$isCheck   = !empty($_GET['check']) || $isPdfGen;     // 排版檢查（編輯器背景載入）：量「印出來哪幾頁會超出一張紙」後回報給編輯器，不跳列印、不並排
 $isPreview = !empty($_GET['preview']) || $isCheck;   // 只看不印（唯讀線上版嵌入用）：不自動跳列印、不要求列印權限
 $isEmbed   = !empty($_GET['embed']);
 $V = $versionId > 0 ? adc_version_info($db, $versionId) : null;
@@ -258,6 +259,12 @@ function doPrint(){
             note: <?= json_encode($isPrimary ? '' : '草稿（未設為正本）', JSON_UNESCAPED_UNICODE) ?>
         });
     }
+    /* 預設改成「先產生 PDF 再印」（2026-11-24）：列印對話框的邊界／縮放因電腦而異，會多出空白頁或被切到；
+       PDF 是伺服器用列印版面量好的，使用者在 PDF 檢視器按列印看到什麼就印出什麼。native=1 才用瀏覽器原生列印（備援）。 */
+    <?php if (empty($_GET['native']) && !$isCheck): ?>
+    setTimeout(function(){ location.href = 'as_doc_pdf.php?version_id=<?= (int)$versionId ?>'; }, 120);   // 等列印紀錄送出
+    return;
+    <?php endif; ?>
     window.print();
 }
 /* 正文頁自動回流（列印／預覽一律先做）：
