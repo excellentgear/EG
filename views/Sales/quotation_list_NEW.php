@@ -5013,7 +5013,15 @@ function renderViewPanel(q, contact, detail) {
     const fmtNum = n => (parseFloat(n||0)).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
     const negLabelHtml = '<small style="color:#c0392b;font-weight:bold;margin-right:2px;">議價</small>';
     let itemsHtml = '';
+    // 清單有用關鍵字篩選時，把命中的料號列用淺黃底標示
+    const hlTerms = (($('#listSearch').val() || '').trim().toLowerCase().split(/\s+/)).filter(Boolean);
+    const hlRow = it => {
+        if (!hlTerms.length) return '';
+        const hay = ((it.part_no || it.product_id || '') + ' ' + (it.spec_no || '')).toLowerCase();
+        return hlTerms.some(t => hay.includes(t)) ? ' style="background:#FFF3B0;"' : '';
+    };
     (q.items || []).forEach((it, i) => {
+        const hl = hlRow(it);
         // 議價單內只有被勾為議價項目者才顯示「議價」
         const negLabel = (q.is_negotiation == 1 && it.is_nego != 0) ? negLabelHtml : '';
         const isTiered = it.is_tiered == 1;
@@ -5031,7 +5039,7 @@ function renderViewPanel(q, contact, detail) {
             const tolTxt = t => (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '' || !(parseFloat(t.tolerance_value) > 0))
                 ? '' : `<div style="font-size:10px;color:#a06a1f;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${t.tolerance_note ? '｜' + esc(t.tolerance_note) : ''}</div>`;
             it.tiers.forEach((t, ti) => {
-                itemsHtml += `<tr>
+                itemsHtml += `<tr${hl}>
                     ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}<div style="font-size:10px;color:#888;">（階梯報價，單價依訂購數量區間）</div></td>` : ''}
@@ -5043,7 +5051,7 @@ function renderViewPanel(q, contact, detail) {
             });
         } else {
             const amt = parseFloat(it.amount || 0);
-            itemsHtml += `<tr>
+            itemsHtml += `<tr${hl}>
                 <td class="text-center">${i+1}</td>
                 <td style="font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                 <td style="font-size:11px;">${descHtml}</td>
@@ -9841,6 +9849,61 @@ $(document).on('click', '.part-suggestions .part-create-btn', function () {
     const term = String($(this).data('term') || '');
     _pendingBindRow = $(this).closest('tr.item-row');
     $(this).closest('.part-suggestions').hide().empty();
+    // 預設直接呼叫主檔管理的新增料號（欄位只有那一份，改那邊這裡自動跟著變）；
+    // 跳窗內有「改用簡易版」可退回下面的本頁內建版本
+    openPartEmbed(term, _pendingBindRow);
+});
+
+// ── 內嵌主檔管理「新增料號」（iframe；通訊見 master_data_management.php 的 ?part_embed=1）──
+let _embedBindRow = null, _embedTerm = '';
+function openPartEmbed(term, $row) {
+    _embedBindRow = $row; _embedTerm = term;
+    if (!$('#partEmbedModal').length) {
+        $('body').append(
+            '<div class="modal fade" id="partEmbedModal" tabindex="-1" role="dialog" data-backdrop="static">' +
+            '<div class="modal-dialog modal-lg" style="width:1000px;max-width:96%;"><div class="modal-content">' +
+            '<div class="modal-header" style="padding:8px 15px;">' +
+            '<button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>' +
+            '<h4 class="modal-title" style="font-size:15px;">新增料號（主檔管理）' +
+            '<a href="#" id="partEmbedFallback" style="font-size:12px;margin-left:12px;font-weight:normal;">改用簡易版</a></h4></div>' +
+            '<div class="modal-body" style="padding:0;"><iframe id="partEmbedFrame" style="width:100%;height:82vh;border:0;display:block;"></iframe></div>' +
+            '</div></div></div>');
+        $('#partEmbedFallback').on('click', function (e) {
+            e.preventDefault(); closePartEmbed(true);
+        });
+    }
+    const q = new URLSearchParams({ part_embed: 1, new_part_no: term,
+        new_customer: $('#client_id').val().trim(), new_customer_name: $('#client_name').val().trim() });
+    $('#partEmbedFrame').attr('src', '../pages/master_data_management.php?' + q.toString());
+    $('#partEmbedModal').modal('show');
+}
+function closePartEmbed(fallbackLocal) {
+    const row = _embedBindRow, term = _embedTerm;
+    _embedBindRow = null;
+    $('#partEmbedModal').modal('hide');
+    $('#partEmbedFrame').attr('src', 'about:blank');
+    // 等內嵌跳窗關完再開簡易版，避免兩個 Bootstrap 跳窗疊在一起造成背景鎖死
+    if (fallbackLocal && row) setTimeout(function () { _pendingBindRow = row; openLocalPartCreate(term); }, 450);
+}
+window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin) return;
+    const fr = document.getElementById('partEmbedFrame');
+    if (!fr || e.source !== fr.contentWindow || !e.data) return;
+    if (e.data.type === 'eg_part_saved' && e.data.d_id) {
+        const row = _embedBindRow;
+        closePartEmbed(false);
+        if (row) bindPartToRow(row, e.data.part_no, e.data.d_id);
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `料號 ${e.data.part_no} 已建立並綁定`, showConfirmButton: false, timer: 2500 });
+    } else if (e.data.type === 'eg_part_cancel') {
+        // 沒有主檔新增權限：自動退回本頁簡易版；其餘（使用者自己關閉）就只是關閉
+        closePartEmbed(e.data.reason === 'noperm');
+    }
+});
+$('body').on('hidden.bs.modal', '#partEmbedModal', function () {
+    $('#partEmbedFrame').attr('src', 'about:blank'); _embedBindRow = null;
+});
+
+function openLocalPartCreate(term) {
     resetPartForm();
     $('#part_no_modal').val(term);
     // 表頭已綁定客戶時自動帶入
@@ -9850,7 +9913,7 @@ $(document).on('click', '.part-suggestions .part-create-btn', function () {
         $('#part_customer_id_modal').val(cid);
     }
     $('#partModal').modal('show');
-});
+}
 $(document).on('hidden.bs.modal', '#partModal', function () { _pendingBindRow = null; });
 
 // 建立成功後綁定料號到項目列（等同從建議清單點選）
