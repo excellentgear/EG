@@ -290,6 +290,12 @@ function adtFitWide(){
     });
 }
 var ADT_PAGE_H_MM = <?= (float)($printContentH ?? 0) ?>;
+function adtBlockEmpty(el){
+    if (!el || el.nodeType !== 1) return false;
+    if (/^(IMG|TABLE|SVG|VIDEO|CANVAS|IFRAME|HR)$/i.test(el.tagName)) return false;
+    if (el.querySelector('img,table,svg,video,canvas,iframe')) return false;
+    return (el.textContent || '').replace(/[\s\u00A0\u3000]/g, '') === '';
+}
 function adtReflow(){
     var mmPx = 96 / 25.4, safe = 2 * mmPx;
     var pages = Array.prototype.slice.call(document.querySelectorAll('.adt-page')).filter(function(p){ return p.querySelector('.adt-hdr') && p.querySelector(':scope > .adt-body'); });
@@ -312,7 +318,14 @@ function adtReflow(){
             /* 本身就比一頁高的長表格不搬：搬到下一頁也放不下，只會讓上面的標題孤零零留一整頁
                （附錄B 標題與表格被拆開）；留在原處由列印引擎／PDF 產生程式依列拆頁 */
             var lastEl = b.lastElementChild;
+            /* 頁尾多餘的空白段落（Enter 按到底、編輯器補的空行）：直接丟掉，不搬到下一頁——
+               搬過去只會多出一張只有抬頭的空白紙（2026-11-24 使用者回報「為什麼都會有空白頁」的主因之一） */
+            if (adtBlockEmpty(lastEl)) { b.removeChild(lastEl); moved++; continue; }
             if (lastEl.tagName === 'TABLE' && lastEl.getBoundingClientRect().height > lim) break;
+            /* 這一頁除了最後這個區塊以外都是空白（例如「換頁用的空段落＋一個很大的圖片」）：搬走它只會留下一張空白頁，
+               改成丟掉那些空白區塊、讓這個大區塊留在原頁（超出的部分由 PDF 產生程式縮放，或由列印引擎跨頁） */
+            var others = Array.prototype.slice.call(b.children).filter(function (c) { return c !== lastEl; });
+            if (others.every(adtBlockEmpty)) { others.forEach(function (c) { b.removeChild(c); }); break; }
             carry.unshift(b.lastElementChild);
             b.removeChild(b.lastElementChild); moved++;
         }
