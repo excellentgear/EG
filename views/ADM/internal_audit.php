@@ -6874,6 +6874,9 @@ function clauseGroupSave($tr, gs){
         var c = CL[$tr.data('id')];
         if (c) { c.groups = gs; var keep = {}; gs.forEach(function(x){ keep[x] = (c.group_procs||{})[x] || []; }); c.group_procs = keep; }
         $tr.find('.clGrpChips').html(clauseGroupChips(gs, c));
+        /* 群組被移除時，還開著的程序書勾選面板要一併關掉，否則按「儲存」會對已移除的群組存檔而報錯 */
+        var $pn = $tr.find('.clGrpPanel');
+        if ($pn.length && gs.indexOf(String($pn.data('g'))) < 0) $pn.hide().empty().removeData('g');
         $tr.find('.clGrpAdd').html(clauseGroupOpts(gs));
         $tr.find('.cl-st').text('已儲存');
     }, 'json');
