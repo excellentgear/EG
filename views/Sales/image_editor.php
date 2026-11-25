@@ -2865,7 +2865,9 @@ function refreshStampSizeHint() {
 function applyStampSizeSuggestion(label) {
     stampSuggestLabel = label || '';
     const inp = document.getElementById('p-stamp-size');
-    if (inp) { inp.value = STAMP_SUGGEST_PX; inp.dispatchEvent(new Event('change')); }
+    /* 使用者自己存過蓋章大小（個人預設）就不再被框架建議值蓋掉；只有從沒設定過才帶建議值 */
+    const hasOwn = USER_PREFS.stampSize !== undefined && USER_PREFS.stampSize !== null && USER_PREFS.stampSize !== '';
+    if (inp && !hasOwn) { inp.value = STAMP_SUGGEST_PX; inp.dispatchEvent(new Event('change')); }
     refreshStampSizeHint();
 }
 function frameSizePx(code) {
@@ -2896,8 +2898,9 @@ function applyFrameFit(frameW, frameH, label) {
     zoomFit();
     pushState();
     applyStampSizeSuggestion(label);
+    const _ownStamp = USER_PREFS.stampSize !== undefined && USER_PREFS.stampSize !== null && USER_PREFS.stampSize !== '';
     toast('已縮放置中為' + (label ? '「' + label + '」' : '') + ' ' + frameW + '×' + frameH
-        + '；蓋章大小已帶入建議值 ' + STAMP_SUGGEST_PX + '（約 25mm）');
+        + (_ownStamp ? '；蓋章大小沿用你的個人設定' : '；蓋章大小已帶入建議值 ' + STAMP_SUGGEST_PX + '（約 25mm）'));
 }
 function applyFrameFitFromSelect() {
     const code = document.getElementById('frame-size').value;
@@ -9594,6 +9597,8 @@ PREF_FIELDS.forEach(([id]) => {
     if (el) el.addEventListener('change', saveUserPrefsDebounced);
 });
 applyUserPrefs();
+// 使用者親手改蓋章大小＝設定個人預設（程式帶入的建議值不算，所以只聽 input 不聽 change）
+document.getElementById('p-stamp-size').addEventListener('input', function () { USER_PREFS.stampSize = this.value; });
 
 /* ── 初始化 ── */
 resizeViewport();
