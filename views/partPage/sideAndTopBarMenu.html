@@ -705,6 +705,12 @@ window.addEventListener('load', function(){
                 }
                 return;
             }
+            if (refType === 'IA_CASE_NOTICE') {
+                // 內部稽核通知單已發出：純資訊型，新分頁直接顯示該張通知單的列印版（多數收件人沒有內稽頁權限）
+                window.open('../ADM/internal_audit.php?print_case=' + ($(this).data('refid') || 0));
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'MEETING_NOTICE_INFO') {
                 // 會議通知(告知應出席人員何時何地開會)：純資訊型，開通知單畫面看完整內容後直接標記已讀移除
                 window.open('../ADM/meeting_record.php?notice=' + ($(this).data('refid') || 0));

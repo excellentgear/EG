@@ -229,6 +229,8 @@ $roleLabel = ia_role_label($perms);
         .ia-form .with-due > .wd-due  { flex:0 0 200px; }
         .ia-form .with-due .wd-lab { font-size:12px; color:#6b5535; margin-bottom:3px; white-space:nowrap; }
         .ia-form label { margin:0; text-align:right; color:#6b5535; }
+        /* 稽核通知單跳窗不顯示淺灰提示字（容易被誤會是已填的內容） */
+        #caseMask input::placeholder, #caseMask textarea::placeholder { color:transparent !important; }
         .ia-form input[type=text], .ia-form input[type=date], .ia-form select, .ia-form textarea {
             width:100%; border:1px solid #D8BE93; border-radius:4px; padding:4px 8px; font-size:13px; color:#5b3a1e; background:#fff; }
         .ia-form textarea { min-height:64px; resize:vertical; line-height:1.6; }
@@ -1040,7 +1042,7 @@ $roleLabel = ia_role_label($perms);
                 <div><input type="text" id="cMeetStart" data-eg-hint="直接輸入，例 16:00（打 1600 或 16 也可以）" style="width:80px;"> ～
                      <input type="text" id="cMeetEnd" data-eg-hint="直接輸入，例 16:30" style="width:80px;">
                      <div class="err-msg" id="errCMeetTime"></div></div>
-                <label>地點</label><div class="full"><input type="text" id="cMeetPlace" placeholder="二樓會議室"></div>
+                <label>地點 <span style="color:#C4442D;">*</span></label><div class="full"><select id="cMeetPlace" data-eg-filter="輸入地點名稱篩選…"></select></div>
 <?php if ($perms['canAdmin']): ?>
                 <label>製表人</label>
                 <div><select id="cMaker" data-eg-filter="輸入姓名篩選…"></select></div>
@@ -1054,7 +1056,7 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-sec"><h5>受稽單位　<span class="lock-note">在最後一列按 ↓ 自動加一列</span>
 <?php if ($perms['canAdmin']): ?>
             <button id="btnCaseGroups" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #C4442D;color:#C4442D;border-radius:4px;background:#fff;cursor:pointer;" title="COP1~SP02 八大過程群組：每個群組選稽核日期，受稽單位自動帶入並標示稽核順序"><i class="fa fa-sitemap"></i> 重新帶入八大過程群組</button>
-            <button id="btnSaveEscortDef" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #b5762a;color:#8A5A2B;border-radius:4px;background:#fff;cursor:pointer;" title="把目前每個受稽單位選好的陪檢員存成預設，之後每次新增通知單自動帶入（只有內稽管理員存得了）"><i class="fa fa-save"></i> 存為各單位預設陪檢員</button>
+            <button id="btnAutoPeople" type="button" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #b5762a;color:#8A5A2B;border-radius:4px;background:#fff;cursor:pointer;" title="依稽核小組重新帶入每一列的稽核員（每列兩位、各列輪流錯開）與陪檢員（不與同列稽核員同一人），會覆蓋目前選的人"><i class="fa fa-users"></i> 更新稽核員／陪檢員</button>
 <?php endif; ?>
         </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
@@ -2683,7 +2685,9 @@ function applyCaseLock(c){
     /* 結案／取消結案（2026-09-22 使用者交辦）：
        草稿不給結案（還沒按「完成」＝還沒發出、核准審查都還沒簽）；已結案的只剩「取消結案」。 */
     var cSt = String((c||{}).status || '');
-    $('#btnCaseClose').toggle(!!CASE_ID && (cSt === 'issued' || cSt === 'executing'));
+    // 結案要等「結束會議」完成之後才出現（2026-11-24 使用者要求）
+    var endDone = !!((c||{}).end_meeting && String(c.end_meeting.status) === 'done');
+    $('#btnCaseClose').toggle(!!CASE_ID && (cSt === 'issued' || cSt === 'executing') && endDone);
     $('#btnCaseUnclose').toggle(!!CASE_ID && cSt === 'closed');
     var $noPw = $('#caseReopenNoPw');
     if (!$noPw.length) $noPw = $('<span id="caseReopenNoPw" style="font-size:12px;color:#a08356;margin-left:8px;"></span>')
@@ -2742,7 +2746,8 @@ function caseDoComplete(d){
                 if (!res.ok) { alert(res.error||'完成失敗'); return; }
                 alert('已完成（簽章／製表日期 '+dispDate(d)+'）' + (+res.auto_signed
                     ? ('，並已自動簽核：\n核准 '+(res.approver||'（未設定）')+'　審查 '+(res.reviewer||'（未設定）'))
-                    : '。\n（目前沒有開啟自動簽核，核准／審查兩格留白，請依紙本流程簽核）'));
+                    : '。\n（目前沒有開啟自動簽核，核准／審查兩格留白，請依紙本流程簽核）')
+                    + '\n\n已通知 ' + (res.notified||0) + ' 位稽核員／陪檢員，並在行事曆建立 ' + (res.cal_events||0) + ' 筆「會議」事件。');
                 loadCases(function(){ openCase(CASE_ID); });
             }, 'json');
 }
@@ -2808,7 +2813,7 @@ function openCase(id){
            查下來不是列印漏印，是那張通知單的 end_meet_place 本來就是空的——
            每開一張新的都要重打一次，忘了打就印出一張沒有地點的通知單。
            優先序：設定頁的「預設地點」→ 沒設就沿用**上一張通知單**的地點（多半就是同一間）。 */
-        $('#cMeetPlace').val(defaultMeetPlace());
+        casePlaceVal(defaultMeetPlace());
         $('#cRemark').val(defaultCaseRemark());
         $('#cTimeStep').val(60); $('#cTimeFrom,#cTimeTo').val('');
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
@@ -2820,7 +2825,7 @@ function openCase(id){
         // 使用者只要選日期與稽核員（2026-11-23 使用者要求）
         $.getJSON(API, {action:'pgroup_units'}, function(g){
             if (!g.ok || !(g.groups||[]).length || CASE_ID) return;
-            GRP_UNITS = g.groups; CASE_ROWS = buildGroupRows(g.groups, null); renderCaseRows();
+            GRP_UNITS = g.groups; CASE_ROWS = buildGroupRows(g.groups, null); autoFillPeople(); renderCaseRows();
             grpUnspecNotice(g.groups);
         });
         $('#btnCaseDelete').hide();
@@ -2845,7 +2850,7 @@ function openCaseRender(c){
         $('#cNotify').val(inputDate(c.notify_date)); $('#cFrom').val(inputDate(c.audit_from));
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
-        $('#cMeetPlace').val(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
+        casePlaceVal(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
         $('#cTimeStep').val(c.unit_minutes || 60);   // 每單位分鐘存在單據上，重開不會變回預設值
         $('#cAllAudited,#cAllDue').val('');
         $('#cMaker').html(makerOptions(c.maker_id, c.maker_name));
@@ -2883,6 +2888,7 @@ function caseFillAllDate(field, headSel){
     if (!v) { alert('請先在上方的日期欄選一個日期，或先填好其中一列'); $(headSel).focus(); return; }
     CASE_ROWS.forEach(function(r){ r[field] = v; });
     $(headSel).val(v);
+    if (field === 'audited_date' && $('#cTimeCascade').is(':checked')) iaRetimeByDate();
     renderCaseRows();
 }
 /* ---------- 受稽時間自動排（2026-09-17 使用者要求） ----------
@@ -2980,6 +2986,7 @@ function iaCascadeTimes(idx){
     if (cur === null) return;
     for (var i = idx + 1; i < CASE_ROWS.length; i++) {
         if (!caseRowHasContent(CASE_ROWS[i])) continue;   // 還沒填東西的空列不排
+        if ((CASE_ROWS[i].audited_date || '') !== (CASE_ROWS[idx].audited_date || '')) continue;   // 不同天的不順延
         cur = iaNextSlot(cur, step);
         CASE_ROWS[i].audited_time = iaM2T(cur);
     }
@@ -3103,35 +3110,38 @@ $(document).on('click', '#btnAllTime', function(){
     var rows = CASE_ROWS.filter(caseRowHasContent);
     if (!rows.length) { alert('目前沒有已填內容的受稽單位列，請先填好單位再按自動排'); return false; }
     var dur = iaTimeStep(), start = iaT2M(from);
-    var plan = iaPlanTimes(start, dur, rows.length);
-
+    /* 依受稽日期分天：每一天都從開始時間重新排（2026-11-24 使用者回報：不同天不該接著上一天的時間） */
+    var groups = {}, order = [];
+    rows.forEach(function(r){
+        var d = r.audited_date || '';
+        if (!groups[d]) { groups[d] = []; order.push(d); }
+        groups[d].push(r);
+    });
     /* 最後一個單位要在結束會議開始前 30 分鐘做完（2026-09-18 使用者要求）。
-       結束會議日期與受稽日期不同天時不受這一條限制。 */
-    var auditDate = '';
-    for (var i = 0; i < CASE_ROWS.length && !auditDate; i++) {
-        if (caseRowHasContent(CASE_ROWS[i]) && CASE_ROWS[i].audited_date) auditDate = CASE_ROWS[i].audited_date;
+       結束會議日期與受稽日期不同天時不受這一條限制；每一天各自檢查。 */
+    for (var gi = 0; gi < order.length; gi++) {
+        var g = groups[order[gi]], plan = iaPlanTimes(start, dur, g.length);
+        var lim = iaTimeLimit(order[gi]);
+        if (lim.limit !== null && plan.end > lim.limit) {
+            var sug = iaTimeSuggest(g.length, dur, start, lim.limit);
+            alert((order[gi] ? dispDate(order[gi]) + ' 這一天' : '') + '時間不夠：' + g.length + ' 個受稽單位、每個 ' + dur + ' 分鐘，'
+                + '從 ' + from + ' 開始會做到 ' + iaM2T(plan.end) + '（已扣掉午休 12:00~13:00），\n'
+                + '但必須在 ' + iaM2T(lim.limit) + ' 之前做完——' + lim.why + '。\n\n'
+                + (sug.length ? ('建議改成：\n' + sug.join('\n')) : '即使縮到每個單位 15 分鐘也排不完，請改成分兩天稽核，或把結束會議往後移。')
+                + '\n\n（時間沒有被更動，請調整後再按一次自動排）');
+            return false;
+        }
     }
-    var lim = iaTimeLimit(auditDate);
-    if (lim.limit !== null && plan.end > lim.limit) {
-        var sug = iaTimeSuggest(rows.length, dur, start, lim.limit);
-        alert('時間不夠：' + rows.length + ' 個受稽單位、每個 ' + dur + ' 分鐘，'
-            + '從 ' + from + ' 開始會做到 ' + iaM2T(plan.end) + '（已扣掉午休 12:00~13:00），\n'
-            + '但必須在 ' + iaM2T(lim.limit) + ' 之前做完——' + lim.why + '。\n\n'
-            + (sug.length ? ('建議改成：\n' + sug.join('\n')) : '即使縮到每個單位 15 分鐘也排不完，請改成分兩天稽核，或把結束會議往後移。')
-            + '\n\n（時間沒有被更動，請調整後再按一次自動排）');
-        return false;
-    }
-
-    var k = 0;
-    CASE_ROWS.forEach(function(r){
-        if (!caseRowHasContent(r)) return;
-        r.audited_time = iaM2T(plan.starts[k++]);
+    var lastEnd = 0;
+    order.forEach(function(d){
+        var plan = iaPlanTimes(start, dur, groups[d].length);
+        groups[d].forEach(function(r, k){ r.audited_time = iaM2T(plan.starts[k]); });
+        if (plan.end > lastEnd) lastEnd = plan.end;
     });
     renderCaseRows();
     iaTimeRecalc();
-    alert('已排好 ' + rows.length + ' 個單位：' + from + ' 起，每個單位 ' + dur + ' 分鐘，'
-        + '做到 ' + iaM2T(plan.end) + '（跳過午休 12:00~13:00）'
-        + (lim.limit !== null ? ('。\n最晚必須做完的時間是 ' + iaM2T(lim.limit) + '（' + lim.why + '），符合。') : '.'));
+    alert('已排好 ' + rows.length + ' 個單位（' + order.length + ' 天，每天都從 ' + from + ' 起），每個單位 ' + dur + ' 分鐘，'
+        + '最晚做到 ' + iaM2T(lastEnd) + '（跳過午休 12:00~13:00）。');
     return false;
 });
 $(document).on('click', '#btnAllAudited', function(){ caseFillAllDate('audited_date', '#cAllAudited'); return false; });
@@ -3164,18 +3174,131 @@ $(document).on('change', '#cFrom, #cNotify', function(){
    從來沒設定過時後端會回內建預設文字；管理員存成空白＝不自動帶入。 */
 /* 新增通知單時的預設會議地點：設定頁的值優先，沒設就抄上一張通知單的。
    CASES 是清單目前載入的通知單（依件號新→舊），取第一張有填地點的。 */
+/** 結束會議地點：共用地點選單（與會議紀錄、訪談記錄同一份），可就地新增 */
+function fillCasePlaces(){
+    var $s = $('#cMeetPlace'), cur = $s.val() || '', h = '<option value="">（請選擇）</option>', has = false;
+    (META.places||[]).forEach(function(p){ if (+p.is_active || p.name===cur) { h += '<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>'; if (p.name===cur) has = true; } });
+    if (cur && !has) h += '<option value="'+esc(cur)+'">'+esc(cur)+'</option>';
+    h += '<option value="__new">＋新增地點…</option>';
+    $s.html(h).val(cur);
+}
+function casePlaceVal(v){
+    v = v || ''; var $s = $('#cMeetPlace');
+    if (!$s.find('option').length) fillCasePlaces();
+    if (v && !$s.find('option').filter(function(){ return this.value===v; }).length) $s.find('option[value="__new"]').before('<option value="'+esc(v)+'">'+esc(v)+'</option>');
+    $s.val(v);
+}
+$(document).on('change', '#cMeetPlace', function(){
+    var $s = $(this); if ($s.val() !== '__new') return;
+    var n = $.trim(prompt('新地點名稱：') || '');
+    if (!n) { $s.val(''); return; }
+    $.post(API, {action:'place_add', name:n}, function(res){
+        if (!res.ok) { alert(res.error||'新增失敗'); $s.val(''); return; }
+        META.places = META.places || [];
+        if (!META.places.some(function(p){ return p.name===res.name; })) META.places.push({name:res.name, is_active:1, used:0}); else META.places.forEach(function(p){ if (p.name===res.name) p.is_active=1; });
+        fillCasePlaces(); casePlaceVal(res.name);
+    }, 'json');
+});
 function defaultMeetPlace(){
     var s = (META.settings && META.settings.ia_meeting_place) || '';
     if (String(s).trim()) return s;
-    var hit = '';
-    (CASES || []).forEach(function(c){ if (!hit && String(c.end_meet_place||'').trim()) hit = c.end_meet_place; });
-    return hit;
+    return '二廠會議室';     // 設定頁沒設時的預設（2026-11-24 使用者指定）
 }
 function defaultCaseRemark(){
     return String(((META.settings||{}).ia_case_remark_tpl) || '');
 }
 /* 稽核員／陪檢員可多位（2026-08-27）：CASE_ROWS 上存的是職務鍵陣列 auditor_keys／escort_keys */
 function newCaseRow(){ return {auditor_keys:[], escort_keys:[]}; }
+/** 稽核員／陪檢員自動帶入：只補「還是空的」欄位，依稽核期間所屬年度的稽核小組
+ *  （稽核組長也算稽核員；陪檢員與稽核員不可同一人；只帶目前資格名單內的人） */
+/** 某一個受稽單位（含其下轄部門）裡有資格當陪檢員的職務 */
+function escortCandsForUnit(k){
+    var ids = {}; ids[String(k)] = 1;
+    (META.units||[]).forEach(function(u){
+        if (String(u.key) === String(k)) (u.dept_ids||[u.key]).forEach(function(d){ ids[String(d)] = 1; });
+    });
+    return (META.escorts||[]).filter(function(p){
+        var ds = (p.dept_ids && p.dept_ids.length) ? p.dept_ids : [p.dept_id];
+        return ds.some(function(d){ return ids[String(d)]; });
+    });
+}
+function rowUnitKeys(r){ return (grpCodeOf(r) && r.dept_ids) ? r.dept_ids : (r.dept_id ? [r.dept_id] : []); }
+function autoFillPeople(force){
+    var y = String((($('#cFrom').val() || META.today || '') + '').substr(0, 4));
+    var tm = (META.team_members || {})[y] || [];
+    var okA = {};
+    (META.auditors||[]).forEach(function(p){ okA[p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)] = 1; });
+    var au = [], teamEs = {};
+    tm.forEach(function(m){
+        if ((m.role === 'leader' || m.role === 'auditor') && okA[m.post_key3]) au.push(m.post_key3);
+        else if (m.role === 'escort') teamEs[String(m.user_id)] = 1;
+    });
+    au = uniqKeys(au);
+    if (!au.length && !force) return 0;
+    if (!au.length) return -1;
+    var uid = function(x){ return String(x).split(':')[0]; };
+    var defs = unitEscortDefaults();
+    var n = 0, AUD_PER_ROW = 2, k = 0;
+    var rows = CASE_ROWS.filter(function(r){ return r && (force ? caseRowHasContent(r) : true); });
+    // ① 稽核員：每列兩位、各列輪流；某受稽單位「唯一的陪檢員人選」不拿來當稽核員（否則那個單位就沒有陪檢員了）
+    rows.forEach(function(r){
+        if (force || !(r.auditor_keys||[]).length) {
+            var sole = {};
+            rowUnitKeys(r).forEach(function(u){
+                var ids = {}; escortCandsForUnit(u).forEach(function(p){ ids[String(p.id)] = 1; });
+                var l = Object.keys(ids); if (l.length === 1) sole[l[0]] = 1;
+            });
+            var avail = au.filter(function(x){ return !sole[uid(x)]; });
+            if (avail.length < 1) avail = au;
+            var pick = [];
+            for (var j = 0; j < Math.min(AUD_PER_ROW, avail.length); j++) pick.push(avail[(k * AUD_PER_ROW + j) % avail.length]);
+            r.auditor_keys = uniqKeys(pick); n++;
+        }
+        k++;
+    });
+    // ② 陪檢員：每個受稽單位至少一位、取自該單位；不可是本列稽核員，也不可是同日同時間在別列當稽核員的人
+    rows.forEach(function(r){
+        var busy = {};
+        (r.auditor_keys||[]).forEach(function(x){ busy[uid(x)] = 1; });
+        CASE_ROWS.forEach(function(o){
+            if (o && o !== r && o.audited_date && o.audited_time && o.audited_date === r.audited_date && o.audited_time === r.audited_time)
+                (o.auditor_keys||[]).forEach(function(x){ busy[uid(x)] = 1; });
+        });
+        if (force || !(r.escort_keys||[]).length) {
+            var chosen = [], chosenU = {};
+            rowUnitKeys(r).forEach(function(u){
+                var cands = escortCandsForUnit(u).filter(function(p){ return !busy[String(p.id)]; });
+                if (!cands.length) return;
+                if (cands.some(function(p){ return chosenU[String(p.id)]; })) return;      // 已有人涵蓋這個單位
+                var dk = {}; (defs[u] || []).forEach(function(x){ dk[uid(x)] = 1; });
+                cands.sort(function(a, b){
+                    var sa = (dk[String(a.id)] ? 0 : 2) + (teamEs[String(a.id)] ? 0 : 1);
+                    var sb = (dk[String(b.id)] ? 0 : 2) + (teamEs[String(b.id)] ? 0 : 1);
+                    return sa - sb;
+                });
+                var p = cands[0];
+                chosen.push(p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)); chosenU[String(p.id)] = 1;
+            });
+            r.escort_keys = uniqKeys(chosen).slice(0, IA_PPL_MAX); n++;
+        }
+        r.escort_keys = (r.escort_keys||[]).filter(function(x){ return !busy[uid(x)]; });
+    });
+    return n;
+}
+/** 改了受稽日期後，同一天的列依順序從頭重排時間（每天各自從開始時間起算，午休跳過） */
+function iaRetimeByDate(){
+    var from = normTime($('#cTimeFrom').val()) || '09:00', start = iaT2M(from), dur = iaTimeStep();
+    var groups = {}, order = [];
+    CASE_ROWS.forEach(function(r){
+        if (!caseRowHasContent(r) || !r.audited_date) return;
+        if (!groups[r.audited_date]) { groups[r.audited_date] = []; order.push(r.audited_date); }
+        groups[r.audited_date].push(r);
+    });
+    order.forEach(function(d){
+        var plan = iaPlanTimes(start, dur, groups[d].length);
+        groups[d].forEach(function(r, k){ r.audited_time = iaM2T(plan.starts[k]); });
+    });
+}
 function peopleToKeys(list){
     return (list||[]).map(function(x){ return x.post_key3 || postKeyOf(x.user_id, x.dept_id, x.position_id); })
                      .filter(function(k){ return k && k.split(':')[0] !== '0'; });
@@ -3234,7 +3357,7 @@ function peopleCell(i, r, kind, cands, ro){
 
     var h = '<div class="ia-ppl">';
     mine.forEach(function(k){
-        var p = postByKey(k, cands, fb);
+        var p = postByKey(k, (cands||[]).concat(META.auditors||[], META.escorts||[]), fb);
         h += '<span class="ppl-chip" title="'+esc(p.label)+'"><span class="nm">'+esc(p.name)+'</span>'
            + (ro?'':'<span class="x" onclick="caseDelPerson('+i+',\''+kind+'\',\''+esc(k)+'\')">×</span>')+'</span>';
     });
@@ -3283,6 +3406,8 @@ $(document).on('change','.cr', function(){
         var n = normTime($(this).val());
         if (n) { CASE_ROWS[i].audited_time = n; iaCascadeTimes(i); renderCaseRows(); }
     }
+    // 改了受稽日期 → 同一天的列時間依順序重排（跟「改時間後面順延」同一個開關）
+    if (f === 'audited_date' && $('#cTimeCascade').is(':checked')) { iaRetimeByDate(); renderCaseRows(); }
     // 任何一列的時間或日期改動，表頭的結束時間與「來不來得及」都要跟著重算
     if (f === 'audited_time' || f === 'audited_date') iaTimeRecalc();
 });
@@ -3406,12 +3531,15 @@ function caseRequiredCheck(){
     var bad = [];
     $('#cDeptBody tr').each(function(n){
         var $tr = $(this), i = +$tr.data('i'), src = CASE_ROWS[i] || {}, miss = [];
-        [['start_process','稽核起始主過程'], ['dept_id','受稽單位'], ['audited_date','受稽日期'],
+        [['start_process','稽核起始主過程'], ['audited_date','受稽日期'],
          ['audited_time','時間']].forEach(function(f){
             var $el = $tr.find('.cr[data-f=' + f[0] + ']');
             if (String($el.val() || '').trim() === '') { $el.addClass('err'); miss.push(f[1]); }
         });
-        if (src.dept_ids && grpCodeOf(src) && !src.dept_ids.length) { $tr.find('td').eq(2).addClass('err-cell'); miss.push('受稽單位'); }
+        // 受稽單位：已加入的單位是標籤（src.dept_ids），「＋加入」下拉本身永遠是空的，不能拿它的值判斷
+        var hasDept = (src.dept_ids && src.dept_ids.length) || String(src.dept_id || '').trim() !== ''
+            || String($tr.find('.cr[data-f=dept_id]').val() || '').trim() !== '';
+        if (!hasDept) { $tr.find('td').eq(2).addClass('err-cell'); miss.push('受稽單位'); }
         if (!(src.auditor_keys || []).length) { $tr.find('td').eq(3).addClass('err-cell'); miss.push('稽核員'); }
         if (!(src.escort_keys  || []).length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員'); }
         else {
@@ -3421,6 +3549,8 @@ function caseRequiredCheck(){
         }
         if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
     });
+    if (!$('#cMeetPlace').val() || $('#cMeetPlace').val() === '__new') { $('#cMeetPlace').addClass('err'); bad.unshift('結束會議地點還沒選'); }
+    else $('#cMeetPlace').removeClass('err');
     var gm = grpCompleteMsg(); if (gm) bad.push(gm);
     var over = (typeof caseTimeOverrun === 'function') ? caseTimeOverrun() : '';
     var few = auditorShortMsg();
@@ -3486,7 +3616,7 @@ function renderCaseMeeting(c){
                           + ' <span class="ia-op" onclick="unlinkMeeting(\''+k[0]+'\')">解除連結</span>';
         } else {
             h += '<span style="color:#a08356;">尚未建立</span>';
-            if (admin) h += ' <span class="ia-op" onclick="createMeeting(\''+k[0]+'\')"><i class="fa fa-plus"></i> 自動建立並開啟</span>';
+            if (admin) h += ' <span class="ia-op ia-op-ro" onclick="createMeeting(\''+k[0]+'\')"><i class="fa fa-plus"></i> 自動建立並開啟</span>';
         }
         h += '</div>';
     });
@@ -7031,6 +7161,15 @@ $('#btnPageHelp').on('click', function(){ loadRoleHelp(); openMask('helpUseMask'
 $(window).on('scroll', function(){ $('#btnTop').toggle($(window).scrollTop() > 300); });
 $('#btnTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 200); });
 $(function(){
+    /* 通知上的「稽核通知單」深連結：不載入整個內稽頁（多數收件人沒有內稽權限），
+       直接在本分頁顯示通知單列印版。權限由後端 case_get 判定（收過該單通知／組長／稽核員／陪檢員）。 */
+    var pq = new URLSearchParams(location.search);
+    if (pq.get('print_case')) {
+        META = {today: new Date().toISOString().slice(0,10)};
+        $('body').html('<div style="padding:30px;font-size:15px;">載入稽核通知單中…</div>');
+        printCase(+pq.get('print_case'), true);
+        return;
+    }
     loadMeta(function(){
         var q = new URLSearchParams(location.search);
         if (q.get('nc_id')) {
@@ -7120,8 +7259,11 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape, opt){
             + '.stamp-inline svg.car-stamp{width:70px !important;height:70px !important;vertical-align:middle;}'
             + '.ia-note{font-size:11px;line-height:1.7;white-space:pre-wrap;margin-top:6px;}'
             + (extraCss||'');
-    var w = window.open('', '_blank');
+    /* opt.inplace：深連結（通知上開的新分頁）沒有使用者手勢，window.open 會被彈出視窗封鎖，
+       所以直接在本分頁寫入列印版（整頁換成列印版面） */
+    var w = opt.inplace ? window : window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗才能列印'); return; }
+    if (opt.inplace) w.document.open();
     // 只有真的超過一頁才注入頁碼（單頁表單印「第1頁／共1頁」很醜，紙本也沒有）
     // 可印高度＝紙張高 − 上下 @page 留白 − 上下 body padding（換算成 px @96dpi）
     var onePage = ((landscape?210:297) - MGT - MG - PADT - PAD) * 96 / 25.4;
@@ -7182,6 +7324,22 @@ function personLines(names, maxW){
     var size = Math.max(8, Math.min(12, Math.floor(maxW / n * 10) / 10));
     return ns.map(function(t){
         return '<div style="white-space:nowrap;font-size:'+size+'px;line-height:1.5;">'+esc(t)+'</div>';
+    }).join('');
+}
+/** 兩個一組排成一行（受稽單位、陪檢員欄用）：字級由最長的那一行回推（8~12px） */
+function pairLines(names, maxW){
+    var ns = (names||[]).map(function(t){ return String(t||'').trim(); }).filter(function(t){ return t !== ''; });
+    if (!ns.length) return '';
+    var rows = [];
+    for (var i = 0; i < ns.length; i += 2) rows.push(ns.slice(i, i + 2));
+    var n = 1;
+    rows.forEach(function(r){
+        var len = 0; r.forEach(function(t, k){ len += t.replace(/\s/g,'').length + (/\s/.test(t) ? 0.5 : 0) + (k ? 1 : 0); });
+        n = Math.max(n, len);
+    });
+    var size = Math.max(8, Math.min(12, Math.floor((maxW || 240) / n * 10) / 10));
+    return rows.map(function(r){
+        return '<div style="white-space:nowrap;font-size:'+size+'px;line-height:1.5;">'+r.map(esc).join('　')+'</div>';
     }).join('');
 }
 /** 一列受稽單位的稽核員 → 多列「部門 姓名」（沒有人員清單時退回舊的姓名字串） */
@@ -7297,7 +7455,7 @@ $('#btnPlanPrint').on('click', function(){
 });
 
 /* ---------- ② 稽核通知單 2-GM-06-02 ---------- */
-function printCase(id){
+function printCase(id, inplace){
     $.getJSON(API, {action:'case_get', case_id:id}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         var c = res.row;
@@ -7323,15 +7481,23 @@ function printCase(id){
                     return String(x.dept_name ? (x.dept_name + ' ' + x.user_name) : (x.user_name||''));
                 }).filter(function(x){ return x.trim()!==''; });
                 if (!ns.length && fallback) ns = String(fallback).split(/[、／\/]/).filter(function(x){ return x!==''; });
-                // 欄寬 140px 扣掉左右 padding ≈ 128px；不可寫成 ns.map(personLines) 之類，
+                // 欄寬 150px 扣掉左右 padding ≈ 138px；不可寫成 ns.map(personLines) 之類，
                 // map 會把「索引」當成第二個參數傳進去（原本的 bug：第二個人以後都變 8px）
-                return personLines(ns, 128);
+                return personLines(ns, 138);
+            };
+            // 陪檢員欄較寬（250px），兩個人一行
+            var nameLines2 = function(list, fallback){
+                var ns = (list||[]).map(function(x){
+                    return String(x.dept_name ? (x.dept_name + ' ' + x.user_name) : (x.user_name||''));
+                }).filter(function(x){ return x.trim()!==''; });
+                if (!ns.length && fallback) ns = String(fallback).split(/[、／\/]/).filter(function(x){ return x!==''; });
+                return pairLines(ns, 236);
             };
             // 2026-08-27 使用者要求：標題改在上面（與畫面上的受稽單位列表同一種讀法），
             // 一個受稽單位一列；<thead> 讓表頭跨頁自然重複（列印分頁交給瀏覽器引擎）
             h += '<table class="ia-p" style="margin-top:6px;"><thead><tr>'
-              + '<th>稽核起始主過程</th><th style="width:140px;">受稽單位</th>'
-              + '<th style="width:140px;">稽核員</th><th style="width:140px;">陪檢員</th>'
+              + '<th style="width:62px;">稽核起始主過程</th><th>受稽單位</th>'
+              + '<th style="width:150px;">稽核員</th><th style="width:250px;">陪檢員</th>'
               + '</tr></thead><tbody>';
             // 2026-11-24 使用者要求：起始主過程相同的列合併成一列，受稽單位／稽核員／陪檢員也各自合併（去重）
             var pGroups = [], pIdx = {};
@@ -7355,9 +7521,9 @@ function printCase(id){
             });
             pGroups.forEach(function(g){
                 h += '<tr><td class="l" style="vertical-align:middle;font-size:15px;font-weight:bold;">'+esc(g.sp)+'</td>'
-                   + '<td>'+g.units.map(esc).join('<br>')+'</td>'
+                   + '<td>'+pairLines(g.units, 210)+'</td>'
                    + '<td>'+nameLines(g.aud, g.audFb.join('、'))+'</td>'
-                   + '<td>'+nameLines(g.esc, g.escFb.join('、'))+'</td></tr>';
+                   + '<td>'+nameLines2(g.esc, g.escFb.join('、'))+'</td></tr>';
             });
             if (!ds.length) h += '<tr><td style="height:22px;">&nbsp;</td><td></td><td></td><td></td></tr>';
             h += '</tbody></table>';
@@ -7381,7 +7547,7 @@ function printCase(id){
                 {label:'製表', html: stampHtml(m, c.maker_id ? sp(c.maker_id, c.maker_name, caseDate) : null, caseDate)}
             ]);
             logPrint('稽核通知單 '+(c.case_no||('#'+id)), 'ia_case', id);
-            iaPrintWindow('稽核通知單 '+(c.case_no||''), h, '', m.doc_no, false);
+            iaPrintWindow('稽核通知單 '+(c.case_no||''), h, '', m.doc_no, false, inplace ? {inplace:true} : undefined);
         }, [{id:c.approver_id, date:caseD}, {id:c.reviewer_id, date:caseD}, {id:c.maker_id, date:caseD}]);
     });
 }
@@ -8045,8 +8211,12 @@ function renderTeam(){
        同一個人本來就會用不同職務各掛一筆：何沐桐主職技術課工程師、兼生管組組長，
        資格名單把「技術課 工程師」單獨指定成陪檢員（他負責技術課的資料），那是兩個身分、兩筆。
        原本按人去重＝他只要先以組長身分進了小組，技術課工程師那一筆連選項都看不到。 */
+    var addRole = $('#teamAddRole').val() || 'auditor';
     var used = {};
-    TEAM.members.forEach(function(m){ used[String(m.post_key3)] = 1; });
+    TEAM.members.forEach(function(m){
+        // 稽核組長與稽核員視為同一類；陪檢員另算——同一個職務可同時是稽核員與陪檢員
+        if ((m.role === 'escort') === (addRole === 'escort')) used[String(m.post_key3)] = 1;
+    });
     var oh = '<option value="">（請選要加入的人員職務）</option>';
     TEAM.candidates.forEach(function(p){
         if (used[String(p.post_key3)]) return;
@@ -8091,6 +8261,7 @@ $(document).on('change', '.tmr', function(){
     if ($(this).data('f') === 'role') renderTeam();
 });
 function teamDel(i){ TEAM.members.splice(i,1); TEAM._dirty = true; renderTeam(); }
+$(document).on('change', '#teamAddRole', function(){ renderTeam(); });
 $('#btnTeamAdd').on('click', function(){
     var key = $('#teamAddPost').val();
     if (!key) { alert('請先選要加入的人員職務'); return; }
@@ -8644,6 +8815,13 @@ function grpDayOpts(sel){
     grpDays().forEach(function(d){ h += '<option value="'+d+'"'+(sel===d?' selected':'')+'>'+esc(dispDate(d))+'</option>'; });
     return h;
 }
+$('#btnAutoPeople').on('click', function(){
+    var n = autoFillPeople(true);
+    if (n < 0) { alert('這個年度還沒有稽核小組（或小組成員不在資格名單內），請先到「稽核小組」建立'); return false; }
+    renderCaseRows(); checkEscortConflict();
+    iaToast('已依稽核小組更新 ' + CASE_ROWS.filter(caseRowHasContent).length + ' 列的稽核員／陪檢員', 4000);
+    return false;
+});
 $('#btnCaseGroups').on('click', function(){
     if (!$('#cFrom').val()) { alert('請先填上面的「稽核期間」起日，日期只能選期間內的日子'); return; }
     $.getJSON(API, {action:'pgroup_units'}, function(res){
@@ -8671,13 +8849,16 @@ $('#btnGrpAssignOk').on('click', function(){
         if (!d) miss.push(c); else pick[c] = d;
     });
     if (miss.length) { $('#errGrpAssign').addClass('on').text('以下群組還沒選稽核日期（全部都要稽核）：' + miss.join('、')); return; }
-    // 原本沒填內容的空列先清掉；已經有填的列保留在最後，不覆蓋使用者的資料
+    // 現有的主過程列一律清掉（以重新帶入的八大群組為準）；沒有主過程但有填內容的列保留在最後
     var keep = CASE_ROWS.filter(function(r){
-        return String(r.start_process||'').trim() !== '' || r.dept_id || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
+        if (String(r.start_process||'').trim() !== '') return false;
+        return r.dept_id || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
             || r.audited_date || r.audited_time || r.improve_due;
     });
     var rows = buildGroupRows(GRP_UNITS, pick);
     CASE_ROWS = rows.concat(keep);
+    if ($('#cTimeCascade').is(':checked')) iaRetimeByDate();
+    autoFillPeople(true);
     renderCaseRows();
     closeMask('grpAssignMask');
     iaToast('已依 '+GRP_UNITS.length+' 個過程群組帶入 '+rows.length+' 列受稽單位', 4000);

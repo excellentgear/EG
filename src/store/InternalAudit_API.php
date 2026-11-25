@@ -17,6 +17,7 @@ include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/internal_audit_lib.php';
 include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';
 include_once $document_root . '/EGsystem/src/common/print_log_lib.php';
+include_once $document_root . '/EGsystem/src/common/place_lib.php';
 // 資料稽核 → IA 單的串接要用到檢核項目清單與「稽核對象」綁定（dqa_trace_items／dqa_scope_docs）
 include_once $document_root . '/EGsystem/src/common/data_audit_lib.php';
 
@@ -93,6 +94,31 @@ function iaCandHas(array $list, int $uid): bool
 }
 
 
+/** 這個人是否收過任何一則「稽核通知單已發出」通知 */
+function iaHasCaseNotice(PDO $db, int $uid): bool
+{
+    $st = $db->prepare("SELECT 1 FROM live_event e JOIN live_event_target t ON t.live_event_id=e.id
+                         WHERE e.ref_type='IA_CASE_NOTICE' AND t.target_type='user' AND t.target_id=? LIMIT 1");
+    $st->execute([$uid]);
+    return (bool)$st->fetchColumn();
+}
+/** 這個人與這張稽核通知單有關（收過該單通知／稽核組長／稽核員／陪檢員） */
+function iaCaseRelated(PDO $db, int $uid, int $cid): bool
+{
+    if ($uid <= 0 || $cid <= 0) return false;
+    $q = [
+        "SELECT 1 FROM live_event e JOIN live_event_target t ON t.live_event_id=e.id
+          WHERE e.ref_type='IA_CASE_NOTICE' AND e.ref_id=? AND t.target_type='user' AND t.target_id=? LIMIT 1",
+        "SELECT 1 FROM ia_case WHERE case_id=? AND leader_id=? LIMIT 1",
+        "SELECT 1 FROM ia_case_dept_person WHERE case_id=? AND user_id=? LIMIT 1",
+    ];
+    foreach ($q as $sql) {
+        try { $st = $db->prepare($sql); $st->execute([$cid, $uid]); if ($st->fetchColumn()) return true; }
+        catch (Throwable $e) {}
+    }
+    return false;
+}
+
 /**
  * 受稽單位那一列的稽核員／陪檢員職務鍵清單（2026-08-27 起可多位）。
  * 新前端送 auditor_keys / escort_keys（陣列或 JSON 字串），
@@ -142,6 +168,8 @@ switch ($action) {
 
 /* ============================ meta ============================ */
 case 'meta': {
+    try { eg_place_ensure($db); } catch (Throwable $e) {}
+    $placesList = []; try { $placesList = eg_place_list($db); } catch (Throwable $e) {}
     $set   = ia_settings($db);
     $depts = [];
     try { $depts = $db->query("SELECT id, name, parent_id, level FROM department ORDER BY sort_order, id")
@@ -200,7 +228,16 @@ case 'meta': {
         'escorts'   => ia_qualified_posts($db, 'escort'),
         'qualify_kinds' => IA_QUALIFY_KINDS,
         // 稽核小組：哪些年度已經建過（建通知單前先提醒，會議紀錄也靠它帶與會人員）
+        'places'      => $placesList,
         'team_years'  => ia_team_years($db),
+        // 各年度小組成員（新增通知單時自動帶入稽核員／陪檢員用，只取在職者）
+        'team_members' => (function () use ($db) {
+            $o = [];
+            foreach (ia_team_years($db) as $y) {
+                $o[(string)$y] = array_values(array_filter(ia_team_get($db, (int)$y), function ($m) { return empty($m['missing']); }));
+            }
+            return $o;
+        })(),
         'team_roles'  => IA_TEAM_ROLES,
         // 稽核範本：填通知單時一列一列帶入（含已算好的候選人員）
         'templates' => ia_process_templates($db),
@@ -545,8 +582,9 @@ case 'case_list': {
 }
 
 case 'case_get': {
-    iaReqView($perms);
     $cid = (int)($_GET['case_id'] ?? 0);
+    // 沒有內稽檢視權的人：只要是這張通知單的稽核員／陪檢員／組長，或收到它的通知，就可以看（通知上直接開列印版用）
+    if (!$perms['canView'] && !iaCaseRelated($db, $uid, $cid)) jerr('無檢視權限', 403);
     $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
     $st->execute([$cid]);
     $c = $st->fetch(PDO::FETCH_ASSOC);
@@ -848,6 +886,11 @@ foreach ($depts as $di => $d) {
 
 /* 完成稽核通知單（2026-09-18 使用者要求）：填完按一次，之後不可修改；
    **完成之後才會送審核**——開了自動簽核就在這一刻把核准／審查兩格簽完。 */
+/* 共用地點選單（與會議紀錄、訪談記錄同一份）：填單的人可新增一個 */
+case 'place_add': {
+    iaReqAdmin($perms);
+    try { jout(['name'=>eg_place_add($db, (string)($_POST['name'] ?? ''))]); } catch (RuntimeException $e) { jerr($e->getMessage()); }
+}
 case 'case_complete': {
     iaReqAdmin($perms);
     $cid = (int)($_POST['case_id'] ?? 0);
@@ -905,6 +948,18 @@ case 'case_status': {
        結案等於跳過整個流程。前端不給按、這裡同規則再擋一次（鐵律8）。 */
     if ((string)$c['status'] === 'draft' && in_array($to, ['executing', 'closed'], true)) {
         jerr('這張通知單還是草稿，請先按「完成」把它發出，才能標記為執行中／結案');
+    }
+    // 結案要等結束會議完成（會議紀錄狀態 done）——前端不給按、這裡同規則再擋一次（鐵律8）
+    if ($to === 'closed' && (string)$c['status'] !== 'closed') {
+        $meetOk = false;
+        if ((int)($c['end_meeting_id'] ?? 0)) {
+            try {
+                $mq = $db->prepare("SELECT status FROM meeting_record WHERE meeting_id=?");
+                $mq->execute([(int)$c['end_meeting_id']]);
+                $meetOk = ((string)$mq->fetchColumn() === 'done');
+            } catch (Throwable $e) {}
+        }
+        if (!$meetOk) jerr('結束會議還沒完成（會議紀錄要送出完成），完成後才能結案');
     }
     // 「實際實施」＝執行中或已結案；年度計劃表的◎就是看這個旗標
     $executed = in_array($to, ['executing', 'closed'], true) ? 1 : 0;
@@ -1854,7 +1909,8 @@ case 'clause_group_save': {
    （ai-rules/22：不是現況），前端拿到後再交給 eg_stamp.js。
    收在後端做的理由：職務回推規則只有一份（ia_identity_asof），前端不該自己再猜一次。 */
 case 'identity_asof': {
-    iaReqView($perms);
+    // 通知上開列印版的人沒有檢視權也要能解析圖章職稱；此處只回「人名→當時部門職稱」，且須至少收過一則稽核通知單通知
+    if (!$perms['canView'] && !iaHasCaseNotice($db, $uid)) jerr('無檢視權限', 403);
     $req = json_decode((string)($_GET['people'] ?? $_POST['people'] ?? '[]'), true);
     if (!is_array($req)) $req = [];
     $out = [];
