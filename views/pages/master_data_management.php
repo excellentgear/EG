@@ -19317,7 +19317,7 @@ function renderCustomersTable(rows, total, pg, pages) {
                 r.industries.forEach(function(i){
                     var tip = i.industry_note ? ' title="'+escAttr(i.industry_note)+'"' : '';
                     indHtml += '<span'+tip+' style="display:inline-block;background:#e8f5f2;color:var(--accent);border-radius:6px;padding:0 5px;font-size:10px;font-weight:600;margin:1px;cursor:default;">'+escHtml(i.industry_name||i)+'</span>';
-                    if (i.industry_note) indHtml += '<small style="color:#aaa;font-size:10px;display:block;margin-left:2px;">'+escHtml(i.industry_note.substring(0,20))+(i.industry_note.length>20?'…':'')+'</small>';
+                    if (i.industry_note) indHtml += '<small style="color:#aaa;font-size:10px;display:block;margin-left:2px;">'+escHtml(i.industry_note)+'</small>';
                 });
             } else { indHtml = '<span style="color:#ddd;font-size:11px;">—</span>'; }
             html += '<tr>';
@@ -19334,16 +19334,12 @@ function renderCustomersTable(rows, total, pg, pages) {
             html += '<td style="white-space:nowrap;">'+_salesHtml+'</td>';
             html += '<td style="color:#555;white-space:nowrap;">'+(escHtml(r.customer_tel)||'<span style="color:#ddd;">—</span>')+'</td>';
             var _addr = r.customer_address || '';
-            var _addrShort = _truncAddr(_addr);
             var _addrCell = _addr
-                ? '<span style="cursor:pointer;color:#555;border-bottom:1px dashed #bbb;" onclick="showAddrPopup(\''+escAttr(_addr)+'\')" title="點擊查看完整地址">'+escHtml(_addrShort)+'</span>'
+                ? '<span style="color:#555;">'+escHtml(_addr)+'</span>'
                 : '<span style="color:#ddd;">—</span>';
-            html += '<td style="white-space:nowrap;">'+_addrCell+'</td>';
+            html += '<td style="min-width:170px;white-space:normal;word-break:break-word;">'+_addrCell+'</td>';
             var _sreq = r.shipping_req || (r.shipping_req_none == 1 ? '無特殊要求' : '');
-            var _sreqTrunc = _sreq.length > 18;
-            var _sreqShort = _sreqTrunc ? _sreq.substring(0, 18) + '…' : _sreq;
-            var _sreqClick = _sreqTrunc ? ' style="font-size:11px;color:#555;cursor:pointer;border-bottom:1px dashed #bbb;" onclick="showTextPopup(\'出貨要求\',\''+escAttr(_sreq)+'\')"' : ' style="font-size:11px;color:#555;"';
-            html += '<td'+_sreqClick+'>'+(_sreqShort ? escHtml(_sreqShort) : '<span style="color:#ddd;">—</span>')+'</td>';
+            html += '<td style="font-size:11px;color:#555;min-width:150px;white-space:pre-wrap;word-break:break-word;">'+(_sreq ? escHtml(_sreq) : '<span style="color:#ddd;">—</span>')+'</td>';
             html += '<td style="white-space:nowrap;">'+escHtml(settle)+'</td>';
             html += '<td style="text-align:center;">'+badge+'</td>';
             if (CAN_SEE_DESIGN) {
@@ -19354,7 +19350,7 @@ function renderCustomersTable(rows, total, pg, pages) {
                     if (dn.has_images) dnExtra += '<i class="fa fa-picture-o" style="color:#3498db;margin-right:3px;" title="含圖片"></i>';
                     if (dn.count > 1)  dnExtra += '<span style="font-size:10px;color:#aaa;">共'+dn.count+'則</span>';
                     html += '<td style="font-size:11px;color:#555;max-width:160px;cursor:pointer;" onclick="openCustDesignModal(\''+escAttr(r.customer_id)+'\',\''+escAttr(r.customer)+'\')">';
-                    html += '<div style="display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;white-space:pre-wrap;word-break:break-word;">'+escHtml(dn.first_text)+'</div>';
+                    html += '<div style="white-space:pre-wrap;word-break:break-word;">'+escHtml(dn.first_text)+'</div>';
                     html += '<div style="display:flex;align-items:center;gap:4px;margin-top:2px;">'+dnExtra+(dnHasMore?'<span style="color:#3498db;font-size:10px;font-weight:700;">＋</span>':'')+'</div>';
                     html += '</td>';
                 } else {
