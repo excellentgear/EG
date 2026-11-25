@@ -283,7 +283,8 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
         <div class="cv-row">
             <?php cv_field('結帳模式', $cvSettleMap[$cv['settlement_mode']] ?? $cv['settlement_mode']);
                   cv_field('固定結帳日', $cv['settlement_day']);
-                  cv_field('月結天數', $cv['net_days']);
+                  cv_field(($cv['net_unit'] ?? '') === 'months' ? '月結方式' : '月結天數',
+                           ($cv['net_unit'] ?? '') === 'months' ? ('次月結 ' . (int)($cv['net_months'] ?? 0) . ' 個月') : $cv['net_days']);
                   cv_field('接受扣%', !empty($cv['allow_deduct']) ? '是' : '否'); ?>
         </div>
         <div class="cv-row">
@@ -298,8 +299,12 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
         </div>
         <div class="cv-sec">報價 / 收款方式</div>
         <div class="cv-row">
-            <?php cv_field('報價方式', $cv['quote_method']); cv_field('收款方式', $cv['payment_method']); ?>
+            <?php cv_field('報價方式', $cv['quote_method']); cv_field('收款方式', !empty($cv['payment_methods']) ? str_replace(',', '、', $cv['payment_methods']) : $cv['payment_method']); ?>
         </div>
+        <div class="cv-row">
+            <?php cv_field('發票收件人', $cv['invoice_recipient'] ?? ''); cv_field('發票收件部門', $cv['invoice_dept'] ?? ''); ?>
+        </div>
+        <div class="cv-row"><?php cv_field('帳務備註', $cv['billing_note'], true); ?></div>
         <div class="cv-row">
             <?php cv_field('已確認付款條件', !empty($cv['confirmed_payment']) ? '是' : '否'); ?>
         </div>
@@ -311,7 +316,7 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
 
     <div class="cv-pane" id="cv-contacts">
         <?php if ($cvContacts): ?>
-        <table class="cv-tbl"><thead><tr><th>主要</th><th>姓名</th><th>部門</th><th>職稱</th><th>分機</th><th>手機</th><th>Email</th><th>備註</th></tr></thead><tbody>
+        <table class="cv-tbl"><thead><tr><th>主要</th><th>姓名</th><th>部門</th><th>職稱</th><th>分機</th><th>手機</th><th>Email</th><th>備註</th><th>會計</th></tr></thead><tbody>
         <?php foreach ($cvContacts as $c): ?>
             <tr>
                 <td><?= !empty($c['is_primary']) ? '★' : '' ?></td>
@@ -322,6 +327,7 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
                 <td><?=safe_html($c['mobile'])?></td>
                 <td><?=safe_html($c['email'])?></td>
                 <td><?=safe_html($c['note'])?></td>
+                <td><?= !empty($c['is_accounting']) ? '會計' : '' ?></td>
             </tr>
         <?php endforeach; ?>
         </tbody></table>
@@ -329,9 +335,8 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
     </div>
 
     <div class="cv-pane" id="cv-notes">
-        <div class="cv-row"><?php cv_field('出貨要求', $cv['shipping_req'], true); ?></div>
+        <div class="cv-row"><?php cv_field('出貨要求', !empty($cv['shipping_req_none']) ? '無特殊要求' : $cv['shipping_req'], true); ?></div>
         <div class="cv-row"><?php cv_field('電子發票 Email', $cv['invoice_email'], true); ?></div>
-        <div class="cv-row"><?php cv_field('帳務備註', $cv['billing_note'], true); ?></div>
         <div class="cv-row"><?php cv_field('一般備註', $cv['general_note'], true); ?></div>
     </div>
 
@@ -3915,7 +3920,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             // 收款方式篩選
             $cf_pm = trim($_POST['filter_payment_method'] ?? '');
-            if ($cf_pm !== '') { $where .= " AND payment_method = :cf_pm"; $params[':cf_pm'] = $cf_pm; }
+            if ($cf_pm !== '') { eg_party_ensure_schema($pdo); $where .= " AND (payment_method = :cf_pm OR FIND_IN_SET(:cf_pm2, payment_methods))"; $params[':cf_pm'] = $cf_pm; $params[':cf_pm2'] = $cf_pm; }
             // 結帳模式篩選
             $cf_sm = trim($_POST['filter_settlement_mode'] ?? '');
             $cf_sd = intval($_POST['filter_settlement_day'] ?? 0);
@@ -3984,8 +3989,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // 地址類別（客戶／廠商「其他地址」共用）：設定入口＝字典設定權限（$can_dict_edit）；被使用的類別不可改名／刪除
+    if (in_array($_POST['action'], ['party_addr_type_save', 'party_addr_type_delete'], true)) {
+        try {
+            if (!$can_dict_edit) throw new Exception('無設定權限（需字典設定權限）');
+            eg_party_ensure_schema($pdo);
+            if ($_POST['action'] === 'party_addr_type_save') {
+                $res = eg_party_addr_type_save($pdo, intval($_POST['type_id'] ?? 0), (string)($_POST['type_name'] ?? ''), _get_operator($pdo, $uid));
+            } else {
+                $res = eg_party_addr_type_delete($pdo, intval($_POST['type_id'] ?? 0));
+            }
+            echo json_encode(['success' => $res['ok'], 'message' => $res['msg'], 'addr_types' => eg_party_addr_types($pdo)]);
+        } catch (Throwable $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'get_customer') {
         try {
+            eg_party_ensure_schema($pdo);   // 確保新欄位已建立，SELECT * 才拿得到
             $cid = trim($_POST['customer_id']);
             $stmt = $pdo->prepare("SELECT * FROM customer_list WHERE customer_id=?");
             $stmt->execute([$cid]);
@@ -4090,10 +4111,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $net_days     = $old_settle_block['net_days'] ?? null;
                 $allow_deduct = intval($old_settle_block['allow_deduct'] ?? 0);
             }
+            // 月結方式：依天數（原本）或「次月結 N 個月」。選月數時 net_days 同步存 月數×30，其他讀 net_days 的程式不受影響
+            $net_unit = null; $net_months = null;   // null＝不更新這兩欄
+            if ($canSettle && array_key_exists('net_unit', $_POST)) {
+                if (($_POST['net_unit'] ?? '') === 'months') {
+                    $net_months = intval($_POST['net_months'] ?? 0);
+                    if ($net_months < 1 || $net_months > 24) throw new Exception('次月結請輸入 1～24 個月');
+                    $net_unit = 'months'; $net_days = $net_months * 30;
+                } else { $net_unit = 'days'; $net_months = null; }
+            }
             $quote_method    = $canQuoteMeth ? (trim($_POST['quote_method'] ?? 'FOB') ?: 'FOB')
                               : ($is_new ? 'FOB' : ($old_settle_block['quote_method'] ?? 'FOB'));
-            $payment_method  = $canPayterm ? trim($_POST['payment_method'] ?? '匯款')
-                              : ($is_new ? '匯款' : ($old_settle_block['payment_method'] ?? '匯款'));
+            // 收款方式可多選（含「附回郵」）：payment_methods 存完整清單；payment_method 仍存第一個實際收款方式，
+            // 讓其他讀它的舊程式（對帳、篩選、列表）照常運作。舊版前端只送 payment_method 時沿用舊行為。
+            $pmAllowed = ['匯款', '支票', '現金', '信用狀', '附回郵'];
+            $payment_methods = null;   // null＝不更新 payment_methods 欄位
+            if ($canPayterm && array_key_exists('payment_methods', $_POST)) {
+                $payment_methods = [];
+                foreach (explode(',', (string)$_POST['payment_methods']) as $pmx) {
+                    $pmx = trim($pmx);
+                    if (in_array($pmx, $pmAllowed, true) && !in_array($pmx, $payment_methods, true)) $payment_methods[] = $pmx;
+                }
+                $payment_method = '';
+                foreach ($payment_methods as $pmx) { if ($pmx !== '附回郵') { $payment_method = $pmx; break; } }
+            } else {
+                $payment_method  = $canPayterm ? trim($_POST['payment_method'] ?? '匯款')
+                                  : ($is_new ? '匯款' : ($old_settle_block['payment_method'] ?? '匯款'));
+            }
             if ($canBank) {
                 $bank_name    = trim($_POST['bank_name'] ?? '');
                 $bank_branch  = trim($_POST['bank_branch'] ?? '');
@@ -4107,6 +4151,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             $billing_contact = trim($_POST['billing_contact'] ?? '');
             $shipping_req    = trim($_POST['shipping_req'] ?? '');
+            // 出貨要求勾「無特殊要求」＝明確確認沒有要求（與「還沒填」不同）；勾了就不存文字
+            $shipping_req_none = array_key_exists('shipping_req_none', $_POST) ? (intval($_POST['shipping_req_none']) ? 1 : 0) : null;
+            if ($shipping_req_none === 1) $shipping_req = '';
             $invoice_email   = trim($_POST['invoice_email'] ?? '');
             $billing_note    = trim($_POST['billing_note'] ?? '');
             $general_note    = trim($_POST['general_note'] ?? '');
@@ -4165,6 +4212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
+            eg_party_ensure_schema($pdo);   // DDL 必須在 beginTransaction 之前（否則隱式 commit）
             $pdo->beginTransaction();
             // 若設為本公司，先將其他客戶的 is_own_company 清為 0（全系統唯一）
             if ($is_own_company) {
@@ -4208,6 +4256,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 } catch (Throwable $_le) {}
             }
+            // 本次新增欄位（收款方式多選／月結方式／發票收件／出貨無特殊要求）：獨立 UPDATE，
+            // 只更新「有權限且前端有送」的欄位，沒送＝保留原值（鐵律8；不動上面既有 INSERT/UPDATE 以免影響現有流程）
+            $ex_sets = []; $ex_args = [];
+            if ($payment_methods !== null) { $ex_sets[] = 'payment_methods=?'; $ex_args[] = implode(',', $payment_methods); }
+            if ($net_unit !== null)        { $ex_sets[] = 'net_unit=?'; $ex_args[] = $net_unit; $ex_sets[] = 'net_months=?'; $ex_args[] = $net_months; }
+            if ($shipping_req_none !== null) { $ex_sets[] = 'shipping_req_none=?'; $ex_args[] = $shipping_req_none; }
+            foreach (['invoice_recipient' => 100, 'invoice_dept' => 100] as $exf => $exmax) {
+                if (array_key_exists($exf, $_POST)) { $ex_sets[] = "$exf=?"; $ex_args[] = mb_substr(trim((string)$_POST[$exf]), 0, $exmax); }
+            }
+            $old_extra = []; $new_extra = [];
+            if ($ex_sets) {
+                if (!$is_new) {
+                    $oxq = $pdo->prepare("SELECT payment_methods,net_unit,net_months,shipping_req_none,invoice_recipient,invoice_dept FROM customer_list WHERE customer_id=?");
+                    $oxq->execute([$customer_id]); $old_extra = $oxq->fetch(PDO::FETCH_ASSOC) ?: [];
+                }
+                $ex_args[] = $customer_id;
+                $pdo->prepare("UPDATE customer_list SET " . implode(',', $ex_sets) . " WHERE customer_id=?")->execute($ex_args);
+                $nxq = $pdo->prepare("SELECT payment_methods,net_unit,net_months,shipping_req_none,invoice_recipient,invoice_dept FROM customer_list WHERE customer_id=?");
+                $nxq->execute([$customer_id]); $new_extra = $nxq->fetch(PDO::FETCH_ASSOC) ?: [];
+            }
             // 產業別小類 Delete-then-Insert
             $industry_subs = json_decode($_POST['industry_subs'] ?? '[]', true) ?: [];
             try {
@@ -4222,10 +4290,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 聯絡人 Delete-then-Insert
             $pdo->prepare("DELETE FROM customer_contacts WHERE customer_id=?")->execute([$customer_id]);
             if (!empty($contacts)) {
-                $ins_c = $pdo->prepare("INSERT INTO customer_contacts (customer_id,name,department,title,phone_ext,mobile,email,note,is_primary,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)");
+                $hasAcct = (bool)$pdo->query("SHOW COLUMNS FROM customer_contacts LIKE 'is_accounting'")->fetch();
+                $ins_c = $pdo->prepare("INSERT INTO customer_contacts (customer_id,name,department,title,phone_ext,mobile,email,note,is_primary,sort_order" . ($hasAcct ? ",is_accounting" : "") . ") VALUES (?,?,?,?,?,?,?,?,?,?" . ($hasAcct ? ",?" : "") . ")");
                 foreach (array_values($contacts) as $k => $c) {
                     if (empty(trim($c['name']??''))) continue;
-                    $ins_c->execute([$customer_id,trim($c['name']??''),trim($c['department']??''),trim($c['title']??''),trim($c['phone_ext']??''),trim($c['mobile']??''),trim($c['email']??''),trim($c['note']??''),intval($c['is_primary']??0),$k]);
+                    $cargs = [$customer_id,trim($c['name']??''),trim($c['department']??''),trim($c['title']??''),trim($c['phone_ext']??''),trim($c['mobile']??''),trim($c['email']??''),trim($c['note']??''),intval($c['is_primary']??0),$k];
+                    if ($hasAcct) $cargs[] = intval($c['is_accounting'] ?? 0) ? 1 : 0;
+                    $ins_c->execute($cargs);
                 }
             }
             // 更名歷史／手動別名／額外地址（2026-11-18）
@@ -4262,6 +4333,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } else {
                 $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_full_en'=>$customer_full_en,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_fax2'=>$customer_fax2,'customer_zip'=>$customer_zip,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note,'need_recon_stmt'=>$need_recon_stmt,'recon_provide_by'=>$recon_provide_by];
                 $ch = _diff_rows($old_cust_row, $new_cust_arr, array_keys($new_cust_arr));
+                if ($old_extra && $new_extra) {
+                    $ch = array_merge($ch, _diff_rows($old_extra, $new_extra, array_keys($new_extra)));
+                }
                 // 業務變動追蹤
                 if ($old_sales_p_uid !== $primary_uid) {
                     $new_pn2='—'; if($primary_uid>0){$np2=$pdo->prepare("SELECT user_cname FROM user WHERE id=? LIMIT 1");$np2->execute([$primary_uid]);$new_pn2=$np2->fetchColumn()?:'uid:'.$primary_uid;}
@@ -5292,6 +5366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 json_decode($sub_cats_raw, true) ?: []
             )));
 
+            eg_party_ensure_schema($pdo);   // DDL 必須在 beginTransaction 之前（否則隱式 commit）
             $pdo->beginTransaction();
 
             if ($is_new) {
@@ -10823,13 +10898,23 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
             <div class="id-hint" id="cf-day-hint"></div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-md-4">
         <div class="form-group">
-            <label>月結天數</label>
-            <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdSettleEdit?'':'disabled' ?>>
+            <label>月結天數／次月結</label>
+            <div style="display:flex;gap:4px;align-items:center;">
+                <select class="form-control" id="cf-net_unit" name="net_unit" style="width:96px;flex:none;padding-left:6px;padding-right:2px;" onchange="onNetUnitChange()" <?= $mdSettleEdit?'':'disabled' ?>>
+                    <option value="days">依天數</option>
+                    <option value="months">次月結</option>
+                </select>
+                <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdSettleEdit?'':'disabled' ?>>
+                <span id="cf-net_months_wrap" style="display:none;white-space:nowrap;align-items:center;gap:3px;">
+                    <input type="number" class="form-control" id="cf-net_months" name="net_months" placeholder="幾" min="1" max="24" style="width:64px;display:inline-block;" <?= $mdSettleEdit?'':'disabled' ?>> 個月
+                </span>
+            </div>
+            <div class="id-hint" id="cf-net-hint" style="display:none;">次月結＝當月帳款隔月起算幾個月後收款（例：3＝次月結3個月）</div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-md-2">
         <div class="form-group">
             <label style="display:block;">接受扣%</label>
             <label style="font-weight:normal;cursor:pointer;padding-top:5px;">
@@ -10906,15 +10991,19 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     </div>
     <?php endif; ?>
     <?php if ($mdPaytermView): ?>
-    <div class="col-md-3">
+    <div class="col-md-6">
         <div class="form-group">
-            <label>收款方式<?= $mdPaytermEdit ? '' : '（唯讀）' ?></label>
-            <select class="form-control" id="cf-payment_method" name="payment_method" <?= $mdPaytermEdit?'':'disabled' ?>>
-                <option value="匯款">匯款</option>
-                <option value="支票">支票</option>
-                <option value="現金">現金</option>
-                <option value="信用狀">信用狀</option>
-            </select>
+            <label>收款方式（可多選）<?= $mdPaytermEdit ? '' : '（唯讀）' ?></label>
+            <!-- cf-payment_method 保留為隱藏欄位＝「主要收款方式」（第一個實際收款方式），供既有程式讀取 -->
+            <input type="hidden" id="cf-payment_method" name="payment_method" value="匯款">
+            <div id="cf-pm-wrap" style="display:flex;flex-wrap:wrap;gap:4px 14px;padding-top:5px;">
+                <?php foreach (['匯款','支票','現金','信用狀','附回郵'] as $_pm): ?>
+                <label style="font-weight:normal;cursor:pointer;margin:0;white-space:nowrap;">
+                    <input type="checkbox" class="cf-pm-chk" value="<?= $_pm ?>" style="margin-right:4px;" onchange="onPaymentMethodsChange()" <?= $mdPaytermEdit?'':'disabled' ?>><?= $_pm ?>
+                </label>
+                <?php endforeach; ?>
+            </div>
+            <div class="id-hint" style="margin-top:2px;">「附回郵」＝對方寄支票時需附回郵信封，可與其他收款方式同時勾選</div>
         </div>
     </div>
     <?php endif; ?>
@@ -10930,6 +11019,28 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     </div>
 </div>
 <?php endif; ?>
+
+<div class="form-section-title"><i class="fa fa-file-text"></i> 發票收件</div>
+<div class="row">
+    <div class="col-md-4">
+        <div class="form-group">
+            <label>發票收件人</label>
+            <input type="text" class="form-control" id="cf-invoice_recipient" name="invoice_recipient" maxlength="100" placeholder="姓名">
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="form-group">
+            <label>發票收件部門</label>
+            <input type="text" class="form-control" id="cf-invoice_dept" name="invoice_dept" maxlength="100" placeholder="部門">
+        </div>
+    </div>
+</div>
+<div class="id-hint" style="margin:-6px 0 8px;">會計聯絡人請到「聯絡人」分頁，在該聯絡人勾選「會計」；發票地址等請在基本資料的「其他地址」選類別設定。</div>
+
+<div class="form-group">
+    <label><i class="fa fa-calendar" style="color:#888;margin-right:5px;"></i>帳務備註（整帳時間、匯款說明等）</label>
+    <textarea class="form-control" id="cf-billing_note" name="billing_note" rows="3" placeholder="例：整帳時間約月底，最晚每月3日前，匯款日為每月5日左右"></textarea>
+</div>
 
 <?php if ($mdBankView): ?>
 <div class="form-section-title"><i class="fa fa-university"></i> 銀行帳戶<?= $mdBankEdit ? '' : '（唯讀）' ?></div>
@@ -10974,15 +11085,12 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 
 <div class="form-group">
     <label><i class="fa fa-truck" style="color:#888;margin-right:5px;"></i>出貨要求</label>
+    <label style="font-weight:normal;cursor:pointer;margin:0 0 0 12px;"><input type="checkbox" id="cf-shipping_req_none" name="shipping_req_none" value="1" style="margin-right:4px;" onchange="onShippingNoneChange()">無特殊要求</label>
     <textarea class="form-control" id="cf-shipping_req" name="shipping_req" rows="2" placeholder="例：全數依圖尺寸施工、附檢驗表、出貨前通知配送"></textarea>
 </div>
 <div class="form-group">
     <label><i class="fa fa-envelope-o" style="color:#888;margin-right:5px;"></i>電子發票 Email</label>
     <input type="text" class="form-control" id="cf-invoice_email" name="invoice_email" placeholder="例：miffy@oaktai.com.tw / david@oaktai.com.tw" maxlength="255">
-</div>
-<div class="form-group">
-    <label><i class="fa fa-calendar" style="color:#888;margin-right:5px;"></i>帳務備註（整帳時間、匯款說明等）</label>
-    <textarea class="form-control" id="cf-billing_note" name="billing_note" rows="3" placeholder="例：整帳時間約月底，最晚每月3日前，匯款日為每月5日左右"></textarea>
 </div>
 <div class="form-group">
     <label><i class="fa fa-sticky-note-o" style="color:#888;margin-right:5px;"></i>一般備註</label>
@@ -11703,6 +11811,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <tr><td style="white-space:nowrap;"><strong>廠商本體操作</strong></td><td>新增、編輯（含批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
 <tr><td style="white-space:nowrap;"><strong>齒輪規格操作</strong></td><td>新增/編輯齒輪規格、刪除齒輪規格列、修改既有齒輪規格列</td></tr>
 <tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
+<tr><td style="white-space:nowrap;"><strong>客戶編輯：結帳／付款與備註</strong></td><td>「收款方式」可多選，另可勾「附回郵」；「月結」可選依天數，或「次月結 N 個月」；發票收件人／部門與帳務備註都在「結帳／付款」分頁；<b>會計聯絡人</b>在「聯絡人」分頁於該聯絡人勾「會計」；出貨要求可勾「無特殊要求」（與「還沒填」不同）；「其他地址」先選地址類別（發票地址、送貨地址…），再填類別說明——地址類別由有字典設定權限者按「管理地址類別」維護，<b>已被使用的類別不可改名或刪除</b>（客戶、廠商共用同一份類別）</td></tr>
 <tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤（沒有後者的人仍可改動/移除自己指派過的那一筆）／刪除已指派的必填標籤——料號上已經選了的「必填」標籤（字典設定裡勾選「新增料號時必填」的那種）<b>預設不給移除</b>，就算有上面「修改或移除他人指派的標籤」權限也一樣；要有這格權限才能把已指派的必填標籤從料號上刪掉</td></tr>
 <tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
 <tr><td style="white-space:nowrap;"><strong>廠商分類維護</strong></td><td>廠商大類/小類、加工限制標籤、大類製程設定</td></tr>
@@ -13050,6 +13159,11 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
      與本頁既有的 keydown 處理可並存不會跳兩欄。 -->
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_party_extra.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_party_extra.js') ?>"></script>
+<script>
+// 地址類別管理：僅有「字典設定權限」者看得到管理鈕；後端同規則再擋一次（party_addr_type_save / _delete）
+window.EGPartyExtra.cfg = { canManage: <?= !empty($can_dict_edit) ? 'true' : 'false' ?>, call: function (d) { return api(d); },
+    types: <?php try { eg_party_ensure_schema($pdo); echo json_encode(eg_party_addr_types($pdo), JSON_UNESCAPED_UNICODE); } catch (Throwable $_e) { echo '[]'; } ?> };
+</script>
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻） -->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
@@ -19225,7 +19339,7 @@ function renderCustomersTable(rows, total, pg, pages) {
                 ? '<span style="cursor:pointer;color:#555;border-bottom:1px dashed #bbb;" onclick="showAddrPopup(\''+escAttr(_addr)+'\')" title="點擊查看完整地址">'+escHtml(_addrShort)+'</span>'
                 : '<span style="color:#ddd;">—</span>';
             html += '<td style="white-space:nowrap;">'+_addrCell+'</td>';
-            var _sreq = r.shipping_req || '';
+            var _sreq = r.shipping_req || (r.shipping_req_none == 1 ? '無特殊要求' : '');
             var _sreqTrunc = _sreq.length > 18;
             var _sreqShort = _sreqTrunc ? _sreq.substring(0, 18) + '…' : _sreq;
             var _sreqClick = _sreqTrunc ? ' style="font-size:11px;color:#555;cursor:pointer;border-bottom:1px dashed #bbb;" onclick="showTextPopup(\'出貨要求\',\''+escAttr(_sreq)+'\')"' : ' style="font-size:11px;color:#555;"';
@@ -19469,6 +19583,7 @@ function addContactRow(c) {
         + '<input type="text" class="form-control input-sm ct-mobile"     style="flex:1;min-width:85px;"    placeholder="手機"   maxlength="30"  value="'+escAttr(c.mobile||'')+'">'
         + '<input type="text" class="form-control input-sm ct-email"      style="flex:1.5;min-width:100px;" placeholder="Email"  maxlength="100" value="'+escAttr(c.email||'')+'">'
         + '<input type="text" class="form-control input-sm ct-note"       style="flex:1.2;min-width:80px;"  placeholder="備註"   maxlength="100" value="'+escAttr(c.note||'')+'">'
+        + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝會計聯絡人（對帳、發票、請款聯絡對象）"><div style="font-size:10px;color:#aaa;">會計</div><input type="checkbox" class="ct-acct" ' + (c.is_accounting==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
         + '<button type="button" class="btn btn-xs btn-default" style="flex-shrink:0;" onclick="this.closest(\'.contact-row\').remove();syncContactsHidden();"><i class="fa fa-times"></i></button>';
     wrap.appendChild(row);
     row.querySelectorAll('input[type=text]').forEach(function(i){ i.oninput = syncContactsHidden; });
@@ -19490,7 +19605,8 @@ function syncContactsHidden() {
             mobile:     row.querySelector('.ct-mobile').value.trim(),
             email:      row.querySelector('.ct-email').value.trim(),
             note:       (row.querySelector('.ct-note')||{value:''}).value.trim(),
-            is_primary: (i===primaryIdx) ? 1 : 0
+            is_primary: (i===primaryIdx) ? 1 : 0,
+            is_accounting: (row.querySelector('.ct-acct')||{checked:false}).checked ? 1 : 0
         });
     });
     var el = document.getElementById('cf-contacts');
@@ -19666,6 +19782,42 @@ function onReconProvideByChange() {
         hw.style.display = 'none';
     }
 }
+// ── 收款方式多選／月結方式／出貨無特殊要求（客戶編輯跳窗）──
+function _getPmList() {
+    var a = []; document.querySelectorAll('#cf-pm-wrap .cf-pm-chk').forEach(function(c){ if (c.checked) a.push(c.value); });
+    return a;
+}
+function _setPmList(list) {
+    list = list || [];
+    document.querySelectorAll('#cf-pm-wrap .cf-pm-chk').forEach(function(c){ c.checked = list.indexOf(c.value) >= 0; });
+    onPaymentMethodsChange();
+}
+/** 隱藏欄位 cf-payment_method＝第一個實際收款方式（不含附回郵），維持與既有程式相容 */
+function onPaymentMethodsChange() {
+    var main = ''; _getPmList().forEach(function(v){ if (!main && v !== '附回郵') main = v; });
+    var h = document.getElementById('cf-payment_method'); if (h) h.value = main;
+}
+function onNetUnitChange() {
+    var u = (document.getElementById('cf-net_unit')||{}).value || 'days';
+    var d = document.getElementById('cf-net_days'), mw = document.getElementById('cf-net_months_wrap'), hint = document.getElementById('cf-net-hint');
+    if (d)  d.style.display  = (u === 'months') ? 'none' : '';
+    if (mw) mw.style.display = (u === 'months') ? 'inline-flex' : 'none';
+    if (hint) hint.style.display = (u === 'months') ? '' : 'none';
+}
+function onShippingNoneChange() {
+    var n = document.getElementById('cf-shipping_req_none'), t = document.getElementById('cf-shipping_req');
+    if (!n || !t) return;
+    if (n.checked) { t.value = ''; }
+    t.disabled = n.checked;
+    t.style.background = n.checked ? '#f5f5f5' : '';
+}
+/** 載入月結方式：months 顯示月數，其餘顯示天數 */
+function _setNetFields(d) {
+    var u = (d && d.net_unit === 'months') ? 'months' : 'days';
+    var su = document.getElementById('cf-net_unit'); if (su) su.value = u;
+    var nm = document.getElementById('cf-net_months'); if (nm) nm.value = (u === 'months' && d.net_months) ? d.net_months : '';
+    onNetUnitChange();
+}
 function _applyCustPaymentDefaultHints(mode, day, pay, nd, dbConfirmSettle, dbConfirmPay) {
     var settleSame = (mode === SYS_CUST_DEFAULT_SETTLEMENT_MODE &&
         (mode !== 'FIXED' || String(day||'') === String(SYS_CUST_DEFAULT_SETTLEMENT_DAY||'')));
@@ -19765,14 +19917,21 @@ function openCustomerModal(customer_id, readonly) {
             // Basic fields
             ['customer','customer_full','customer_full_en','customer_tel','customer_fax','customer_fax2','customer_zip','customer_address','tax_id',
              'quote_method','payment_method','net_days','bank_name','bank_branch','bank_account',
-             'billing_contact','invoice_email'].forEach(function(f){
+             'billing_contact','invoice_email','invoice_recipient','invoice_dept'].forEach(function(f){
                 var el = document.getElementById('cf-'+f);
                 if (el) el.value = d[f]||'';
             });
+            // 收款方式多選：有 payment_methods 用它；舊資料只有 payment_method 就當成單一勾選
+            var pmList = d.payment_methods ? String(d.payment_methods).split(',').filter(Boolean) : (d.payment_method ? [d.payment_method] : []);
+            _setPmList(pmList);
+            _setNetFields(d);
+            var snone = document.getElementById('cf-shipping_req_none');
+            if (snone) snone.checked = (d.shipping_req_none == 1);
             ['shipping_req','billing_note','general_note'].forEach(function(f){
                 var el = document.getElementById('cf-'+f);
                 if (el) el.value = d[f]||'';
             });
+            onShippingNoneChange();
             document.getElementById('cf-is_inactive').checked    = (d.is_inactive=='1');
             document.getElementById('cf-is_own_company').checked = (d.is_own_company=='1' || d.is_own_company===1);
             document.getElementById('cf-est_date').value = d.est_date || _mdmTodayStr();
@@ -19799,8 +19958,8 @@ function openCustomerModal(customer_id, readonly) {
                 } else { slEl.textContent = ''; slEl.style.display = 'none'; }
             }
             var cDay = d.settlement_day||'25';
-            var cPay = d.payment_method||'匯款';
-            var cNd  = (d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '';
+            var cPay = pmList.length ? pmList.join(',') : (d.payment_method||'匯款');   // 多選或含附回郵時≠系統預設，視為已設定
+            var cNd  = (d.net_unit === 'months') ? ('M' + d.net_months) : ((d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '');
             _applyCustPaymentDefaultHints(mode, cDay, cPay, cNd, d.confirmed_settlement, d.confirmed_payment);
             var exBtn = document.getElementById('cf-exception-btn');
             if (exBtn) exBtn.style.display = '';
@@ -19842,8 +20001,10 @@ function openCustomerModal(customer_id, readonly) {
         document.getElementById('cf-settlement_mode').value = SYS_CUST_DEFAULT_SETTLEMENT_MODE || 'FIXED';
         document.getElementById('cf-settlement_day').value   = SYS_CUST_DEFAULT_SETTLEMENT_DAY  || '25';
         var slEl0 = document.getElementById('cf-settle-last'); if (slEl0) { slEl0.textContent = ''; slEl0.style.display = 'none'; }
-        document.getElementById('cf-payment_method').value   = SYS_CUST_DEFAULT_PAYMENT_METHOD  || '匯款';
+        _setPmList([SYS_CUST_DEFAULT_PAYMENT_METHOD || '匯款']);
         document.getElementById('cf-net_days').value         = SYS_CUST_DEFAULT_NET_DAYS || '';
+        _setNetFields({});
+        onShippingNoneChange();
         onSettlementModeChange(SYS_CUST_DEFAULT_SETTLEMENT_MODE || 'FIXED');
         _applyCustPaymentDefaultHints(SYS_CUST_DEFAULT_SETTLEMENT_MODE, SYS_CUST_DEFAULT_SETTLEMENT_DAY, SYS_CUST_DEFAULT_PAYMENT_METHOD, SYS_CUST_DEFAULT_NET_DAYS, 0, 0);
         var exBtn = document.getElementById('cf-exception-btn');
@@ -19898,7 +20059,13 @@ function submitCustomerForm() {
         tax_id:           gv('cf-tax_id'),
         quote_method:     gv('cf-quote_method'),
         payment_method:   gv('cf-payment_method'),
+        payment_methods:  _getPmList().join(','),
         net_days:         gv('cf-net_days'),
+        net_unit:         gv('cf-net_unit'),
+        net_months:       gv('cf-net_months'),
+        invoice_recipient: gv('cf-invoice_recipient'),
+        invoice_dept:     gv('cf-invoice_dept'),
+        shipping_req_none: gc('cf-shipping_req_none'),
         allow_deduct:     gc('cf-allow_deduct'),
         bank_name:        gv('cf-bank_name'),
         bank_branch:      gv('cf-bank_branch'),
@@ -19922,6 +20089,11 @@ function submitCustomerForm() {
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }
     if (data.settlement_mode==='FIXED' && (!data.settlement_day||data.settlement_day<1||data.settlement_day>31)) {
         showToast('固定日請輸入 1~31','error'); return;
+    }
+    if (data.net_unit === 'months' && (!(data.net_months >= 1) || data.net_months > 24)) {
+        switchCustTab('payment', document.querySelector('#custModalTabs li:nth-child(2) a'));
+        var nmEl = document.getElementById('cf-net_months'); if (nmEl) { nmEl.focus(); }
+        showToast('次月結請輸入 1～24 個月','error'); return;
     }
     if (data.primary_user_id && data.deputy_user_id && data.primary_user_id === data.deputy_user_id) {
         showToast('主要業務與代理業務不可為同一人','error'); return;

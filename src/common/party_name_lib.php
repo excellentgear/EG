@@ -44,10 +44,29 @@ function eg_party_ensure_schema(PDO $db): void
             sort_order INT NOT NULL DEFAULT 0,
             KEY idx_party (party_type, party_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客戶／廠商額外地址（多廠區、多送貨地址）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS party_addr_type (
+            type_id    INT AUTO_INCREMENT PRIMARY KEY,
+            type_name  VARCHAR(30) NOT NULL,
+            sort_order INT NOT NULL DEFAULT 0,
+            created_by_name VARCHAR(50) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_name (type_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客戶／廠商「其他地址」的地址類別（設定後通用；被使用後不可改名、刪除）'");
+        if ((int)$db->query("SELECT COUNT(*) FROM party_addr_type")->fetchColumn() === 0) {
+            $db->exec("INSERT IGNORE INTO party_addr_type (type_name,sort_order) VALUES ('發票地址',1),('送貨地址',2),('工廠地址',3)");
+        }
     } catch (Throwable $e) { error_log('eg_party_ensure_schema: ' . $e->getMessage()); }
     // 欄位：先查再加（本機 MySQL 沒有 ADD COLUMN IF NOT EXISTS）
     $want = [
-        'customer_list' => ['customer_fax2' => "VARCHAR(30) NULL COMMENT '傳真2'", 'customer_zip' => "VARCHAR(20) NULL COMMENT '郵遞區號'"],
+        'customer_list' => ['customer_fax2' => "VARCHAR(30) NULL COMMENT '傳真2'", 'customer_zip' => "VARCHAR(20) NULL COMMENT '郵遞區號'",
+                            'payment_methods'   => "VARCHAR(100) NULL COMMENT '收款方式（多選，逗號分隔，含附回郵）；payment_method 仍存第一個實際收款方式供舊程式使用'",
+                            'net_unit'          => "VARCHAR(10) NULL COMMENT '月結方式 days=依天數 months=次月結N個月'",
+                            'net_months'        => "SMALLINT NULL COMMENT '次月結幾個月（net_unit=months 時有值，net_days 同步存 月數*30）'",
+                            'invoice_recipient' => "VARCHAR(100) NULL COMMENT '發票收件人'",
+                            'invoice_dept'      => "VARCHAR(100) NULL COMMENT '發票收件部門'",
+                            'shipping_req_none' => "TINYINT NOT NULL DEFAULT 0 COMMENT '出貨要求：1=已確認無特殊要求'"],
+        'customer_contacts' => ['is_accounting' => "TINYINT NOT NULL DEFAULT 0 COMMENT '會計聯絡人'"],
+        'party_address' => ['addr_type_id' => "INT NULL COMMENT '地址類別（party_addr_type）'"],
         'maker_list'    => ['m_fax2' => "VARCHAR(50) NULL COMMENT '傳真2'",
                             'factory_zip' => "VARCHAR(20) NULL COMMENT '工廠地址郵遞區號'",
                             'billing_zip' => "VARCHAR(20) NULL COMMENT '帳單地址郵遞區號'"],
@@ -67,7 +86,7 @@ function eg_party_ensure_schema(PDO $db): void
 function eg_party_load(PDO $db, string $type, string $id): array
 {
     eg_party_ensure_schema($db);
-    $out = ['name_aliases' => [], 'extra_addrs' => []];
+    $out = ['name_aliases' => [], 'extra_addrs' => [], 'addr_types' => eg_party_addr_types($db)];
     try {
         $q = $db->prepare("SELECT alias_id, alias_name, alias_full, kind, used_until, note, created_by_name,
                                   DATE_FORMAT(created_at,'%Y.%m.%d %H:%i') AS created_at_txt
@@ -75,7 +94,7 @@ function eg_party_load(PDO $db, string $type, string $id): array
                            ORDER BY (kind='history') DESC, used_until DESC, alias_id DESC");
         $q->execute([$type, $id]);
         $out['name_aliases'] = $q->fetchAll(PDO::FETCH_ASSOC);
-        $q = $db->prepare("SELECT addr_id, addr_label, zip, address, tel, fax, contact FROM party_address WHERE party_type=? AND party_id=? ORDER BY sort_order, addr_id");
+        $q = $db->prepare("SELECT addr_id, addr_type_id, addr_label, zip, address, tel, fax, contact FROM party_address WHERE party_type=? AND party_id=? ORDER BY sort_order, addr_id");
         $q->execute([$type, $id]);
         $out['extra_addrs'] = $q->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {}
@@ -136,17 +155,67 @@ function eg_party_save_manual_aliases(PDO $db, string $type, string $id, array $
 /** 額外地址整批取代（delete-then-insert） */
 function eg_party_save_addrs(PDO $db, string $type, string $id, array $rows): void
 {
+    // 注意：不可在此呼叫 eg_party_ensure_schema（CREATE TABLE 會讓呼叫端 transaction 隱式 commit）；
+    // 呼叫端須在 beginTransaction() 之前先呼叫。
+    $validTypes = [];
+    foreach ($db->query("SELECT type_id FROM party_addr_type")->fetchAll(PDO::FETCH_COLUMN) as $t) $validTypes[(int)$t] = 1;
     $db->prepare("DELETE FROM party_address WHERE party_type=? AND party_id=?")->execute([$type, $id]);
-    $ins = $db->prepare("INSERT INTO party_address (party_type,party_id,addr_label,zip,address,tel,fax,contact,sort_order) VALUES (?,?,?,?,?,?,?,?,?)");
+    $ins = $db->prepare("INSERT INTO party_address (party_type,party_id,addr_type_id,addr_label,zip,address,tel,fax,contact,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)");
     $k = 0;
     foreach ($rows as $r) {
         $label = trim((string)($r['addr_label'] ?? '')); $addr = trim((string)($r['address'] ?? ''));
         $zip = trim((string)($r['zip'] ?? ''));          $tel = trim((string)($r['tel'] ?? ''));
         $fax = trim((string)($r['fax'] ?? ''));          $con = trim((string)($r['contact'] ?? ''));
-        if ($label === '' && $addr === '' && $zip === '' && $tel === '' && $fax === '' && $con === '') continue;
-        $ins->execute([$type, $id, mb_substr($label, 0, 60), mb_substr($zip, 0, 20), mb_substr($addr, 0, 255),
+        $tid = intval($r['addr_type_id'] ?? 0); $tid = isset($validTypes[$tid]) ? $tid : null;   // 不存在的類別一律當未選
+        if ($label === '' && $addr === '' && $zip === '' && $tel === '' && $fax === '' && $con === '' && $tid === null) continue;
+        $ins->execute([$type, $id, $tid, mb_substr($label, 0, 60), mb_substr($zip, 0, 20), mb_substr($addr, 0, 255),
                        mb_substr($tel, 0, 50), mb_substr($fax, 0, 50), mb_substr($con, 0, 60), $k++]);
     }
+}
+
+/** 地址類別清單（含各類別被使用的筆數；used>0 者不可改名、不可刪除） */
+function eg_party_addr_types(PDO $db): array
+{
+    try {
+        return $db->query("SELECT t.type_id, t.type_name, t.sort_order,
+                                  (SELECT COUNT(*) FROM party_address a WHERE a.addr_type_id=t.type_id) AS used
+                           FROM party_addr_type t ORDER BY t.sort_order, t.type_id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 新增／改名地址類別。$typeId=0 新增；改名時已被使用者擋下。回傳 ['ok'=>bool,'msg'=>string] */
+function eg_party_addr_type_save(PDO $db, int $typeId, string $name, string $uname): array
+{
+    eg_party_ensure_schema($db);
+    $name = trim($name);
+    if ($name === '') return ['ok' => false, 'msg' => '類別名稱不可為空'];
+    if (mb_strlen($name) > 30) return ['ok' => false, 'msg' => '類別名稱最多 30 字'];
+    $dup = $db->prepare("SELECT type_id FROM party_addr_type WHERE type_name=? AND type_id<>?");
+    $dup->execute([$name, $typeId]);
+    if ($dup->fetchColumn()) return ['ok' => false, 'msg' => "類別「{$name}」已存在"];
+    if ($typeId > 0) {
+        $cur = $db->prepare("SELECT type_name, (SELECT COUNT(*) FROM party_address a WHERE a.addr_type_id=party_addr_type.type_id) AS used FROM party_addr_type WHERE type_id=?");
+        $cur->execute([$typeId]); $c = $cur->fetch(PDO::FETCH_ASSOC);
+        if (!$c) return ['ok' => false, 'msg' => '找不到該類別，請重新整理'];
+        if ($c['type_name'] === $name) return ['ok' => true, 'msg' => '未變更'];
+        if ((int)$c['used'] > 0) return ['ok' => false, 'msg' => "「{$c['type_name']}」已被 {$c['used']} 筆地址使用，不可修改名稱"];
+        $db->prepare("UPDATE party_addr_type SET type_name=? WHERE type_id=?")->execute([$name, $typeId]);
+    } else {
+        $mx = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM party_addr_type")->fetchColumn();
+        $db->prepare("INSERT INTO party_addr_type (type_name,sort_order,created_by_name) VALUES (?,?,?)")->execute([$name, $mx + 1, $uname]);
+    }
+    return ['ok' => true, 'msg' => '已儲存'];
+}
+
+/** 刪除地址類別（被使用中不可刪） */
+function eg_party_addr_type_delete(PDO $db, int $typeId): array
+{
+    $cur = $db->prepare("SELECT type_name, (SELECT COUNT(*) FROM party_address a WHERE a.addr_type_id=party_addr_type.type_id) AS used FROM party_addr_type WHERE type_id=?");
+    $cur->execute([$typeId]); $c = $cur->fetch(PDO::FETCH_ASSOC);
+    if (!$c) return ['ok' => false, 'msg' => '找不到該類別，請重新整理'];
+    if ((int)$c['used'] > 0) return ['ok' => false, 'msg' => "「{$c['type_name']}」已被 {$c['used']} 筆地址使用，不可刪除"];
+    $db->prepare("DELETE FROM party_addr_type WHERE type_id=?")->execute([$typeId]);
+    return ['ok' => true, 'msg' => '已刪除'];
 }
 
 /** 編號被合併／移轉時，別名與額外地址一併搬到目標編號 */

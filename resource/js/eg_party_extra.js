@@ -69,15 +69,48 @@
         box.innerHTML = h;
         var nr = el(p + '-rename_date'); if (nr && oldRd) nr.value = oldRd;
     }
+    function cfg() { return w.EGPartyExtra.cfg || {}; }
+    function toast(msg, ok) { if (typeof w.showToast === 'function') w.showToast(msg, ok ? 'success' : 'error'); else alert(msg); }
+    function typeSelect(s, i, cur) {
+        var h = '<div><label>地址類別</label><select class="form-control input-sm" data-pea="addr_type_id" data-i="' + i + '" data-eg-skip>' +
+                '<option value="">— 選擇類別 —</option>';
+        (s.types || []).forEach(function (t) { h += '<option value="' + t.type_id + '"' + (String(cur) === String(t.type_id) ? ' selected' : '') + '>' + esc(t.type_name) + '</option>'; });
+        return h + '</select></div>';
+    }
+    /** 地址類別管理面板：被使用的類別只能看、不可改名或刪除（後端同規則擋） */
+    function renderTypeMgr(p) {
+        var s = ST[p], h = '<div class="pe-card" style="background:#FFF8EC"><div class="pe-title">地址類別設定（客戶、廠商共用；已被使用的類別不可修改、不可刪除）</div>';
+        (s.types || []).forEach(function (t) {
+            var used = parseInt(t.used, 10) || 0;
+            h += '<div class="pe-row"><input type="text" class="form-control input-sm" style="flex:1" maxlength="30" value="' + esc(t.type_name) + '" data-pet-name="' + t.type_id + '"' + (used ? ' readonly' : '') + ' data-eg-skip>' +
+                 (used ? '<span class="pe-hint" style="margin:0;white-space:nowrap">使用中 ' + used + ' 筆</span>'
+                       : '<button type="button" class="pe-btn" data-pet-save="' + t.type_id + '">儲存名稱</button><button type="button" class="pe-btn" style="color:#DD5138" data-pet-del="' + t.type_id + '">刪除</button>') + '</div>';
+        });
+        h += '<div class="pe-row"><input type="text" class="form-control input-sm" style="flex:1" maxlength="30" placeholder="新類別名稱（例：報關地址）" data-pet-new="1" data-eg-skip><button type="button" class="pe-btn" data-pet-add="1">新增類別</button></div></div>';
+        return h;
+    }
+    function typeCall(p, data) {
+        var c = cfg(); if (!c.call) return;
+        c.call(data).done(function (r) {
+            toast(r.message || (r.success ? '已儲存' : '失敗'), !!r.success);
+            if (r.addr_types) {
+                var s = ST[p]; s.types = r.addr_types; if (w.EGPartyExtra.cfg) w.EGPartyExtra.cfg.types = r.addr_types;
+                s.addrs.forEach(function (a) { if (a.addr_type_id && !s.types.some(function (t) { return String(t.type_id) === String(a.addr_type_id); })) a.addr_type_id = ''; });
+                renderAddr(p); sync(p);
+            }
+        }).fail(function () { toast('網路錯誤', false); });
+    }
     function renderAddr(p) {
         var box = el(p + '-pe-addr'); if (!box) return;
         var s = ST[p];
-        var h = '<div class="pe-box"><div class="pe-title"><i class="fa fa-map-marker"></i> 其他地址（不同廠區、送貨地址）</div>' +
-                '<div class="pe-hint">上面是標準地址；這裡可另外加任意多組，填「類別說明」（例如：第二廠區、送貨地址）與該地址的郵遞區號、地址、電話、傳真、聯絡人。</div>';
+        var h = '<div class="pe-box"><div class="pe-title"><i class="fa fa-map-marker"></i> 其他地址（發票地址、送貨地址、不同廠區…）' +
+                (cfg().canManage ? '<button type="button" class="pe-btn pe-edit" style="float:right" data-pe-typemgr="1"><i class="fa fa-cog"></i> 管理地址類別</button>' : '') + '</div>' +
+                '<div class="pe-hint">上面是標準地址；這裡可另外加任意多組。「地址類別」從設定好的清單選（例如發票地址、送貨地址），「類別說明」可自由補充（例如：第二廠區）。</div>';
+        if (s.mgr && cfg().canManage) h += renderTypeMgr(p);
         s.addrs.forEach(function (r, i) {
             h += '<div class="pe-card"><button type="button" class="pe-del pe-edit" style="position:absolute;right:6px;top:2px" data-pe-deladdr="' + i + '" title="刪除此地址">&times;</button>' +
-                 '<div class="pe-g" style="grid-template-columns:2fr 1fr 4fr">' +
-                 f(i, 'addr_label', '類別說明', r.addr_label, 60, '例：第二廠區') + f(i, 'zip', '郵遞區號', r.zip, 20, '') + f(i, 'address', '地址', r.address, 255, '') + '</div>' +
+                 '<div class="pe-g" style="grid-template-columns:1.3fr 1.7fr 1fr 3.5fr">' +
+                 typeSelect(s, i, r.addr_type_id) + f(i, 'addr_label', '類別說明', r.addr_label, 60, '例：第二廠區') + f(i, 'zip', '郵遞區號', r.zip, 20, '') + f(i, 'address', '地址', r.address, 255, '') + '</div>' +
                  '<div class="pe-g" style="grid-template-columns:1fr 1fr 1fr">' +
                  f(i, 'tel', '電話', r.tel, 50, '') + f(i, 'fax', '傳真', r.fax, 50, '') + f(i, 'contact', '聯絡人', r.contact, 60, '') + '</div></div>';
         });
@@ -99,9 +132,21 @@
             });
             box.addEventListener('click', function (e) {
                 var b = e.target.closest('button'); if (!b) return; var s = ST[p];
+                if (b.hasAttribute('data-pe-typemgr')) { s.mgr = !s.mgr; renderAddr(p); return; }
+                if (b.hasAttribute('data-pet-save') || b.hasAttribute('data-pet-del') || b.hasAttribute('data-pet-add')) {
+                    var tid = b.getAttribute('data-pet-save') || b.getAttribute('data-pet-del') || '0';
+                    if (b.hasAttribute('data-pet-del')) {
+                        if (!confirm('確定刪除這個地址類別？')) return;
+                        typeCall(p, { action: 'party_addr_type_delete', type_id: tid });
+                    } else {
+                        var inp = box.querySelector(b.hasAttribute('data-pet-add') ? '[data-pet-new]' : '[data-pet-name="' + tid + '"]');
+                        typeCall(p, { action: 'party_addr_type_save', type_id: b.hasAttribute('data-pet-add') ? 0 : tid, type_name: inp ? inp.value : '' });
+                    }
+                    return;
+                }
                 if (b.hasAttribute('data-pe-addalias')) { s.manual.push({ alias_id: 0, alias_name: '', note: '' }); renderAlias(p); }
                 else if (b.hasAttribute('data-pe-delalias')) { s.manual.splice(parseInt(b.getAttribute('data-pe-delalias'), 10), 1); renderAlias(p); }
-                else if (b.hasAttribute('data-pe-addaddr')) { s.addrs.push({ addr_label: '', zip: '', address: '', tel: '', fax: '', contact: '' }); renderAddr(p); }
+                else if (b.hasAttribute('data-pe-addaddr')) { s.addrs.push({ addr_type_id: '', addr_label: '', zip: '', address: '', tel: '', fax: '', contact: '' }); renderAddr(p); }
                 else if (b.hasAttribute('data-pe-deladdr')) { s.addrs.splice(parseInt(b.getAttribute('data-pe-deladdr'), 10), 1); renderAddr(p); }
                 else return;
                 sync(p);
@@ -115,7 +160,9 @@
         ST[p] = {
             hist: al.filter(function (r) { return r.kind === 'history'; }),
             manual: al.filter(function (r) { return r.kind !== 'history'; }).map(function (r) { return { alias_id: r.alias_id, alias_name: r.alias_name, note: r.note || '' }; }),
-            addrs: (d.extra_addrs || []).map(function (r) { return { addr_label: r.addr_label || '', zip: r.zip || '', address: r.address || '', tel: r.tel || '', fax: r.fax || '', contact: r.contact || '' }; })
+            types: d.addr_types || (w.EGPartyExtra.cfg && w.EGPartyExtra.cfg.types) || [],
+            mgr: false,
+            addrs: (d.extra_addrs || []).map(function (r) { return { addr_type_id: r.addr_type_id || '', addr_label: r.addr_label || '', zip: r.zip || '', address: r.address || '', tel: r.tel || '', fax: r.fax || '', contact: r.contact || '' }; })
         };
         renderAlias(p); renderAddr(p); bind(p); sync(p);
     }
