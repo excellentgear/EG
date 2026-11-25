@@ -502,6 +502,7 @@ function ia_ensure_schema(PDO $db): void
             ['ia_nc',         'ref_form_name',      "VARCHAR(150) NULL COMMENT '相關表單名稱快照（編號存在 ref_form_no）'"],
             ['ia_case',      'approver_at',         "DATETIME NULL COMMENT '核准簽核的精確時間（業務日期在 approver_date）'"],
             // 每個受稽單位需要幾分鐘（表頭那個欄位，之前只活在畫面上、重開就變回預設 60）
+            ['ia_case',      'cal_event_ids',       "TEXT NULL COMMENT '完成時自動建立的行事曆事件 evenement.id（JSON 陣列，取消完成時移除）'"],
             ['ia_case',      'unit_minutes',        "INT NULL COMMENT '受稽時間：每個單位需要幾分鐘（結束時間與送出前檢查都用它）'"],
             // 稽核報告表改成「送出通知」流程（2026-09-17 使用者要求：不要核准、不要製表人）
             ['ia_report',    'submit_date',         "DATE NULL COMMENT '送出的業務日期'"],
@@ -600,6 +601,12 @@ function ia_ensure_schema(PDO $db): void
             UNIQUE KEY uk_team (year, user_id, dept_id, position_id),
             KEY idx_year (year, sort_order)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='年度稽核小組成員'");
+        // 同一個人（同職務）可同時是稽核員與陪檢員：唯一鍵要含角色（舊版不含，補上）
+        try {
+            $hasRole = (int)$db->query("SELECT COUNT(*) FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ia_team_member' AND INDEX_NAME='uk_team' AND COLUMN_NAME='role'")->fetchColumn();
+            if (!$hasRole) $db->exec("ALTER TABLE ia_team_member DROP INDEX uk_team, ADD UNIQUE KEY uk_team (year, role, user_id, dept_id, position_id)");
+        } catch (Throwable $e) {}
 
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
@@ -2477,6 +2484,173 @@ function ia_check_items_resort(PDO $db, int $checkId): int
 /** 最後一個單位稽核完，要比結束會議開始早這麼多分鐘（前端 IA_MEET_GAP 是同一個數字） */
 const IA_MEET_GAP_MIN = 30;
 
+/* ============================ 通知單完成：人員衝突檢查／通知／行事曆 ============================ */
+
+/** 通知單的受稽列依「過程＋日期＋時間」合併成場次，並把稽核員／陪檢員整理好 */
+function ia_case_slots(PDO $db, array $c): array
+{
+    $caseId = (int)$c['case_id'];
+    $dur = (int)($c['unit_minutes'] ?? 0) ?: 60;
+    $rows = [];
+    try {
+        $st = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order, cd_id");
+        $st->execute([$caseId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return [];
+    $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $rows), $rows);
+    $slots = [];
+    foreach ($rows as $r) {
+        $date = (string)($r['audited_date'] ?? '');
+        $time = substr((string)($r['audited_time'] ?? ''), 0, 5);
+        if ($date === '') continue;
+        $k = trim((string)$r['start_process']) . '|' . $date . '|' . $time;
+        if (!isset($slots[$k])) $slots[$k] = ['sp' => trim((string)$r['start_process']), 'date' => $date, 'time' => $time,
+                                              'dur' => $dur, 'units' => [], 'aud' => [], 'esc' => []];
+        $un = trim((string)($r['dept_name'] ?? ''));
+        if ($un !== '' && !in_array($un, $slots[$k]['units'], true)) $slots[$k]['units'][] = $un;
+        foreach (['auditor' => 'aud', 'escort' => 'esc'] as $kind => $dst) {
+            foreach (($pmap[(int)$r['cd_id']][$kind] ?? []) as $p) {
+                if ((int)$p['user_id'] > 0) $slots[$k][$dst][(int)$p['user_id']] = (string)$p['user_name'];
+            }
+        }
+    }
+    foreach ($slots as &$s) {
+        $s['end'] = '';
+        if (preg_match('/^(\d{1,2}):(\d{2})$/', $s['time'], $m)) {
+            $t = (int)$m[1] * 60 + (int)$m[2] + $s['dur'];
+            $s['end'] = sprintf('%02d:%02d', min(23, intdiv($t, 60)), $t % 60);
+        }
+    }
+    unset($s);
+    return array_values($slots);
+}
+
+/** 稽核員／陪檢員在受稽時段內有請假或公出者：回傳說明陣列（空＝沒有衝突） */
+function ia_case_people_conflicts(PDO $db, array $slots): array
+{
+    require_once __DIR__ . '/person_schedule_lib.php';
+    $out = [];
+    foreach ($slots as $s) {
+        $uids = array_keys($s['aud'] + $s['esc']);
+        if (!$uids) continue;
+        try { $sch = eg_psched_for_users($db, $uids, $s['date'], $s['time'], $s['end']); } catch (Throwable $e) { continue; }
+        foreach ($uids as $u) {
+            foreach (($sch[$u] ?? []) as $it) {
+                if (!in_array($it['source'] ?? '', ['leave', 'trip'], true) || empty($it['overlap'])) continue;
+                $role = isset($s['aud'][$u]) ? '稽核員' : '陪檢員';
+                $nm = $s['aud'][$u] ?? $s['esc'][$u] ?? ('#' . $u);
+                $out[] = $s['sp'] . '（' . eg_fmt_date($s['date']) . ' ' . $s['time'] . '）' . $role . ' ' . $nm
+                       . '：' . ($it['label'] ?? '') . ' ' . ($it['text'] ?? '');
+            }
+        }
+    }
+    return $out;
+}
+
+/** 清掉這張通知單先前建立的行事曆事件（取消完成、重新完成時用） */
+function ia_case_calendar_clear(PDO $db, int $caseId): void
+{
+    try {
+        $q = $db->prepare("SELECT cal_event_ids FROM ia_case WHERE case_id=?");
+        $q->execute([$caseId]);
+        $ids = array_filter(array_map('intval', (array)json_decode((string)$q->fetchColumn(), true)));
+        foreach ($ids as $eid) {
+            $db->prepare("DELETE FROM evenement_actor WHERE event_id=?")->execute([$eid]);
+            $db->prepare("DELETE FROM evenement WHERE id=? AND category_id=2")->execute([$eid]);
+        }
+        $db->prepare("UPDATE ia_case SET cal_event_ids=NULL WHERE case_id=?")->execute([$caseId]);
+    } catch (Throwable $e) { error_log('ia_case_calendar_clear: ' . $e->getMessage()); }
+}
+
+/** 通知單完成後：行事曆建立「會議」類別事件（每個場次一筆＋結束會議一筆），參與者＝稽核員與陪檢員 */
+function ia_case_calendar_sync(PDO $db, array $c, array $slots): int
+{
+    $made = [];
+    try {
+        ia_case_calendar_clear($db, (int)$c['case_id']);
+        $no = (string)($c['case_no'] ?? '');
+        $ins = $db->prepare("INSERT INTO evenement (title, category_id, start, `end`, allday, remark) VALUES (?,2,?,?,0,?)");
+        $act = $db->prepare("INSERT INTO evenement_actor (event_id, user_id) VALUES (?,?)");
+        $place = trim((string)($c['end_meet_place'] ?? ''));
+        $mk = function (string $title, string $start, string $end, array $uids, string $remark) use ($db, $ins, $act, &$made) {
+            $ins->execute([$title, $start, $end, $remark]);
+            $eid = (int)$db->lastInsertId();
+            $made[] = $eid;
+            foreach (array_unique(array_map('intval', $uids)) as $u) if ($u > 0) $act->execute([$eid, $u]);
+        };
+        foreach ($slots as $s) {
+            $t = $s['time'] !== '' ? $s['time'] : '09:00';
+            $e = $s['end'] !== '' ? $s['end'] : $t;
+            $mk('內部稽核 ' . $s['sp'] . '（' . implode('、', $s['units']) . '）', $s['date'] . ' ' . $t . ':00', $s['date'] . ' ' . $e . ':00',
+                array_keys($s['aud'] + $s['esc']), '由內部稽核通知單 ' . $no . ' 自動建立');
+        }
+        if (!empty($c['end_meet_date'])) {
+            $all = [];
+            foreach ($slots as $s) foreach (array_keys($s['aud'] + $s['esc']) as $u) $all[] = $u;
+            if (!empty($c['leader_id'])) $all[] = (int)$c['leader_id'];
+            $ms = substr((string)($c['end_meet_start'] ?: '09:00'), 0, 5);
+            $me = substr((string)($c['end_meet_end'] ?: $ms), 0, 5);
+            $mk('內部稽核結束會議 ' . $no, $c['end_meet_date'] . ' ' . $ms . ':00', $c['end_meet_date'] . ' ' . $me . ':00', $all,
+                '由內部稽核通知單 ' . $no . ' 自動建立' . ($place !== '' ? '（地點：' . $place . '）' : ''));
+        }
+        $db->prepare("UPDATE ia_case SET cal_event_ids=? WHERE case_id=?")->execute([json_encode($made), (int)$c['case_id']]);
+    } catch (Throwable $e) { error_log('ia_case_calendar_sync: ' . $e->getMessage()); }
+    return count($made);
+}
+
+/** 通知單完成後：站內通知＋推播給每一位稽核員／陪檢員（內容只列他自己的場次） */
+function ia_case_notify_people(PDO $db, array $c, array $slots, int $fromUid): int
+{
+    $per = [];
+    foreach ($slots as $s) {
+        foreach (['aud' => '稽核員', 'esc' => '陪檢員'] as $k => $role) {
+            foreach ($s[$k] as $u => $nm) {
+                $per[$u][] = eg_fmt_date($s['date']) . ' ' . $s['time'] . ($s['end'] !== '' ? '~' . $s['end'] : '') . "
+"
+                    . '　您的身分：' . $role . "
+"
+                    . '　受稽單位：' . implode('、', $s['units']) . ($s['sp'] !== '' ? '（' . $s['sp'] . '）' : '') . "
+"
+                    . '　稽核員：' . (implode('、', $s['aud']) ?: '（未指定）') . "
+"
+                    . '　陪檢員：' . (implode('、', $s['esc']) ?: '（未指定）');
+            }
+        }
+    }
+    if (!empty($c['leader_id'])) $per[(int)$c['leader_id']][] = '您是本次稽核的稽核組長';
+    $n = 0;
+    try {
+        $no = (string)($c['case_no'] ?? '');
+        $title = '稽核通知單 ' . $no . ' 已發出，請確認您的稽核時間';
+        $hdr = '稽核期間：' . eg_fmt_date((string)$c['audit_from']) . ' ~ ' . eg_fmt_date((string)($c['audit_to'] ?: $c['audit_from']))
+             . ((string)($c['leader_name'] ?? '') !== '' ? "
+稽核組長：" . $c['leader_name'] : '') . "
+
+您的稽核時段：";
+        $tail = !empty($c['end_meet_date'])
+            ? ("\n結束會議：" . eg_fmt_date((string)$c['end_meet_date']) . ' ' . substr((string)$c['end_meet_start'], 0, 5)
+               . ((string)($c['end_meet_place'] ?? '') !== '' ? '　地點：' . $c['end_meet_place'] : ''))
+            : '';
+        $insE = $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                              VALUES (CURDATE(), DATE_ADD(CURDATE(), INTERVAL 30 DAY), ?, ?, 0, ?, '內部稽核通知單', 1, 'IA_CASE_NOTICE', ?)");
+        $insT = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')");
+        foreach ($per as $u => $lines) {
+            if ($u <= 0) continue;
+            $insE->execute([$title, $hdr . "\n" . implode("\n", $lines) . $tail, $fromUid ?: null, (int)$c['case_id']]);
+            $eid = (int)$db->lastInsertId();
+            $insT->execute([$eid, $u]);
+            $n++;
+            try {
+                require_once __DIR__ . '/../push/push_send.php';
+                eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title' => $title, 'body' => mb_substr($hdr . ' ' . implode(' ', $lines), 0, 480)]);
+            } catch (Throwable $e) {}
+        }
+    } catch (Throwable $e) { error_log('ia_case_notify_people: ' . $e->getMessage()); }
+    return $n;
+}
+
+
 /**
  * 稽核通知單「送出（完成）」前的檢查（2026-09-18 使用者要求）。
  *
@@ -2518,10 +2692,11 @@ function ia_case_required_missing(PDO $db, int $caseId): array
        時長取這張單自己存的 unit_minutes（表頭那個欄位），沒存過就用預設 60。 */
     $c = [];
     try {
-        $q = $db->prepare("SELECT end_meet_date, end_meet_start, unit_minutes FROM ia_case WHERE case_id=?");
+        $q = $db->prepare("SELECT end_meet_date, end_meet_start, unit_minutes, end_meet_place FROM ia_case WHERE case_id=?");
         $q->execute([$caseId]);
         $c = $q->fetch(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) {}
+    if (trim((string)($c['end_meet_place'] ?? '')) === '') $out[] = '結束會議地點還沒選';
     $mDate = (string)($c['end_meet_date'] ?? '');
     $mStart = (string)($c['end_meet_start'] ?? '');
     if ($mDate !== '' && preg_match('/^(\d{1,2}):(\d{2})/', $mStart, $mm)) {
@@ -2565,6 +2740,13 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname, string 
         throw new RuntimeException("受稽單位還有必填欄位沒填，不能完成：
 " . implode("
 ", $missing));
+    }
+
+    /* 稽核員／陪檢員在受稽時段內有請假或公出的，不能完成——必須先換人（2026-11-24 使用者要求） */
+    $slots = ia_case_slots($db, $c);
+    $conf = ia_case_people_conflicts($db, $slots);
+    if ($conf) {
+        throw new RuntimeException("下列稽核員／陪檢員在受稽時間內有請假或公出，必須先更換人員才能完成：\n" . implode("\n", $conf));
     }
 
     /* 簽章日期（2026-09-18 使用者要求）：**一律是通知日期或更早**。
@@ -2612,7 +2794,13 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname, string 
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw new RuntimeException('完成失敗：' . $e->getMessage()); }
 
-    return ['status' => 'issued', 'auto_signed' => $auto ? 1 : 0,
+    // 完成後：行事曆建立會議事件＋通知稽核員／陪檢員（失敗只記 log，不影響已完成的通知單）
+    $c2 = $db->prepare("SELECT * FROM ia_case WHERE case_id=?"); $c2->execute([$caseId]);
+    $cc = $c2->fetch(PDO::FETCH_ASSOC) ?: $c;
+    $calN = ia_case_calendar_sync($db, $cc, $slots);
+    $notN = ia_case_notify_people($db, $cc, $slots, $uid);
+
+    return ['status' => 'issued', 'cal_events' => $calN, 'notified' => $notN, 'auto_signed' => $auto ? 1 : 0,
             'approver' => $auto ? (string)($ap['name'] ?? '') : '',
             'reviewer' => $auto ? (string)($rv['name'] ?? '') : ''];
 }
@@ -2679,6 +2867,7 @@ function ia_case_reopen(PDO $db, int $caseId, int $uid, string $uname): array
     if (!ia_case_is_done($c)) throw new RuntimeException('這張通知單目前不是完成狀態');
     if ((string)$c['status'] === 'closed') throw new RuntimeException('已結案的通知單不可取消完成，請先把狀態改回執行中');
 
+    ia_case_calendar_clear($db, $caseId);       // 取消完成＝行事曆上自動建的稽核事件一併移除
     $db->prepare("UPDATE ia_case SET status='draft', completed_at=NULL, completed_by=NULL, completed_by_name=NULL,
                       reviewer_id=NULL, reviewer_name=NULL, reviewer_date=NULL, reviewer_at=NULL,
                       approver_id=NULL, approver_name=NULL, approver_date=NULL, approver_at=NULL,
@@ -3282,6 +3471,26 @@ function ia_year_checklist(PDO $db, int $year): array
               'missing' => $n ? ($dn < $n ? [($n - $dn) . ' 份還是草稿'] : []) : ['這一年還沒有' . $nm]]);
     }
 
+    /* ⑦⑧要等查檢表都做完才有「沒有缺失」可言——前面還沒到，不能顯示成已完成（2026-11-24 使用者回報）。
+       完成的定義（使用者指定）：流程④~⑥都有資料且填寫完畢，而且
+       ①沒有缺失，或 ②每一個缺失都開了一張不符合通知單（⑦）與對應的異常矯正處理單（⑧）。 */
+    $chkTotal = array_sum($chkCnt); $chkDoneTotal = array_sum($chkDone);
+    $checksFinished = ($chkTotal > 0 && $chkDoneTotal >= $chkTotal);
+    $defN = 0; $defNc = 0; $defCar = 0;
+    try {
+        $q = $db->prepare("SELECT it.nc_id, it.car_id, n.nc_id AS nc_live, n.car_id AS nc_car
+                             FROM ia_check_item it
+                             JOIN ia_check ck ON ck.check_id = it.check_id
+                             LEFT JOIN ia_nc n ON n.nc_id = it.nc_id AND COALESCE(n.is_deleted,0)=0
+                            WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND COALESCE(it.is_header,0)=0 AND it.result='ng'");
+        $q->execute([$year]);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $defN++;
+            if ((int)$r['nc_live'] > 0) $defNc++;
+            if ((int)$r['car_id'] > 0 || (int)$r['nc_car'] > 0) $defCar++;
+        }
+    } catch (Throwable $e) {}
+
     /* ── ⑦不符合通知單 ── */
     list($no, $nm) = $docOf('nc');
     $ncAll = 0; $ncClosed = 0; $ncOver = 0; $missNc = [];
@@ -3299,12 +3508,17 @@ function ia_year_checklist(PDO $db, int $year): array
                                : ($due !== '' ? '（期限 ' . eg_fmt_date($due) . '）' : ''));
         }
     } catch (Throwable $e) {}
+    if ($checksFinished && $defNc < $defN) $missNc[] = '還有 ' . ($defN - $defNc) . ' 個缺失沒有開立不符合通知單';
     $add(['key' => 'nc', 'stage' => '⑦缺失', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'nc',
           'have' => $ncAll, 'need' => 0, 'done' => $ncClosed, 'missing' => $missNc,
           'label' => $ncAll ? ('開立 ' . $ncAll . ' 張，已結案 ' . $ncClosed . ' 張' . ($ncOver ? '，逾期 ' . $ncOver . ' 張' : ''))
-                            : '本年度沒有開立不符合通知單',
-          'state' => ($ncOver ? 'warn' : ($ncAll === 0 ? ($cases ? 'ok' : 'todo') : ($ncClosed >= $ncAll ? 'ok' : 'doing'))),
-          'note' => $ncAll ? '' : ($cases ? '沒有缺失不算漏單' : '還沒有任何稽核，尚無從判斷')]);
+                            : ($checksFinished ? ($defN ? ('缺失 ' . $defN . ' 項，尚未開立不符合通知單') : '本年度沒有缺失、不需開立') : '尚未到這一步'),
+          'state' => (!$checksFinished ? 'todo'
+                       : ($ncOver ? 'warn'
+                       : ($defNc < $defN ? 'doing'
+                       : ($ncAll > 0 && $ncClosed < $ncAll ? 'doing' : 'ok')))),
+          'note' => !$checksFinished ? '查檢表還沒全部完成，尚無從判斷有沒有缺失'
+                    : ($defN ? ('缺失 ' . $defN . ' 項，已開立不符合通知單 ' . $defNc . ' 項；每個缺失都要開一張才算完成') : '沒有缺失不算漏單')]);
 
     /* ── ⑧由內稽開立的異常矯正處理單（CAR）──
        來源＝績效執行稽核查檢表「沒達成」自動開的那幾張，靠 ia_check_item.car_id 反查。 */
@@ -3313,8 +3527,9 @@ function ia_year_checklist(PDO $db, int $year): array
     try {
         $q = $db->prepare("SELECT o.car_no, o.status FROM ia_check_item it
                              JOIN ia_check ck ON ck.check_id = it.check_id
-                             JOIN car_order o ON o.id = it.car_id
-                            WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND it.car_id IS NOT NULL AND o.status<>'stopped'
+                             LEFT JOIN ia_nc n ON n.nc_id = it.nc_id AND COALESCE(n.is_deleted,0)=0
+                             JOIN car_order o ON o.id = COALESCE(NULLIF(it.car_id,0), n.car_id)
+                            WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND o.status<>'stopped'
                             ORDER BY o.car_no");
         $q->execute([$year]);
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -3323,11 +3538,13 @@ function ia_year_checklist(PDO $db, int $year): array
             else $missCar[] = $r['car_no'] . '：尚未結案（目前 ' . (string)$r['status'] . '）';
         }
     } catch (Throwable $e) {}
+    if ($checksFinished && $defCar < $defN) $missCar[] = '還有 ' . ($defN - $defCar) . ' 個缺失沒有對應的異常矯正處理單';
     $add(['key' => 'car', 'stage' => '⑧缺失', 'doc_no' => $no, 'doc_name' => $nm . '（由內稽開立）', 'pane' => 'check',
           'have' => $carAll, 'need' => 0, 'done' => $carClosed, 'missing' => $missCar,
-          'label' => $carAll ? ('開立 ' . $carAll . ' 張，已結案 ' . $carClosed . ' 張') : '本年度沒有由內稽開立矯正單',
-          'state' => ($carAll === 0 ? ($cases ? 'ok' : 'todo') : ($carClosed >= $carAll ? 'ok' : 'doing')),
-          'note' => $carAll ? '績效執行稽核查檢表「沒達成」自動開立' : '沒有未達標的指標不算漏單']);
+          'label' => $carAll ? ('開立 ' . $carAll . ' 張，已結案 ' . $carClosed . ' 張') : ($checksFinished ? ($defN ? ('缺失 ' . $defN . ' 項，尚未開立矯正單') : '本年度沒有缺失、不需開立') : '尚未到這一步'),
+          'state' => (!$checksFinished ? 'todo' : ($defCar < $defN ? 'doing' : ($carAll > 0 && $carClosed < $carAll ? 'doing' : 'ok'))),
+          'note' => !$checksFinished ? '查檢表還沒全部完成，尚無從判斷'
+                    : ($defN ? ('缺失 ' . $defN . ' 項，已開立矯正單 ' . $defCar . ' 項；每個缺失都要有對應的矯正單才算完成') : '沒有缺失不算漏單')]);
 
     /* ── ⑩稽核報告表 ── */
     list($no, $nm) = $docOf('report');
@@ -4892,10 +5109,11 @@ function ia_team_save(PDO $db, int $year, array $members, string $byName, string
            那就是兩個不同的身分、兩筆。原本按 user_id 去重＝他只要先以組長身分進了小組，
            技術課工程師那一筆就再也加不進來，而且畫面上連選項都看不到。
            會議紀錄那邊本來就會依 user_id 再去重一次，所以不會變成同一個人出席兩次。 */
-        if (isset($seenUser[$key])) continue;               // 同一個「職務」只算一列
-        $seenUser[$key] = 1;
         $role = (string)($m['role'] ?? 'auditor');
         if (!isset(IA_TEAM_ROLES[$role])) $role = 'auditor';
+        // 同一個職務可同時是稽核員與陪檢員（使用者 2026-11-24 要求），所以去重鍵含角色
+        if (isset($seenUser[$key . '|' . $role])) continue;
+        $seenUser[$key . '|' . $role] = 1;
         if ($role === 'leader') { $leaders++; if ($leaders > 1) throw new RuntimeException('稽核組長只能有一位'); }
         $clean[] = ['role' => $role, 'user_id' => $u, 'user_name' => (string)$valid[$key]['user_cname'],
                     'dept_id' => $d ?: null, 'position_id' => $p ?: null,
