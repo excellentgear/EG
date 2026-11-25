@@ -4657,7 +4657,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <button class="tab-btn" id="tab-btn-setting" onclick="switchTab('setting',this)" style="display:none;">⚙️ 主資料設定</button>
       <button class="tab-btn" id="tab-btn-req" data-stk-feat="stock_req_view" onclick="switchTab('req',this)">📋 領庫需求單</button>
       <button class="tab-btn" id="tab-btn-inb" data-stk-feat="stock_req_view" onclick="switchTab('inb',this)">📥 入庫單 <span id="inb-badge" class="badge" style="background:#F0A24B;display:none;"></span></button>
-      <button class="tab-btn" id="tab-btn-report" data-stk-feat="stock_report" onclick="switchTab('report',this)">📊 庫存異動紀錄</button>
+      <button class="tab-btn" id="tab-btn-report" data-stk-feat="stock_report" onclick="switchTab('report',this)">📊 異動紀錄</button>
       <button class="tab-btn" id="tab-btn-olb" data-stk-feat="stock_report" onclick="switchTab('olb',this)">🏷️ 領庫印標籤</button>
     </div>
     <button class="btn btn-sm btn-default" id="btn-role-cfg" style="display:none;border-radius:6px;font-weight:600;" onclick="openRoleCfg()" title="庫存管理的角色、功能與通知對象設定"><i class="fa fa-key"></i> 角色與通知設定</button>
@@ -5026,7 +5026,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
         <th>數量</th><th>異動前</th><th>異動後</th><th>料號總庫存</th>
         <th>請領部門</th><th>請領人</th><th>倉管</th><th>備註</th>
       </tr></thead>
-      <tbody id="rpt-tbody"><tr><td colspan="14" class="text-center text-muted">點擊「庫存異動紀錄」分頁以載入</td></tr></tbody>
+      <tbody id="rpt-tbody"><tr><td colspan="14" class="text-center text-muted">點擊「異動紀錄」分頁以載入</td></tr></tbody>
     </table>
   </div>
 </div>
