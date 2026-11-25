@@ -2462,6 +2462,15 @@ function acc_create_invoices(PDO $db, array $sel, string $userId, bool $splitByS
     acc_ensure_schema($db);
     $made = []; $errors = [];
 
+    // 交易內不可觸發 DDL（會隱式 commit，之後 commit() 爆 "no active transaction"）：
+    // 先把會補欄位／建表的函式在交易外跑一次（static 快取，交易內不會再執行）
+    try {
+        acc_customer_by_name($db);
+        acc_settle_ex_map($db);
+        acc_invoiced_src_map($db);
+        acc_invoice_candidates($db, date('Y-m'));
+    } catch (Throwable $e) { /* 暖機失敗不阻擋，交易內再報實際錯誤 */ }
+
     try {
         $db->beginTransaction();
         $insInv = $db->prepare(

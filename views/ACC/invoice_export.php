@@ -193,6 +193,22 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
         <label style="margin-left:8px;"><input type="checkbox" id="candOnlyOk" checked> 只顯示可開立的</label>
         <label><input type="checkbox" id="candSplit"> 每張出貨單各開一張發票</label>
       </div>
+      <div class="a-bar" id="candFilterBar">
+        <label>客戶</label>
+        <input type="text" id="candKw" list="candKwList" autocomplete="off" placeholder="輸入客戶ID／簡稱／抬頭／統編"
+               style="width:240px;" data-eg-hint="輸入後選單會列出符合的客戶">
+        <datalist id="candKwList"></datalist>
+        <label style="margin-left:8px;">金額</label>
+        <select id="candAmtType">
+          <option value="net">未稅</option>
+          <option value="total">含稅</option>
+        </select>
+        <input type="number" id="candAmtMin" placeholder="最小" style="width:110px;" min="0" step="1">
+        <span>~</span>
+        <input type="number" id="candAmtMax" placeholder="最大" style="width:110px;" min="0" step="1">
+        <button id="btnCandFilterClear">清除篩選</button>
+        <span id="candFilterInfo" style="color:#8a6d45;font-size:13px;"></span>
+      </div>
 
       <div class="a-stat">
         <div><span class="n" id="cdGroups">—</span> <span class="l">客戶</span></div>
@@ -271,7 +287,8 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
 
       <div class="a-bar" style="background:var(--a-bg2);">
         <?php if ($perms['canEdit']): ?>
-        <button id="btnInvExport" class="btn-warm" disabled><i class="fa fa-download"></i> 轉出 CSV（供平台開立）</button>
+        <button id="btnInvExport" class="btn-warm" disabled><i class="fa fa-file-excel-o"></i> 轉出電子發票 xlsx</button>
+        <button id="btnInvCsv" disabled><i class="fa fa-download"></i> CSV（舊格式）</button>
         <label><input type="checkbox" id="expByItem"> 逐品項列出</label>
         <button id="btnInvMark" disabled><i class="fa fa-check-square-o"></i> 標記為已轉出</button>
         <button id="btnBackfillCsv"><i class="fa fa-upload"></i> 匯入平台已開立清單</button>
@@ -321,6 +338,28 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
 
 <?php if ($perms['canEdit']): ?>
 <!-- 匯入平台已開立清單 -->
+<div class="a-mask" id="mkEinv"><div class="a-modal" style="width:1100px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-file-excel-o"></i>&nbsp;電子發票匯入檔預覽
+    <span class="m-close" data-close="mkEinv">✕</span></div>
+  <div class="m-body">
+    <div class="a-bar" style="margin-bottom:8px;">
+      <label>發票開立日期</label>
+      <input type="date" id="einvDate" style="width:160px;">
+      <span id="einvRange" style="color:#8a6d45;font-size:13px;"></span>
+    </div>
+    <div id="einvWarn"></div>
+    <div id="einvSum" style="margin-bottom:6px;font-size:13px;color:#5b3a1e;"></div>
+    <div style="overflow:auto;max-height:52vh;"><table class="a-t" id="tblEinv"></table></div>
+    <div style="margin-top:8px;font-size:12px;color:#8a6d45;">
+      下載後這些發票即標記為「已轉出」；開立後請到「發票管理」回填發票號碼與發票日期（發票日期不一定是匯入日）。
+    </div>
+  </div>
+  <div class="m-foot">
+    <button data-close="mkEinv">稍後再說</button>
+    <button class="go" id="btnEinvDl"><i class="fa fa-download"></i> 下載 xlsx 並標記已轉出</button>
+  </div>
+</div></div>
+
 <div class="a-mask" id="mkBf"><div class="a-modal">
   <div class="m-head"><i class="fa fa-upload"></i>&nbsp;匯入平台「已開立清單」回填發票號碼
     <span class="m-close" data-close="mkBf">✕</span></div>
@@ -478,12 +517,45 @@ function loadCand(){
              .reduce(function(a,g){return a+g.total_amt;},0))
         +' 元）。請先到「客戶發票資料維護」補齊。</div>'
       : '');
+    refreshCandKwList();
     renderCand();
   },'json').fail(function(){ toast('查詢失敗', true); });
 }
 
+/* 客戶模糊搜尋＋金額範圍（前端對已載入的整月資料篩，資料量為客戶數，不需分頁） */
+function candMatch(g){
+  var kw=($('#candKw').val()||'').trim().toLowerCase();
+  if(kw){
+    var hay=[g.customer,g.customer_id,g.customer_full,g.tax_id].join(' ').toLowerCase();
+    if(!kw.split(/\s+/).every(function(w){ return hay.indexOf(w)>=0; })) return false;
+  }
+  var t=$('#candAmtType').val()==='total'?'total_amt':'net_amt';
+  var mn=$('#candAmtMin').val(), mx=$('#candAmtMax').val();
+  if(mn!=='' && g[t] < Number(mn)) return false;
+  if(mx!=='' && g[t] > Number(mx)) return false;
+  return true;
+}
+function refreshCandKwList(){
+  var kw=($('#candKw').val()||'').trim().toLowerCase(), h='', n=0;
+  cand.forEach(function(g){
+    if(n>=30) return;
+    var hay=[g.customer,g.customer_id,g.customer_full,g.tax_id].join(' ').toLowerCase();
+    if(kw && !kw.split(/\s+/).every(function(w){ return hay.indexOf(w)>=0; })) return;
+    h+='<option value="'+esc(g.customer)+'">'+esc((g.customer_id||'')+' '+(g.customer_full||''))+'</option>'; n++;
+  });
+  $('#candKwList').html(h);
+}
+$('#candKw').on('input', function(){ refreshCandKwList(); renderCand(); });
+$('#candAmtType,#candAmtMin,#candAmtMax').on('input change', renderCand);
+$('#btnCandFilterClear').on('click',function(){
+  $('#candKw,#candAmtMin,#candAmtMax').val(''); $('#candAmtType').val('net');
+  refreshCandKwList(); renderCand();
+});
+
 function renderCand(){
-  var list = $('#candOnlyOk').is(':checked') ? cand.filter(function(g){ return g.can_issue; }) : cand;
+  var base = $('#candOnlyOk').is(':checked') ? cand.filter(function(g){ return g.can_issue; }) : cand;
+  var list = base.filter(candMatch);
+  $('#candFilterInfo').text(list.length!==base.length ? '篩選後 '+list.length+' / '+base.length+' 家' : '');
   if(!list.length){
     $('#cdBody').html('<tr><td colspan="10" style="padding:22px;color:#8a6d45;">'
       +'此帳款月份沒有待開立的憑證（可能都已開過發票，或取消勾選「只顯示可開立的」看被擋下的客戶）。</td></tr>');
@@ -573,13 +645,67 @@ $('#btnCdCreate').on('click',function(){
       toast('<b>'+esc(r.message)+'</b>');
       if(r.errors && r.errors.length) toast(r.errors.map(esc).join('<br>'), true);
       candSel={}; loadCand();
-      invRows=[]; $('.tab-btn[data-tab=inv]').click();
+      invRows=[];
+      var newIds=(r.invoices||[]).map(function(x){ return x.invoice_id; });
+      if(newIds.length) openEinv(newIds); else $('.tab-btn[data-tab=inv]').click();
     },'json').fail(function(x){
       $b.prop('disabled',false).html('<i class="fa fa-file-text-o"></i> 產生發票草稿');
       var m='產生失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
       toast(esc(m), true);
     });
 });
+/* 電子發票匯入檔預覽／下載 */
+var einvIds=[];
+function einvLoad(){
+  var d=$('#einvDate').val();
+  $('#tblEinv').html('<tr><td style="padding:18px;color:#8a6d45;">載入中…</td></tr>');
+  $.post(API+'?action=inv_einv_preview',{ids:einvIds.join(','),inv_date:d},function(r){
+    if(!r.ok){ $('#tblEinv').html(''); toast(esc(r.error||'預覽失敗'), true); $('#btnEinvDl').prop('disabled',true); return; }
+    $('#btnEinvDl').prop('disabled',false);
+    var h='<thead><tr>'+r.header.map(function(t){ return '<th>'+esc(t)+'</th>'; }).join('')+'</tr></thead><tbody>';
+    r.rows.forEach(function(row){
+      h+='<tr>'+row.map(function(v,i){
+        return '<td class="'+((i===14||i===16||i===17)?'r':'l')+'">'+esc(v==null?'':v)+'</td>'; }).join('')+'</tr>';
+    });
+    $('#tblEinv').html(h+'</tbody>');
+    var noMail=r.invoices.filter(function(x){ return x.no_email; });
+    $('#einvWarn').html(noMail.length
+      ? '<div class="warn">'+noMail.map(function(x){return esc(x.customer);}).join('、')
+        +' 沒有設定會計聯絡人 EMAIL（買方電子信箱會是空白）。</div>' : '');
+    var tot=r.invoices.reduce(function(a,x){return a+x.total;},0);
+    $('#einvSum').text(r.invoices.length+' 張發票、'+r.rows.length+' 列明細、含稅合計 '+nf(tot));
+  },'json').fail(function(x){
+    var m='預覽失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+    toast(esc(m), true);
+  });
+}
+function openEinv(ids){
+  einvIds=ids;
+  $.getJSON(API,{action:'inv_einv_range'},function(r){
+    if(!r.ok){ toast(esc(r.error||'無法取得日期範圍'), true); return; }
+    $('#einvDate').attr({min:r.min,max:r.max}).val(r.today);
+    $('#einvRange').text('可選 '+r.min+' ~ '+r.max+'（往前最多 '+r.back_days+' 天，往後到本月月底）');
+    openMask('mkEinv'); einvLoad();
+  });
+}
+$('#einvDate').on('change',function(){
+  var v=$(this).val(), mn=$(this).attr('min'), mx=$(this).attr('max');
+  if(!v || v<mn || v>mx){ toast('開立日期須在 '+mn+' ~ '+mx+' 之間', true); $('#btnEinvDl').prop('disabled',true); return; }
+  einvLoad();
+});
+$('#btnEinvDl').on('click',function(){
+  var d=$('#einvDate').val();
+  window.location=API+'?action=inv_einv_xlsx&ids='+einvIds.join(',')+'&inv_date='+encodeURIComponent(d);
+  setTimeout(function(){
+    $.post(API+'?action=inv_export_mark',{csrf:CSRF, ids:JSON.stringify(einvIds)},function(r){
+      closeMask('mkEinv');
+      toast(r.ok?'已下載並標記為「已轉出」，開立後請到發票管理回填發票號碼':esc(r.error||'標記失敗'), !r.ok);
+      invRows=[]; $('.tab-btn[data-tab=inv]').click();
+    },'json');
+  },1200);
+});
+/* 發票管理頁的「轉出」也可走同一個預覽（選取後按鈕） */
+
 $('#btnCandLoad').on('click', loadCand);
 $('#candBm').on('change', loadCand);
 
@@ -689,7 +815,7 @@ $('#ivChkAll').on('change',function(){
 function updateIvSel(){
   var n=Object.keys(invSel).length;
   $('#ivSel').text(nf(n));
-  $('#btnInvExport,#btnInvMark').prop('disabled', n===0);
+  $('#btnInvExport,#btnInvMark,#btnInvCsv').prop('disabled', n===0);
 }
 
 /* 憑證明細 */
@@ -724,6 +850,11 @@ $(document).on('click','.iv-detail',function(){
 
 /* 轉出 CSV / 標記已轉出 */
 $('#btnInvExport').on('click',function(){
+  var ids=Object.keys(invSel);
+  if(!ids.length) return;
+  openEinv(ids.map(Number));
+});
+$('#btnInvCsv').on('click',function(){
   var ids=Object.keys(invSel);
   if(!ids.length) return;
   window.location = API+'?action=inv_export_csv&ids='+ids.join(',')

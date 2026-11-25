@@ -520,6 +520,29 @@ case 'allow_create': {
 }
 
 /* 發票轉出 CSV：通用格式，供拿去電子發票平台開立 */
+/* 電子發票開立網站匯入檔：預覽（JSON）與下載（xlsx） */
+case 'inv_einv_preview':
+case 'inv_einv_xlsx': {
+    require_once $document_root . '/EGsystem/src/common/acc_einvoice_lib.php';
+    $s   = $_POST ?: $_GET;
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($s['ids'] ?? '')))));
+    if (!$ids) acc_err('沒有選取發票');
+    $d = trim((string)($s['inv_date'] ?? date('Y-m-d')));
+    if ($e = acc_einv_date_check($d)) acc_err($e);
+    $built = acc_einv_build($db, $ids, $d);
+    if (!$built['rows']) acc_err('沒有可匯出的發票明細');
+    if ($action === 'inv_einv_preview') {
+        acc_out(['header' => $built['header'], 'rows' => $built['rows'],
+                 'invoices' => $built['invoices'], 'range' => acc_einv_date_range()]);
+    }
+    acc_einv_send_xlsx($built, '電子發票匯入_' . str_replace('-', '', $d) . '_' . date('His') . '.xlsx');
+}
+
+case 'inv_einv_range': {
+    require_once $document_root . '/EGsystem/src/common/acc_einvoice_lib.php';
+    acc_out(acc_einv_date_range());
+}
+
 case 'inv_export_csv': {
     $s   = $_GET ?: $_POST;
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($s['ids'] ?? '')))));
