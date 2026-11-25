@@ -1079,6 +1079,16 @@ case 'decide': {
     if ($decision === 'rejected' && $note === '') jerr('退回必須填寫原因');
     $m = meeting_load($db, $id);
     $rec = eg_approval_latest($db, 'meeting', $id, $level);
+    /* 補救：主席已簽（狀態 chair_done、畫面寫「待總經理簽章」）卻沒有總經理的待簽紀錄
+       （例如主席章是補簽／改日期補上的，沒走正常的 decide 流程，總經理那一關從來沒建立），
+       這時任何人都簽不了。補建一筆待簽紀錄再繼續，簽核身分檢查仍照下面的規則。 */
+    if ($level === 'gm' && !$rec && (string)$m['status'] === 'chair_done') {
+        $chRec = eg_approval_latest($db, 'meeting', $id, 'chair');
+        if ($chRec && $chRec['status'] === 'approved') {
+            eg_approval_submit($db, 'meeting', $id, 'gm', (int)$m['recorder_user_id'], (string)$m['recorder_name']);
+            $rec = eg_approval_latest($db, 'meeting', $id, 'gm');
+        }
+    }
     if (!$rec || $rec['status'] !== 'pending') jerr('此會議記錄目前沒有待您處理的'.($level==='chair'?'主席':'總經理').'簽核項目');
 
     // 身分驗證：必須是被解析出的簽核人（含代理）或管理員
