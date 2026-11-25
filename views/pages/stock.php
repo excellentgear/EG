@@ -4729,7 +4729,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <option value="5">5年未出庫</option>
     </select>
     <button class="btn btn-default btn-sm" id="btn-lblfilter" onclick="openLabelFilter()" title="依料號底下的標籤內容篩選（例：模數 M 2.5、滾齒刀規格 內徑 22.225）"><i class="fa fa-tags"></i> 標籤篩選<span id="lblf-cnt" class="lblf-badge" style="display:none;">0</span></button>
-    <button class="btn btn-default btn-sm" onclick="resetFilters()">重置</button>
+    <button class="btn btn-default btn-sm" onclick="resetFilters()">清除篩選</button>
     <!-- 倉庫庫存表（2-WH-01-01）：印的是「目前篩選條件下的全部品項」，不是只印這一頁（ai-rules/08） -->
     <button class="btn btn-default btn-sm" data-stk-feat="stock_doc_print" onclick="printStockList()" title="依目前篩選條件列印正式的倉庫庫存表（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印庫存表</button>
     <button class="btn btn-sm btn-info" id="btn-batch-group" style="display:none; border-radius:6px; font-weight:600;" onclick="openMergeExistingGroupModal()"><i class="fa fa-compress"></i> 合併為組合件 (<span id="sel-cnt">0</span>)</button>
