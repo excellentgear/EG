@@ -612,8 +612,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $where[] = 'si.qty>0 AND si.qty<ss.safety_qty';
             } elseif ($qtyF==='zero') { $where[]='si.qty=0'; }
             elseif ($qtyF==='has')    { $where[]='si.qty>0'; }
-            // 庫存列表預設不顯示庫存數=0（只有庫存列表主畫面送 hide_zero=1；選「庫存為0」篩選時仍可查）
-            if (intval($_POST['hide_zero'] ?? 0)===1 && $qtyF!=='zero') { $where[]='si.qty<>0'; }
+            // 「全部數量」不再排除庫存 0（預設篩選改由前端預設選「有庫存」）
 
             // 今日異動篩選
             if ($todayOnly) {
@@ -4825,7 +4824,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     </select>
     <select id="f-qty" class="form-control" style="width:120px;" onchange="loadList(1)">
       <option value="all">全部數量</option>
-      <option value="has">有庫存</option>
+      <option value="has" selected>有庫存</option>
       <option value="low">低於安全庫存</option>
       <option value="zero">零庫存</option>
     </select>
@@ -7099,7 +7098,7 @@ function filterCard(type, el){
 }
 function resetFilters(){
     $('#f-search').val(''); $('#f-cat').val('all'); $('#f-loc').val('all');
-    $('#f-qty').val('all'); $('#f-client').val(''); $('#f-stale').val('0');
+    $('#f-qty').val('has'); $('#f-client').val(''); $('#f-stale').val('0');   // 預設篩選「有庫存」
     G._todayOnly=false;
     G.lblf.applied=[]; G.lblf.draft=[]; renderLblfApplied();
     $('.sc').removeClass('active'); $('#scard-all').addClass('active');
@@ -7118,7 +7117,7 @@ function loadList(page){
         search:($('#f-search').val()||'').trim(), category_id:$('#f-cat').val(),
         location_id:$('#f-loc').val(), qty_filter:$('#f-qty').val(),
         client_id:$('#f-client').val(), stale_years:$('#f-stale').val()||0,
-        today_only:G._todayOnly?1:0, hide_zero:1,
+        today_only:G._todayOnly?1:0,
         label_filters: G.lblf.applied.length ? JSON.stringify(G.lblf.applied) : '',
         sort_col:G.sortCol, sort_dir:G.sortDir
     }, function(r){
