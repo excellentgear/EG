@@ -3811,7 +3811,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM is_list WHERE d_setting_id=?");
             $chk->execute([$d_id]); $cnt=(int)$chk->fetchColumn();
             if ($cnt>0) $blocks[] = "出貨單 {$cnt} 筆";
-            $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE d_id=? AND is_active=1");
+            $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE d_setting_id=? AND is_active=1");
             $chk->execute([$d_id]); $cnt=(int)$chk->fetchColumn();
             if ($cnt>0) $blocks[] = "庫存紀錄 {$cnt} 筆";
             $chk = $pdo->prepare("SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?");
@@ -5418,7 +5418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM bom WHERE d_setting_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="生產批次(BOM) {$n} 筆";$counts['bom']=$n;}
             $chk = $pdo->prepare("SELECT COUNT(*) FROM d_setting_bom WHERE parent_d_id=? OR child_d_id=?"); $chk->execute([$d_id,$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="BOM組合件關聯 {$n} 筆";$counts['bom_struct']=$n;}
             $chk = $pdo->prepare("SELECT COUNT(*) FROM is_list WHERE d_setting_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="出貨單 {$n} 筆";$counts['is_list']=$n;}
-            $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE d_id=? AND is_active=1"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="庫存紀錄 {$n} 筆";$counts['stock']=$n;}
+            $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE d_setting_id=? AND is_active=1"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="庫存紀錄 {$n} 筆";$counts['stock']=$n;}
             $chk = $pdo->prepare("SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="報價單 {$n} 筆";$counts['quotation']=$n;}
             $chk = $pdo->prepare("SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="退貨單 {$n} 筆";$counts['ir']=$n;}
             // 圖面變更紀錄（AS 2-PD-01-07）：見 delete_part 內同一段註解。表可能尚未建立，故包 try。
@@ -7136,7 +7136,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         ['出貨', "SELECT d_setting_id k, COUNT(*) n FROM is_list WHERE d_setting_id IN ($ph2) GROUP BY d_setting_id"],
                         ['報價', "SELECT d_setting_d_id k, COUNT(*) n FROM quotation_item WHERE d_setting_d_id IN ($ph2) GROUP BY d_setting_d_id"],
                         ['退貨', "SELECT d_setting_id k, COUNT(*) n FROM ir_track WHERE d_setting_id IN ($ph2) GROUP BY d_setting_id"],
-                        ['庫存', "SELECT d_id k, COUNT(*) n FROM stock_items WHERE d_id IN ($ph2) AND is_active=1 GROUP BY d_id"],
+                        ['庫存', "SELECT d_setting_id k, COUNT(*) n FROM stock_items WHERE d_setting_id IN ($ph2) AND is_active=1 GROUP BY d_setting_id"],
                     ];
                     foreach ($defs as [$lab, $sql]) {
                         foreach ($pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -7364,7 +7364,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ['生產批次(BOM)',   "SELECT COUNT(*) FROM bom WHERE d_setting_id=?", 1],
                 ['BOM組合件關聯',   "SELECT COUNT(*) FROM d_setting_bom WHERE parent_d_id=? OR child_d_id=?", 2],
                 ['出貨單',          "SELECT COUNT(*) FROM is_list WHERE d_setting_id=?", 1],
-                ['庫存紀錄',        "SELECT COUNT(*) FROM stock_items WHERE d_id=? AND is_active=1", 1],
+                ['庫存紀錄',        "SELECT COUNT(*) FROM stock_items WHERE d_setting_id=? AND is_active=1", 1],
                 ['報價單',          "SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?", 1],
                 ['退貨單',          "SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?", 1],
             ] as [$__lab, $__sql, $__np]) {
