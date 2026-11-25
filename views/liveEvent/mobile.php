@@ -251,6 +251,27 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             var viT = e.i18n && e.i18n.vi;
             if (viT) h += '<div class="d-sec"><h3><i class="fa fa-language"></i> Tiếng Việt</h3><div class="d-content"><b>' + esc(viT.title) + '</b>' + (viT.content_html ? '<div style="white-space:normal;overflow-x:auto;">' + viT.content_html + '</div>' : '\n' + esc(viT.content)) + '</div></div>';
             h += '<div class="d-sec"><h3><i class="fa fa-file-text-o"></i> 內容</h3><div class="d-content">' + esc(e.content) + '</div></div>';
+            if (e.ref_type === 'IA_CASE_NOTICE') {
+                h += '<div class="d-sec"><h3><i class="fa fa-table"></i> 稽核時程表</h3><div id="iaTbl" style="overflow-x:auto;color:var(--muted);">載入中…</div></div>';
+                var iaTry = 0, iaLoad = function(){
+                    if (!document.getElementById('iaTbl')) { if (iaTry++ < 20) setTimeout(iaLoad, 200); return; }
+                    $.getJSON('../../src/store/InternalAudit_API.php', {action:'case_notice_table', case_id:(e.ref_id||0)}, function(r){
+                        if (!r.ok) { $('#iaTbl').text(r.error || '時程表載入失敗'); return; }
+                        var t = '<table style="border-collapse:collapse;width:100%;font-size:13px;min-width:520px;"><thead><tr>';
+                        ['日期','時間','稽核起始主過程','受稽單位','稽核員','陪檢員'].forEach(function(x){ t += '<th style="border:1px solid #ccc;padding:5px 6px;background:#f3f3f3;white-space:nowrap;">' + x + '</th>'; });
+                        t += '</tr></thead><tbody>';
+                        (r.slots||[]).forEach(function(s){
+                            var bg = s.mine ? 'background:#FFF3C4;font-weight:bold;' : '';
+                            var td = function(v){ return '<td style="border:1px solid #ccc;padding:5px 6px;color:#222;' + bg + '">' + v + '</td>'; };
+                            t += '<tr>' + td(esc(s.date)) + td(esc(s.time) + (s.end ? '~' + esc(s.end) : '')) + td(esc(s.sp))
+                               + td(esc((s.units||[]).join('、'))) + td(esc((s.aud||[]).join('、'))) + td(esc((s.esc||[]).join('、'))) + '</tr>';
+                        });
+                        t += '</tbody></table><div style="margin-top:6px;font-size:12px;"><span style="background:#FFF3C4;border:1px solid #e6cf80;padding:0 8px;">淺黃底</span> ＝ 您的時段</div>';
+                        $('#iaTbl').css('color','').html(t);
+                    }).fail(function(){ $('#iaTbl').text('時程表載入失敗'); });
+                };
+                iaLoad();
+            }
 
             // 附件：檢視一律用「角落標註快取版」(t=p，標籤與備注已印在檔上；無快取版時後端自動退回原檔)
             // 並在清單顯示 標籤＋備注摘要（規格 四之四 4G 檢視版面）

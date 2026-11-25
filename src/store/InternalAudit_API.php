@@ -581,6 +581,24 @@ case 'case_list': {
     jout(['rows' => $rowsOut]);
 }
 
+case 'case_notice_table': {
+    // 通知上顯示整張稽核時程表（被通知者的時段標色）：與案件有關的人即可看
+    $cid = (int)($_GET['case_id'] ?? 0);
+    if (!$perms['canView'] && !iaCaseRelated($db, $uid, $cid)) jerr('無檢視權限', 403);
+    $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$cid]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('找不到這張稽核通知單', 404);
+    $out = [];
+    foreach (ia_case_slots($db, $c) as $sl) {
+        $out[] = ['date' => eg_fmt_date($sl['date']), 'time' => $sl['time'], 'end' => $sl['end'], 'sp' => $sl['sp'],
+                  'units' => $sl['units'], 'aud' => array_values($sl['aud']), 'esc' => array_values($sl['esc']),
+                  'mine' => isset($sl['aud'][$uid]) || isset($sl['esc'][$uid])];
+    }
+    usort($out, function ($a, $b) { return strcmp($a['date'] . $a['time'], $b['date'] . $b['time']); });
+    jout(['slots' => $out, 'case_no' => (string)$c['case_no']]);
+}
+
 case 'case_get': {
     $cid = (int)($_GET['case_id'] ?? 0);
     // 沒有內稽檢視權的人：只要是這張通知單的稽核員／陪檢員／組長，或收到它的通知，就可以看（通知上直接開列印版用）
