@@ -10761,7 +10761,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
         </div>
         <div class="form-group">
             <label>電子信箱</label>
-            <textarea class="form-control" id="cf-customer_email" name="customer_email" rows="1" maxlength="255" style="resize:vertical;" placeholder="公司信箱，多個以分號分隔"></textarea>
+            <textarea class="form-control" id="cf-customer_email" name="customer_email" rows="1" maxlength="255" style="resize:vertical;" placeholder="公司信箱，多個以分號分隔" autocomplete="off" spellcheck="false"></textarea>
         </div>
     </div>
     <div class="col-md-4">
@@ -19580,8 +19580,8 @@ function addContactRow(c) {
         + '<textarea class="form-control input-sm ct-dept" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;" placeholder="部門" maxlength="50">'+escHtml(c.department||'')+'</textarea>'
         + '<textarea class="form-control input-sm ct-title" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;" placeholder="職稱" maxlength="50">'+escHtml(c.title||'')+'</textarea>'
         + '<input type="text" class="form-control input-sm ct-ext"        style="width:60px;"               placeholder="分機"   maxlength="20"  value="'+escAttr(c.phone_ext||'')+'">'
-        + '<input type="text" class="form-control input-sm ct-mobile"     style="flex:1;min-width:85px;"    placeholder="手機"   maxlength="30"  value="'+escAttr(c.mobile||'')+'">'
-        + '<textarea class="form-control input-sm ct-email" rows="1" style="flex:2;min-width:140px; resize:none;overflow:hidden;" placeholder="Email（多個以分號分隔）" maxlength="255">'+escHtml(c.email||'')+'</textarea>'
+        + '<input type="text" class="form-control input-sm ct-mobile"     style="flex:1;min-width:85px;"    placeholder="0912-345-678"   maxlength="30" autocomplete="off" value="'+escAttr(egFmtTwPhone(c.mobile||''))+'">'
+        + '<textarea class="form-control input-sm ct-email" rows="1" style="flex:2;min-width:140px; resize:none;overflow:hidden;" placeholder="信箱（多個以分號分隔）" maxlength="255" autocomplete="off" spellcheck="false">'+escHtml(c.email||'')+'</textarea>'
         + '<textarea class="form-control input-sm ct-note" rows="1" style="flex:1.2;min-width:90px; resize:none;overflow:hidden;" placeholder="備註" maxlength="100">'+escHtml(c.note||'')+'</textarea>'
         + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝會計聯絡人（對帳、請款聯絡對象，對帳頁會自動提示）"><div style="font-size:10px;color:#aaa;">會計</div><input type="checkbox" class="ct-acct" ' + (c.is_accounting==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
         + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝電子發票收件人（Email 可填多個）；對帳頁會自動提示"><div style="font-size:10px;color:#aaa;">發票</div><input type="checkbox" class="ct-inv" ' + (c.is_invoice_recv==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
@@ -19594,6 +19594,43 @@ function addContactRow(c) {
     // 跳窗尚未顯示時量不到高度，顯示後再量一次
     setTimeout(function(){ row.querySelectorAll('textarea').forEach(_ctAutoH); }, 300);
 }
+/**
+ * 台灣電話／手機自動格式（唯一實作；客戶與廠商編輯共用）
+ *   手機 09xx-xxx-xxx ／ 市話 02-xxxx-xxxx（兩碼區碼）或 037-xxx-xxxx（三碼區碼）
+ * 輸入或貼上時一律先拿掉已有的「-」與空白再重排，所以貼「0963025666」「0963-025-666」都會變成同一種；
+ * 數字後面若接文字（如「#123」「分機」）原樣保留；開頭是 + 的國際碼不處理。
+ */
+var _TW_AREA3 = ['037','049','082','089'];
+function egFmtTwPhone(raw) {
+    raw = String(raw == null ? '' : raw);
+    if (/^\s*\+/.test(raw)) return raw;
+    var m = raw.match(/^([\d\-\s().]*)([\s\S]*)$/);
+    var d = m[1].replace(/\D/g, ''), rest = m[2];
+    if (!d) return raw;
+    if (d.length > 10) return raw;   // 超過 10 碼多半是填了兩組號碼或含分機，不重排以免把資料合併弄壞
+    var cuts;
+    if (d.indexOf('09') === 0) cuts = [4, 7, 10];
+    else if (d.charAt(0) === '0') cuts = (_TW_AREA3.indexOf(d.substr(0, 3)) >= 0) ? [3, 6, 10] : [2, 6, 10];
+    else return d + rest;
+    var parts = [], prev = 0;
+    cuts.forEach(function(c, i){
+        var seg = (i === cuts.length - 1) ? d.slice(prev) : d.slice(prev, c);   // 超過 10 碼的尾巴併進最後一段
+        if (seg) parts.push(seg);
+        prev = c;
+    });
+    return parts.join('-') + rest;
+}
+/** 輸入／貼上時即時套用格式並保持游標位置（以「游標前有幾個數字」還原） */
+document.addEventListener('input', function(e) {
+    var t = e.target;
+    if (!t || !t.matches || !t.matches('#cf-customer_tel,#cf-customer_fax,#cf-customer_fax2,.ct-mobile,#mf-m_tel,#mf-m_tel2,#mf-m_fax,#mf-m_fax2,.mct-mobile')) return;
+    var v = t.value, pos = t.selectionStart, nv = egFmtTwPhone(v);
+    if (nv === v) return;
+    var before = (v.slice(0, pos).match(/\d/g) || []).length, np = 0, cnt = 0;
+    if (before > 0) { for (np = 0; np < nv.length && cnt < before; np++) { if (/\d/.test(nv.charAt(np))) cnt++; } }
+    t.value = nv;
+    try { t.setSelectionRange(np, np); } catch (x) {}
+});
 /** 聯絡人文字欄：內容多時自動長高、完整顯示（不橫向截斷） */
 function _ctAutoH(t) { if (!t) return; t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
 function _ctVal(row, sel) { var e = row.querySelector(sel); return e ? e.value.replace(/\s*[\r\n]+\s*/g, ' ').trim() : ''; }
@@ -19611,7 +19648,7 @@ function syncContactsHidden() {
             department: _ctVal(row, '.ct-dept'),
             title:      _ctVal(row, '.ct-title'),
             phone_ext:  row.querySelector('.ct-ext').value.trim(),
-            mobile:     row.querySelector('.ct-mobile').value.trim(),
+            mobile:     egFmtTwPhone(row.querySelector('.ct-mobile').value.trim()),
             email:      _ctVal(row, '.ct-email'),
             note:       _ctVal(row, '.ct-note'),
             is_primary: (i===primaryIdx) ? 1 : 0,
@@ -19942,6 +19979,7 @@ function openCustomerModal(customer_id, readonly) {
                 if (el) el.value = d[f]||'';
             });
             onShippingNoneChange();
+            ['cf-customer_tel','cf-customer_fax','cf-customer_fax2'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=egFmtTwPhone(e.value); });
             document.getElementById('cf-is_inactive').checked    = (d.is_inactive=='1');
             document.getElementById('cf-is_own_company').checked = (d.is_own_company=='1' || d.is_own_company===1);
             document.getElementById('cf-est_date').value = d.est_date || _mdmTodayStr();
@@ -20052,9 +20090,9 @@ function submitCustomerForm() {
         customer_full:    gv('cf-customer_full').trim(),
         customer_full_en: gv('cf-customer_full_en').trim(),
         customer_grade:   gv('cf-customer_grade'),
-        customer_tel:     gv('cf-customer_tel'),
-        customer_fax:     gv('cf-customer_fax'),
-        customer_fax2:    gv('cf-customer_fax2'),
+        customer_tel:     egFmtTwPhone(gv('cf-customer_tel')),
+        customer_fax:     egFmtTwPhone(gv('cf-customer_fax')),
+        customer_fax2:    egFmtTwPhone(gv('cf-customer_fax2')),
         customer_zip:     gv('cf-customer_zip'),
         customer_address: gv('cf-customer_address'),
         party_aliases:    gv('cf-party_aliases'),
