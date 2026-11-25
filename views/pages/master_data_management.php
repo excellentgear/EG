@@ -23414,7 +23414,7 @@ function _pavRenderQuoteGroupList(files, wrap) {
                   + (f.bind_quote_no ? '<span style="font-size:10px;font-weight:700;background:#F0A24B;color:#4A3524;border-radius:3px;padding:1px 6px;" title="這是料號附件綁定過來的，檔案本體在料號附件">料號附件</span>' : '')
                   + tagDisplay + qMk + '</div>';
             // 備註（與一般附件清單同一套：有填才顯示，不顯示檔名）
-            if (f.note) html += '<div style="font-size:11px;color:#4A3524;margin-top:2px;word-break:break-all;" title="'+escHtml(f.note)+'"><i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
+            if (f.note && f.note!=='批圖編輯器輸出圖') html += '<div style="font-size:11px;color:#4A3524;margin-top:2px;word-break:break-all;" title="'+escHtml(f.note)+'"><i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
             html += '<div style="font-size:10px;color:#aaa;margin-top:2px;display:flex;gap:8px;">';
             html += '<span>'+escHtml(dt)+'</span>';
             if (f.uploaded_by) html += '<span><i class="fa fa-user" style="opacity:.5;margin-right:2px;"></i>'+escHtml(f.uploaded_by)+'</span>';
@@ -23648,7 +23648,7 @@ function _pavRenderList() {
         }
         html += '</div>';
         // 第二行：備註（標籤下方；沒填就整行不出現＝使用者拍板，不顯示「未填備註」）
-        if (f.note && !isObs) {   // 作廢的附件不顯示備註（使用者要求 2026-10-14）
+        if (f.note && f.note!=='批圖編輯器輸出圖' && !isObs) {   // 作廢的附件不顯示備註（使用者要求 2026-10-14）
             html += '<div style="margin-top:2px;font-size:11px;color:#4A3524;line-height:1.35;word-break:break-all;" title="'+escHtml(f.note)+'">'
                   + '<i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
         }

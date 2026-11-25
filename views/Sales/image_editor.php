@@ -851,6 +851,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $dcSummary = trim(preg_replace('/\s+/u', ' ', (string)($_POST['dc_summary'] ?? '')));
             if (mb_strlen($dcSummary, 'UTF-8') > 500) $dcSummary = mb_substr($dcSummary, 0, 500, 'UTF-8');
             $dcNumber  = (int)($_POST['dc_number'] ?? 0);
+            // 附件備註（修改說明，選填）：沒填就留空，不再寫「批圖編輯器輸出圖」這種沒資訊的固定字
+            $pngNote = trim(preg_replace('/\s+/u', ' ', (string)($_POST['note'] ?? '')));
+            if (mb_strlen($pngNote, 'UTF-8') > 200) $pngNote = mb_substr($pngNote, 0, 200, 'UTF-8');
+            if ($pngNote === '') $pngNote = null;
             if (!$noWorkfile) {
                 // 有建立工作檔＝這次存的是「還在編、隨時會被下一版蓋掉」的暫存檔（使用者拍板 2026-08-20）：
                 // 工作檔在料號附件／圖面檢視都看不到，不該當成正式發行的圖面，
@@ -896,7 +900,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
             // 輸出 PNG 帶使用者選的標籤與發行章日期；工作檔兩者都不給
             //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
-            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, ($procTag !== '' ? $procTag : null), '批圖編輯器輸出圖', $userName, $uid]);
+            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, ($procTag !== '' ? $procTag : null), $pngNote, $userName, $uid]);
             $pngId = $pdo->lastInsertId();
             if ($procSel) eg_apc_save($pdo, (int)$pngId, $procSel);   // 製程大類／小類對照（與料號附件頁同一張表）
             if ($dcSummary !== '') {
@@ -2087,6 +2091,12 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <div style="flex:1;">
                     <input type="text" id="pf-revision" maxlength="50" style="width:210px;" placeholder="選填，例：C" oninput="pfRenderRevHint()">
                     <div id="pf-rev-hint" style="font-size:11.5px;color:#8b949e;margin-top:3px;">選填。填了會掛在壓平 PNG 上（工作檔不掛），附件清單會顯示 Rev. 標籤。</div>
+                </div>
+            </div>
+            <div class="frm-row"><label>修改說明</label>
+                <div style="flex:1;">
+                    <input type="text" id="pf-note" maxlength="200" style="width:100%;box-sizing:border-box;" placeholder="選填，例：◇1 客戶更改尺寸">
+                    <div style="font-size:11.5px;color:#8b949e;margin-top:3px;">選填。會顯示在附件清單該筆圖的下方；畫布上有設變標示時會自動帶入說明，可自行修改。</div>
                 </div>
             </div>
             <!-- 製程標籤：同一個料號常常有多個加工項目各自一張圖，新舊版要分開判定（2026-08-20 使用者要求）。
@@ -7767,6 +7777,7 @@ function openPartModal() {
     document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
     const _pfIss = document.getElementById('pf-issue-date'); if (_pfIss) _pfIss.value = '';
     document.getElementById('pf-revision').value = '';
+    try { const _dn = dcLatestNote(); document.getElementById('pf-note').value = (_dn && _dn.text) ? ('◇' + _dn.num + ' ' + _dn.text).slice(0, 200) : ''; } catch (e) { document.getElementById('pf-note').value = ''; }
     pfRenderRevHint();
     document.getElementById('pf-mult').value = '2';   // 每次開窗回到建議值，避免上次調低後忘了調回去
     pfRenderMultHint();
@@ -8136,6 +8147,7 @@ async function pfSave() {
         fd.append('category_ids', cats.join(','));
         fd.append('issue_stamp_date', issueDate);
         fd.append('revision', document.getElementById('pf-revision').value.trim());
+        fd.append('note', document.getElementById('pf-note').value.trim());
         fd.append('process_sel', JSON.stringify(pfProcSel()));
         const dcNote = dcLatestNote();
         if (dcNote.text) { fd.append('dc_summary', dcNote.text); fd.append('dc_number', String(dcNote.num)); }
