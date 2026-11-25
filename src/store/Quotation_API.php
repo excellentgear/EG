@@ -45,6 +45,26 @@ $action = $_POST['action'] ?? $_GET['action'] ?? '';
 // ──────────────────────────────────────────────────────────────
 // 共用：取得單一報價單的 items（含 tiers）
 // ──────────────────────────────────────────────────────────────
+// 料號文字以「綁定的料號主檔」為準（quotation_item.product_id 只是存檔當下的文字快照，
+// 主檔改大小寫/寫法後不會跟著變）。有綁定 d_setting_d_id 就改取主檔現況，沒綁定維持原值。
+function applyLivePartNo(PDO $pdo, array &$rows): void
+{
+    $ids = [];
+    foreach ($rows as $r) { $d = (int)($r['d_setting_d_id'] ?? 0); if ($d > 0) $ids[$d] = true; }
+    if (!$ids) return;
+    $ids = array_keys($ids);
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $pdo->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id IN ($ph)");
+    $st->execute($ids);
+    $map = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $m) $map[(int)$m['d_id']] = (string)$m['D_Setting_Id'];
+    foreach ($rows as &$r) {
+        $d = (int)($r['d_setting_d_id'] ?? 0);
+        if ($d > 0 && isset($map[$d]) && $map[$d] !== '') $r['product_id'] = $map[$d];
+    }
+    unset($r);
+}
+
 function fetchItemsWithTiers(PDO $pdo, int $quote_id): array
 {
     $stmt = $pdo->prepare("
@@ -59,6 +79,7 @@ function fetchItemsWithTiers(PDO $pdo, int $quote_id): array
     ");
     $stmt->execute([$quote_id]);
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    applyLivePartNo($pdo, $items);
 
     if (!empty($items)) {
         $item_ids = array_column($items, 'item_id');
@@ -114,7 +135,7 @@ function buildItemSummary(PDO $pdo, array &$rows): void
 
     // 批次撈所有 items
     $stmt = $pdo->prepare("
-        SELECT quote_id, item_id, product_id, specification,
+        SELECT quote_id, item_id, product_id, d_setting_d_id, specification,
                quantity, unit_price, is_tiered
         FROM quotation_item
         WHERE quote_id IN ($ph)
@@ -122,6 +143,7 @@ function buildItemSummary(PDO $pdo, array &$rows): void
     ");
     $stmt->execute($quote_ids);
     $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    applyLivePartNo($pdo, $all_items);
 
     // 批次撈有 tier 的 items 的階梯資料
     $tiered_item_ids = array_column(
