@@ -4453,6 +4453,9 @@ html,body,.main_container,.container.body{overflow-x:hidden!important;}
 /* 設定頁 grid */
 #tab-setting>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
 #count-tbl{width:100%;}
+/* 盤點明細：已盤點列底色（差異=0 淺綠、差異≠0 淺粉紅） */
+#count-tbl tr.cnt-row-ok>td{background:#E6F6EA!important;}
+#count-tbl tr.cnt-row-diff>td{background:#FDE8EC!important;}
 /* Modal flex layout：解決 modal-body 雙滾動條，只讓 modal-body 捲動 */
 .modal-content{display:flex!important;flex-direction:column!important;max-height:90vh!important;}
 .modal-body{overflow-y:auto!important;flex:1 1 auto!important;-webkit-overflow-scrolling:touch;}
@@ -9720,7 +9723,8 @@ function renderCountDetail(sid,rows){
               +' data-remark="'+esc(row.remark||'')+'"'
               +' onchange="updateCountSplitSelection()"></td>'
             : '';
-        h+='<tr id="cr-'+row.detail_id+'">'
+        var cntCls=(row.counted_qty!==null&&diff!==null)?(diff===0?' class="cnt-row-ok"':' class="cnt-row-diff"'):'';
+        h+='<tr id="cr-'+row.detail_id+'"'+cntCls+'>'
           +chkHtml
           +'<td><strong>'+esc(row.d_id)+'</strong></td>'
           +'<td style="font-size:11px;">'+esc(row.client_name||'—')+'</td>'
@@ -9899,6 +9903,7 @@ function inputCount(did, sysQty){
         $('#cnt-'+did).html(cnt);
         $('#dif-'+did).html(diff===0?'<span style="color:var(--accent);">0</span>':'<span style="color:'+(diff>0?'var(--accent)':'var(--danger)')+';font-weight:700;">'+(diff>0?'+':'')+diff+'</span>');
         if(rem) $('#rem-'+did).text(rem);
+        $('#cr-'+did).removeClass('cnt-row-ok cnt-row-diff').addClass(parseFloat(diff)===0?'cnt-row-ok':'cnt-row-diff');
         toast('已記錄','success');
     });
 }
