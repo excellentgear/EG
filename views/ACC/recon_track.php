@@ -141,6 +141,10 @@ body { background:#F6F1EA; }
 .badge-sent_to_acc   { background:#C77C1A; }
 .badge-acc_received  { background:#8B5A2B; }
 .badge-acc_done       { background:#2E7D32; }
+.ci-line { font-size:12px; color:#8a6d4b; line-height:1.4; margin-top:2px; }
+.ci-note { font-size:12px; color:#6b5a45; line-height:1.4; margin-top:2px; white-space:pre-wrap; word-break:break-all; }
+.ci-note.ci-clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.ci-more { font-size:12px; color:#C9742A; }
 .badge-need  { background:var(--coral); color:#fff; border-radius:9px; padding:3px 11px; font-size:13px; font-weight:600; line-height:18px; display:inline-block; }
 .badge-nneed { background:#E4D3BC; color:#6B4423; border-radius:9px; padding:3px 11px; font-size:13px; font-weight:600; line-height:18px; display:inline-block; }
 table.art-t { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
@@ -214,6 +218,8 @@ table.art-t tr.allow-row.allow-ok td, table.art-t tr.allow-row.allow-ok:hover td
 .allow-cf[disabled]{opacity:.5;cursor:not-allowed;}
 .allow-carry{display:inline-block;padding:0 6px;border-radius:8px;font-size:10px;line-height:16px;background:#E4D3BC;color:#6B4423;}
 table.art-t tr.ret-void td, table.art-t tr.ret-void:hover td{background:#F6D9D2 !important;text-decoration:line-through;color:#8a4b3a;}
+table.art-t tr.ship-allow td, table.art-t tr.ship-allow:hover td{background:#DDE9EE !important;}
+table.art-t tr.allow-dup td.amt-void, table.art-t tr.allow-dup td.up-void{text-decoration:line-through;color:#8a6b3a;}
 table.art-t tr.ret-void td b{text-decoration:none;display:inline-block;color:#B4411F;}
 .cf-who{font-size:10px;color:#6B4423;line-height:1.3;white-space:normal;}
 #retAllowBanner{display:none;margin:0 0 10px;padding:8px 12px;border:2px solid #DD5138;border-radius:6px;background:#FCE3DC;color:#8a2c14;font-size:13px;line-height:1.6;}
@@ -1084,7 +1090,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本月顯示 '+r.allow_cnt+' 張折讓單'+(r.allow_carry?'（其中 '+r.allow_carry+' 張是前期折讓）':'')+(r.allow_todo?'，尚有 '+r.allow_todo+' 筆未確認':'')+'，點開看綁定的出貨／退貨單">'+(r.allow_carry&&r.allow_carry===r.allow_cnt?'前期折讓':'有折讓')+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + ((r.prior_unrecon && r.prior_unrecon.length) ? ' <a href="javascript:void(0)" class="prior-btn" title="前月份還沒對帳，點開分月查看明細">' + priorLabel(r.prior_unrecon) + '未對帳</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本月顯示 '+r.allow_cnt+' 張折讓單'+(r.allow_carry?'（其中 '+r.allow_carry+' 張是前期折讓）':'')+(r.allow_todo?'，尚有 '+r.allow_todo+' 筆未確認':'')+'，點開看綁定的出貨／退貨單">'+(r.allow_carry&&r.allow_carry===r.allow_cnt?'前期折讓':'有折讓')+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + ((r.prior_unrecon && r.prior_unrecon.length) ? ' <a href="javascript:void(0)" class="prior-btn" title="前月份還沒對帳，點開分月查看明細">' + priorLabel(r.prior_unrecon) + '未對帳</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + (isAr ? custInfoHtml(r) : '') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + (r.settle_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(r.settle_by||'') + ' ' + esc(String(r.settle_at).replace(/-/g,'.')) + ' 修改</div>' : '') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
@@ -1109,6 +1115,29 @@ function renderListTbl(){
     });
     document.getElementById('listTbl').querySelector('tbody').innerHTML = html;
     updateBatchBar();
+}
+/* 客戶名稱下方：對帳單提供方式＋帳務備註（過長收合，可點開看全部） */
+function custInfoHtml(r){
+    var h = '';
+    if (r.need_recon_stmt) {
+        if (r.recon_provide_by === 'customer') h += '<div class="ci-line">客戶提供對帳單</div>';
+        else if (r.recon_provide_by === 'company') {
+            var ch = String(r.recon_channels || '').split(',').filter(Boolean);
+            if (ch.length) h += '<div class="ci-line">對帳單：' + ch.map(esc).join('、') + '</div>';
+        }
+    }
+    var note = String(r.billing_note || '').trim();
+    if (note) {
+        var long = note.length > 40 || note.split('\n').length > 2;
+        h += '<div class="ci-note' + (long ? ' ci-clamp' : '') + '">' + esc(note) + '</div>' +
+             (long ? '<a href="javascript:void(0)" class="ci-more" onclick="event.stopPropagation();toggleCiNote(this)">…顯示更多</a>' : '');
+    }
+    return h;
+}
+function toggleCiNote(a){
+    var n = a.previousElementSibling; if (!n) return;
+    var open = n.classList.toggle('ci-clamp') === false;
+    a.textContent = open ? '收合' : '…顯示更多';
 }
 /* 前月份未對帳：「10月未對帳」「10、11月未對帳」（跨年的月份加上年份） */
 function priorLabel(months){
@@ -1589,12 +1618,15 @@ $(function(){
         // 折讓視為該帳款月份待對帳的項目：置頂、暖色底，並註明誰於何時開立；按「已確認」後該列變暖淺綠，確認月份之後不再顯示。
         // 金額（一律以「對帳月份」計，不是按下去的日期）：出貨折讓＝在按下已確認的那個月扣掉折讓金額（含稅）；
         // 退貨折讓＝該月對帳明細裡對應那筆退貨整列刪去線、淺紅底、不算金額（已用折讓扣過款，避免重複扣）。
+        var shipKeys = {};
+        if (isAr) items.forEach(function(it){ if (it.kind==='ship') shipKeys[it.no + '|' + Number(it.unit_price)] = true; });
         var retVoid = {}, rate = Number(d.tax_rate) || 0;
         allows.forEach(function(a){ (a.items||[]).forEach(function(i){ if (i.src_type==='IR' && Number(i.ret_here)) retVoid[i.src_id] = true; }); });
         allows.forEach(function(a){
             (a.items||[]).forEach(function(i){ cnt++;
                 var isRet = (i.src_type==='IR');
-                if (!isRet && Number(i.confirmed)) allowTotal -= (Number(i.amount)||0) + (Number(i.tax_amount)||0);
+                var allowDup = !isRet && !!shipKeys[i.src_no + '|' + Number(i.unit_price)];   // 這個月明細裡就有同一張出貨單（同單價）：折讓金額劃除、不重複扣
+                if (!isRet && !allowDup && Number(i.confirmed)) allowTotal -= (Number(i.amount)||0) + (Number(i.tax_amount)||0);
                 var cfLater = !!i.confirm_bm && !Number(i.confirmed);   // 不是本月確認的：之後的月份確認（confirm_rel=later），或退貨折讓在上月已確認（prev）
                 var who = i.confirm_by ? esc(i.confirm_by) + ' ' + esc(String(i.confirm_at||'').replace(/-/g,'.')) : '';
                 var cfBtn = Number(i.confirmed)
@@ -1604,14 +1636,18 @@ $(function(){
                 var tag = isRet
                     ? (Number(i.ret_here) ? '<span class="allow-carry" title="這筆退貨已用折讓單扣過款；需按「已確認」，已送會計前必須確認">退貨折讓（已扣款）</span><br>' : '<span class="allow-carry" title="退貨在 ' + esc(i.ir_bm||'') + ' 月；折讓單的帳款月份是 ' + esc(a.billing_month) + '。沒確認會每月提醒（也不能已送會計），確認後下一個月仍會顯示一次">前期退貨折讓（退貨 ' + esc(i.ir_bm||'') + '）</span><br>')
                     : (a.carried ? '<span class="allow-carry" title="折讓單的帳款月份是 ' + esc(a.billing_month) + '；每月提醒到按「已確認」為止，金額算在確認的那個對帳月份">前期折讓 ' + esc(a.billing_month) + '</span><br>' : '');
-                h += '<tr class="allow-row' + (Number(i.confirmed)?' allow-ok':'') + '"><td class="c">' + cfBtn + '</td><td>' + tag + '折讓（' + (isRet?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
+                h += '<tr class="allow-row' + (Number(i.confirmed)?' allow-ok':'') + (allowDup?' allow-dup':'') + '"' + (allowDup?' title="這張出貨單本月照常收款，折讓金額劃除、不重複扣"':'') + '><td class="c">' + cfBtn + '</td><td>' + tag + '折讓（' + (isRet?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.part_no||'') + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + (allowDup ? '<td class="n up-void">' + fmtMoney(i.unit_price) + '</td>' : n(i.unit_price)) + (allowDup ? '<td class="n amt-void">' + fmtMoney(-Number(i.amount)) + '</td>' : n(-Number(i.amount)))
                    + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';
             });
         });
+        // 出貨折讓（IS）對應到的出貨單：同單號、同單價者標暖淺色底並劃除單價（折讓已扣過，避免重複計算）
+        var shipAllow = {};
+        allows.forEach(function(a){ (a.items||[]).forEach(function(i){ if (i.src_type==='IS') shipAllow[i.src_no + '|' + Number(i.unit_price)] = true; }); });
         items.forEach(function(it){ cnt++;
             var voided = isAr && it.kind==='return' && retVoid[it.src_id];
+            var shipHit = isAr && it.kind==='ship' && shipAllow[it.no + '|' + Number(it.unit_price)];
             if (voided) allowTotal += Math.round(-(Number(it.amount)||0) * (1 + rate));   // 排除這筆退貨的含稅扣款
-            if (isAr) h += '<tr' + (voided?' class="ret-void" title="這筆退貨已開折讓單扣款，不需做帳"':'') + '>' + blank + '<td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + (voided ? '<br><b>已開折讓，不需做帳</b>' : '') + '</td></tr>';
+            if (isAr) h += '<tr' + (voided?' class="ret-void" title="這筆退貨已開折讓單扣款，不需做帳"':(shipHit?' class="ship-allow" title="這筆出貨已開折讓單（見上方折讓列，折讓金額已劃除不重複扣）"':'')) + '>' + blank + '<td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.part_no||'') + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + (voided ? '<br><b>已開折讓，不需做帳</b>' : '') + '</td></tr>';
             else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
         });
         var tot = isAr ? d.total_amt : d.total_amount;
@@ -1642,7 +1678,7 @@ $(function(){
         document.getElementById('dtlTbl').querySelector('tbody').innerHTML = '';
         openMask('dtlMask');
         apiGet('detail', {side:SIDE, bm:bm, party:key, pkey:pkey}).done(function(r){
-            var cols = isAr ? ['折讓確認','類別','單號','日期','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
+            var cols = isAr ? ['折讓確認','類別','單號','日期','料號','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
             document.getElementById('dtlTbl').querySelector('thead').innerHTML = '<tr>' + cols.map(function(c){ return '<th>'+c+'</th>'; }).join('') + '</tr>';
             var prior = (r && r.prior) || [], money = function(v){ return v != null ? fmtMoney(v) : '—'; };
             var cur = detailSection(isAr, r && r.detail, isAr ? r.allowances : []);

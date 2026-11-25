@@ -1505,6 +1505,8 @@ eg_shape_ensure_table($pdo);
 // 客戶／廠商 別名與更名歷史、額外地址（2026-11-18）：建表與補欄位在這裡，不可放進 transaction 內
 require_once __DIR__ . '/../../src/common/party_name_lib.php';
 eg_party_ensure_schema($pdo);
+require_once __DIR__ . '/../../src/common/cust_option_lib.php';
+eg_cust_opt_ensure($pdo);
 
 // ── 齒部外徑（da）計算式：唯一實作 ──────────────────────────────────────
 // 列表顯示的「齒部外徑」籤與「齒部外徑區間篩選」一律用這一支產生 SQL，
@@ -4009,6 +4011,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // 收款方式／客戶可接受對帳單提供方式 選項維護：僅本頁管理員；被客戶選用者不可改名／刪除
+    if (in_array($_POST['action'], ['cust_opt_save', 'cust_opt_delete', 'cust_opt_list'], true)) {
+        try {
+            if (empty($is_admin)) throw new Exception('僅管理員可維護選項');
+            $ck = (string)($_POST['kind'] ?? '');
+            if ($_POST['action'] === 'cust_opt_list') {
+                echo json_encode(['success' => true, 'options' => eg_cust_opt_list($pdo, $ck)], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if ($_POST['action'] === 'cust_opt_save') {
+                $res = eg_cust_opt_save($pdo, $ck, intval($_POST['opt_id'] ?? 0), (string)($_POST['opt_name'] ?? ''), _get_operator($pdo, $uid));
+            } else {
+                $res = eg_cust_opt_delete($pdo, $ck, intval($_POST['opt_id'] ?? 0));
+            }
+            echo json_encode(['success' => $res['ok'], 'message' => $res['msg'], 'options' => eg_cust_opt_list($pdo, $ck)], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'get_customer') {
         try {
             eg_party_ensure_schema($pdo);   // 確保新欄位已建立，SELECT * 才拿得到
@@ -4130,7 +4150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                               : ($is_new ? 'FOB' : ($old_settle_block['quote_method'] ?? 'FOB'));
             // 收款方式可多選（含「附回郵」）：payment_methods 存完整清單；payment_method 仍存第一個實際收款方式，
             // 讓其他讀它的舊程式（對帳、篩選、列表）照常運作。舊版前端只送 payment_method 時沿用舊行為。
-            $pmAllowed = ['匯款', '支票', '現金', '信用狀', '附回郵'];
+            $pmAllowed = eg_cust_opt_names($pdo, 'pay_method');   // 管理員可維護的選項清單
             $payment_methods = null;   // null＝不更新 payment_methods 欄位
             if ($canPayterm && array_key_exists('payment_methods', $_POST)) {
                 $payment_methods = [];
@@ -4174,14 +4194,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $recon_provide_by = trim($_POST['recon_provide_by'] ?? '');
                 $recon_provide_by = in_array($recon_provide_by, ['customer','company'], true) ? $recon_provide_by : null;
                 if (!$need_recon_stmt) { $need_recon_stmt = 0; $recon_provide_by = null; }
+                $recon_channels = array_key_exists('recon_channels', $_POST)
+                    ? eg_cust_opt_filter_csv($pdo, 'recon_channel', (string)$_POST['recon_channels']) : null;   // null＝沒送＝不動
             } elseif ($is_new) {
-                $need_recon_stmt = 0; $recon_provide_by = null;
+                // 新客戶預設：需要對帳單、本公司提供
+                $need_recon_stmt = 1; $recon_provide_by = 'company'; $recon_channels = null;
             } else {
                 $oldReconQ = $pdo->prepare("SELECT need_recon_stmt, recon_provide_by FROM customer_list WHERE customer_id=?");
                 $oldReconQ->execute([$customer_id]);
                 $oldRecon = $oldReconQ->fetch(PDO::FETCH_ASSOC) ?: [];
                 $need_recon_stmt  = intval($oldRecon['need_recon_stmt'] ?? 0);
                 $recon_provide_by = $oldRecon['recon_provide_by'] ?? null;
+                $recon_channels = null;
             }
             // 認定新客戶日期：新增時預設今天；修改時若未送合法日期一律保留原值，不要安靜清空
             $est_date = trim($_POST['est_date'] ?? '');
@@ -4261,6 +4285,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             ->execute([$customer_id,$_sf,$_so,$_sn,$uid,$uid]);
                     }
                 } catch (Throwable $_le) {}
+            }
+            // 客戶可接受的對帳單提供方式（獨立欄位，沒送＝不動）
+            if ($recon_channels !== null) {
+                $pdo->prepare("UPDATE customer_list SET recon_channels=? WHERE customer_id=?")->execute([$recon_channels === '' ? null : $recon_channels, $customer_id]);
             }
             // 本次新增欄位（收款方式多選／月結方式／發票收件／出貨無特殊要求）：獨立 UPDATE，
             // 只更新「有權限且前端有送」的欄位，沒送＝保留原值（鐵律8；不動上面既有 INSERT/UPDATE 以免影響現有流程）
@@ -5288,6 +5316,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $row['main_cat_process_tags'] = $ptq->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $ex) { $row['main_cat_process_tags'] = []; }
 
+            eg_maker_addr_migrate($pdo, (string)$mid);   // 工廠／帳單地址補進「其他地址」（沒有才補，可重複）
             $row += eg_party_load($pdo, 'maker', (string)$mid);
             echo json_encode(['success'=>true,'data'=>$row]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -5314,6 +5343,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $contact_person  = trim($_POST['contact_person'] ?? '');
             $contact_title   = trim($_POST['contact_title'] ?? '');
             $email           = trim($_POST['email'] ?? '');
+            $m_email         = array_key_exists('m_email', $_POST) ? mb_substr(trim(preg_replace('/\s*[\r\n]+\s*/', ' ', (string)$_POST['m_email'])), 0, 255) : null;   // 沒送＝不動
             $m_category      = trim($_POST['m_category'] ?? '');
             $m_process_items = trim($_POST['m_process_items'] ?? '');
             $limit_dia       = trim($_POST['limit_dia'] ?? '');
@@ -5423,6 +5453,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->prepare("DELETE FROM maker_proc_label_map WHERE maker_id_no=?")->execute([$mid]);
             if (!empty($proc_labels_arr)) {
                 $ins_pl = $pdo->prepare("INSERT INTO maker_proc_label_map (maker_id_no,proc_label_id,parent_map_id,value_min,value_max,text_value) VALUES (?,?,?,?,?,?)");
+                // 固定選項標籤：後端同規則再驗一次（只能填清單內的值、或不填；'#int'＝整數）
+                $plChoice = [];
+                try { foreach ($pdo->query("SELECT proc_label_id, label_name, choice_values FROM dict_maker_proc_label WHERE choice_values IS NOT NULL AND choice_values<>''")->fetchAll(PDO::FETCH_ASSOC) as $_cr) $plChoice[(int)$_cr['proc_label_id']] = $_cr; } catch (Throwable $_e) {}
+                $plCheck = function($plid, $txt) use ($plChoice) {
+                    if ($txt === null || $txt === '' || !isset($plChoice[$plid])) return;
+                    $cv = $plChoice[$plid]['choice_values'];
+                    $ok = ($cv === '#int') ? (bool)preg_match('/^\d{1,6}$/', $txt) : in_array($txt, explode(',', $cv), true);
+                    if (!$ok) throw new Exception('「' . $plChoice[$plid]['label_name'] . '」' . ($cv === '#int' ? '只能填整數' : '只能填 ' . str_replace(',', '、', $cv) . ' 其中之一，或不填'));
+                };
                 $tmpIdMap = []; // tmp_id → inserted map_id
                 // Pass 1: insert rows without parent (parent_tmp_id empty/null)
                 foreach ($proc_labels_arr as $pl) {
@@ -5432,6 +5471,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $pmin = isset($pl['value_min'])   && $pl['value_min']!==''   ? floatval($pl['value_min'])   : null;
                     $pmax = isset($pl['value_max'])   && $pl['value_max']!==''   ? floatval($pl['value_max'])   : null;
                     $ptxt = isset($pl['input_value']) && $pl['input_value']!=='' ? trim($pl['input_value'])    : null;
+                    $plCheck($plid, $ptxt);
                     $ins_pl->execute([$mid, $plid, null, $pmin, $pmax, $ptxt]);
                     $newMapId = (int)$pdo->lastInsertId();
                     $tid = $pl['tmp_id'] ?? null; if ($tid) $tmpIdMap[$tid] = $newMapId;
@@ -5445,6 +5485,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $pmin = isset($pl['value_min'])   && $pl['value_min']!==''   ? floatval($pl['value_min'])   : null;
                     $pmax = isset($pl['value_max'])   && $pl['value_max']!==''   ? floatval($pl['value_max'])   : null;
                     $ptxt = isset($pl['input_value']) && $pl['input_value']!=='' ? trim($pl['input_value'])    : null;
+                    $plCheck($plid, $ptxt);
                     $ins_pl->execute([$mid, $plid, $parentMapId, $pmin, $pmax, $ptxt]);
                 }
             }
@@ -5488,7 +5529,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $_pe_uname = _get_operator($pdo, $uid);
             if (!$is_new) eg_party_record_rename($pdo,'maker',$mid,$old_maker_row['maker_id']??'',$old_maker_row['maker_id_all']??'',$maker_id,$maker_all,trim($_POST['rename_date']??''),(int)$uid,$_pe_uname);
             if (array_key_exists('party_aliases',$_POST)) eg_party_save_manual_aliases($pdo,'maker',$mid,json_decode($_POST['party_aliases'],true)?:[],(int)$uid,$_pe_uname);
-            if (array_key_exists('party_addrs',$_POST))   eg_party_save_addrs($pdo,'maker',$mid,json_decode($_POST['party_addrs'],true)?:[]);
+            if (array_key_exists('party_addrs',$_POST)) {
+                eg_party_save_addrs($pdo,'maker',$mid,json_decode($_POST['party_addrs'],true)?:[]);
+                // 工廠地址／帳單地址欄位（BOM、對帳等其他頁面仍在讀）＝「其他地址」中第一筆同名類別，沒有則清空
+                $syncQ = $pdo->prepare("SELECT t.type_name, a.zip, a.address FROM party_address a JOIN party_addr_type t ON t.type_id=a.addr_type_id
+                                        WHERE a.party_type='maker' AND a.party_id=? AND t.type_name IN ('工廠地址','帳單地址') ORDER BY a.sort_order, a.addr_id");
+                $syncQ->execute([$mid]);
+                $fz = $fa = $bz = $ba = ''; $gotF = $gotB = false;
+                foreach ($syncQ->fetchAll(PDO::FETCH_ASSOC) as $sr) {
+                    if ($sr['type_name'] === '工廠地址' && !$gotF) { $fz = (string)$sr['zip']; $fa = (string)$sr['address']; $gotF = true; }
+                    if ($sr['type_name'] === '帳單地址' && !$gotB) { $bz = (string)$sr['zip']; $ba = (string)$sr['address']; $gotB = true; }
+                }
+                $pdo->prepare("UPDATE maker_list SET factory_zip=?,factory_address=?,billing_zip=?,billing_address=? WHERE maker_id_no=?")->execute([$fz,$fa,$bz,$ba,$mid]);
+            }
+            if ($m_email !== null) $pdo->prepare("UPDATE maker_list SET m_email=? WHERE maker_id_no=?")->execute([$m_email === '' ? null : $m_email, $mid]);
 
             $pdo->commit();
             // ── audit log ──
@@ -6983,15 +7037,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 廠商加工限制標籤字典 ────────────────────────────────────────────────────
     if ($_POST['action'] === 'manage_maker_proc_labels') {
         try {
+            // 固定選項欄位（文字型標籤可限定只能填清單內的值；'#整數' 表示限填整數）。先查再加，不放版本鎖內
+            try {
+                $hasCv = false;
+                foreach ($pdo->query("SHOW COLUMNS FROM dict_maker_proc_label")->fetchAll(PDO::FETCH_ASSOC) as $_c) { if ($_c['Field'] === 'choice_values') $hasCv = true; }
+                if (!$hasCv) $pdo->exec("ALTER TABLE dict_maker_proc_label ADD COLUMN choice_values VARCHAR(200) NULL DEFAULT NULL COMMENT '文字型標籤的固定選項（逗號分隔）；#int＝限填整數'");
+            } catch (Exception $_e) {}
             $pdo->exec("SET SESSION lock_wait_timeout = 5");
             $op2 = $_POST['op'];
             if ($op2 === 'list') {
                 try {
-                    $stmt = $pdo->prepare("SELECT d.proc_label_id, d.label_name, d.input_type, d.numeric_type, d.unit, d.sort_order, COALESCE(d.is_repeatable,0) AS is_repeatable, GROUP_CONCAT(pm.parent_label_id ORDER BY pm.parent_label_id SEPARATOR ',') AS parent_label_ids, GROUP_CONCAT(pl.label_name ORDER BY pm.parent_label_id SEPARATOR ',') AS parent_label_names FROM dict_maker_proc_label d LEFT JOIN dict_maker_proc_label_parent_map pm ON pm.sub_label_id=d.proc_label_id LEFT JOIN dict_maker_proc_label pl ON pl.proc_label_id=pm.parent_label_id AND pl.is_active=1 WHERE d.is_active=1 GROUP BY d.proc_label_id ORDER BY d.sort_order, d.proc_label_id");
+                    $stmt = $pdo->prepare("SELECT d.proc_label_id, d.label_name, d.input_type, d.numeric_type, d.unit, d.sort_order, d.choice_values, COALESCE(d.is_repeatable,0) AS is_repeatable, GROUP_CONCAT(pm.parent_label_id ORDER BY pm.parent_label_id SEPARATOR ',') AS parent_label_ids, GROUP_CONCAT(pl.label_name ORDER BY pm.parent_label_id SEPARATOR ',') AS parent_label_names FROM dict_maker_proc_label d LEFT JOIN dict_maker_proc_label_parent_map pm ON pm.sub_label_id=d.proc_label_id LEFT JOIN dict_maker_proc_label pl ON pl.proc_label_id=pm.parent_label_id AND pl.is_active=1 WHERE d.is_active=1 GROUP BY d.proc_label_id ORDER BY d.sort_order, d.proc_label_id");
                     $stmt->execute();
                     $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 } catch (Exception $e) {
-                    $stmt = $pdo->prepare("SELECT proc_label_id, label_name, input_type, 'range' AS numeric_type, unit, sort_order, 0 AS is_repeatable, NULL AS parent_label_ids, NULL AS parent_label_names FROM dict_maker_proc_label WHERE is_active=1 ORDER BY sort_order, proc_label_id");
+                    $stmt = $pdo->prepare("SELECT proc_label_id, label_name, input_type, 'range' AS numeric_type, unit, sort_order, NULL AS choice_values, 0 AS is_repeatable, NULL AS parent_label_ids, NULL AS parent_label_names FROM dict_maker_proc_label WHERE is_active=1 ORDER BY sort_order, proc_label_id");
                     $stmt->execute();
                     $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 }
@@ -7011,6 +7071,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $is_rep = $is_sub ? 0 : intval($_POST['is_repeatable'] ?? 0);
                 $parent_id_bc = $is_sub ? $parent_ids[0] : null; // backward compat column
                 if ($itype !== 'numeric') { $ntype = 'range'; $unit = 'mm'; }
+                // 固定選項：只有文字型可設；'#整數' 或逗號分隔的清單（最多 20 項、每項 ≤20 字、不重複）
+                $choice_values = null;
+                if ($itype === 'text') {
+                    $cvRaw = trim((string)($_POST['choice_values'] ?? ''));
+                    if ($cvRaw === '#整數' || $cvRaw === '#int') { $choice_values = '#int'; }
+                    elseif ($cvRaw !== '') {
+                        $cvList = [];
+                        foreach (preg_split('/[,，、\s]+/u', $cvRaw) as $cv1) {
+                            $cv1 = trim($cv1);
+                            if ($cv1 === '') continue;
+                            if (mb_strlen($cv1) > 20) throw new Exception('固定選項每項最多 20 字');
+                            if (!in_array($cv1, $cvList, true)) $cvList[] = $cv1;
+                        }
+                        if (count($cvList) > 20) throw new Exception('固定選項最多 20 項');
+                        $choice_values = $cvList ? implode(',', $cvList) : null;
+                    }
+                }
                 if (empty($name)) throw new Exception('標籤名稱不可為空');
                 $dup = $pdo->prepare("SELECT COUNT(*) FROM dict_maker_proc_label WHERE LOWER(label_name)=LOWER(?) AND is_active=1 AND proc_label_id<>?");
                 $dup->execute([$name,$id]);
@@ -7018,12 +7095,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $uid2 = $_SESSION['user_id']??null; $op2n = _get_operator($pdo,$uid2);
                 if ($id) {
                     $old = $pdo->prepare("SELECT label_name,input_type,numeric_type,unit,parent_label_id,is_repeatable FROM dict_maker_proc_label WHERE proc_label_id=?"); $old->execute([$id]); $oldRow = $old->fetch(PDO::FETCH_ASSOC);
-                    $pdo->prepare("UPDATE dict_maker_proc_label SET label_name=?,input_type=?,numeric_type=?,unit=?,parent_label_id=?,is_repeatable=? WHERE proc_label_id=?")->execute([$name,$itype,$ntype,$unit,$parent_id_bc,$is_rep,$id]);
+                    $pdo->prepare("UPDATE dict_maker_proc_label SET label_name=?,input_type=?,numeric_type=?,unit=?,parent_label_id=?,is_repeatable=?,choice_values=? WHERE proc_label_id=?")->execute([$name,$itype,$ntype,$unit,$parent_id_bc,$is_rep,$choice_values,$id]);
                     $newRow = ['label_name'=>$name,'input_type'=>$itype,'numeric_type'=>$ntype,'unit'=>$unit,'parent_label_id'=>$parent_id_bc,'is_repeatable'=>$is_rep];
                     $ch=_diff_rows($oldRow??[],$newRow,array_keys($newRow)); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-proc-label:'.$id,$name,$ch,$uid2,$op2n);
                 } else {
                     $max = $pdo->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM dict_maker_proc_label")->fetchColumn();
-                    $pdo->prepare("INSERT INTO dict_maker_proc_label (label_name,input_type,numeric_type,unit,sort_order,parent_label_id,is_repeatable) VALUES (?,?,?,?,?,?,?)")->execute([$name,$itype,$ntype,$unit,$max,$parent_id_bc,$is_rep]);
+                    $pdo->prepare("INSERT INTO dict_maker_proc_label (label_name,input_type,numeric_type,unit,sort_order,parent_label_id,is_repeatable,choice_values) VALUES (?,?,?,?,?,?,?,?)")->execute([$name,$itype,$ntype,$unit,$max,$parent_id_bc,$is_rep,$choice_values]);
                     $id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','maker-proc-label:'.$id,$name,null,$uid2,$op2n);
                 }
@@ -8850,6 +8927,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     --info:      #3498db;
 }
 
+/* 客戶／廠商編輯跳窗的勾選項：字放大、勾選框放大；勾選後加外框與淺黃底色（一眼看得出有沒有勾） */
+#customerModal input[type=checkbox], #makerModal input[type=checkbox] { width:17px; height:17px; vertical-align:-3px; cursor:pointer; accent-color:#C9742A; }
+#customerModal label:has(> input[type=checkbox]), #makerModal label:has(> input[type=checkbox]),
+#customerModal label:has(> div > input[type=checkbox]) {
+    font-size:14px !important; color:#4a3a28; border:1.5px solid transparent; border-radius:6px; padding:3px 9px !important; line-height:1.5;
+}
+#customerModal label:has(> input[type=checkbox]:checked), #makerModal label:has(> input[type=checkbox]:checked),
+#customerModal label:has(> div > input[type=checkbox]:checked) {
+    background:#FFF1B8; border-color:#D9A441; color:#5b3a12; font-weight:600 !important;
+}
 body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",Arial,sans-serif; color: var(--text); }
 .right_col { background: var(--bg) !important; padding: 20px 20px 40px; }
 
@@ -10967,13 +11054,28 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
             <label>提供方式</label>
             <select class="form-control" id="cf-recon_provide_by" name="recon_provide_by" onchange="onReconProvideByChange()" <?= $mdReconEdit?'':'disabled' ?>>
                 <option value="customer">客戶提供</option>
-                <option value="company">本公司提供</option>
+                <option value="company" selected>本公司提供</option>
             </select>
         </div>
     </div>
     <div class="col-md-4">
         <div class="form-group" id="cf-recon-provide-hint-wrap" style="padding-top:24px;display:none;">
             <div style="font-size:11px;color:#888;" id="cf-recon-provide-hint"></div>
+        </div>
+    </div>
+</div>
+<div class="row" id="cf-recon-channel-row" style="display:none;">
+    <div class="col-md-12">
+        <div class="form-group">
+            <label>客戶可接受提供方式（可多選）</label>
+            <div id="cf-rc-wrap" style="display:flex;flex-wrap:wrap;gap:4px 14px;padding-top:5px;">
+                <?php foreach (eg_cust_opt_names($pdo, 'recon_channel') as $_rc): ?>
+                <label style="font-weight:normal;cursor:pointer;margin:0;white-space:nowrap;">
+                    <input type="checkbox" class="cf-rc-chk" value="<?= htmlspecialchars($_rc) ?>" style="margin-right:4px;" <?= $mdReconEdit?'':'disabled' ?>><?= htmlspecialchars($_rc) ?>
+                </label>
+                <?php endforeach; ?>
+                <?php if (!empty($is_admin)): ?><button type="button" class="btn btn-xs btn-default" onclick="openCustOptMgr('recon_channel')"><i class="fa fa-cog"></i> 管理選項</button><?php endif; ?>
+            </div>
         </div>
     </div>
 </div>
@@ -11029,11 +11131,12 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
             <!-- cf-payment_method 保留為隱藏欄位＝「主要收款方式」（第一個實際收款方式），供既有程式讀取 -->
             <input type="hidden" id="cf-payment_method" name="payment_method" value="匯款">
             <div id="cf-pm-wrap" style="display:flex;flex-wrap:wrap;gap:4px 14px;padding-top:5px;">
-                <?php foreach (['匯款','支票','現金','信用狀','附回郵'] as $_pm): ?>
+                <?php foreach (eg_cust_opt_names($pdo, 'pay_method') as $_pm): ?>
                 <label style="font-weight:normal;cursor:pointer;margin:0;white-space:nowrap;">
-                    <input type="checkbox" class="cf-pm-chk" value="<?= $_pm ?>" style="margin-right:4px;" onchange="onPaymentMethodsChange()" <?= $mdPaytermEdit?'':'disabled' ?>><?= $_pm ?>
+                    <input type="checkbox" class="cf-pm-chk" value="<?= htmlspecialchars($_pm) ?>" style="margin-right:4px;" onchange="onPaymentMethodsChange()" <?= $mdPaytermEdit?'':'disabled' ?>><?= htmlspecialchars($_pm) ?>
                 </label>
                 <?php endforeach; ?>
+                <?php if (!empty($is_admin)): ?><button type="button" class="btn btn-xs btn-default" onclick="openCustOptMgr('pay_method')"><i class="fa fa-cog"></i> 管理選項</button><?php endif; ?>
             </div>
             <div class="id-hint" style="margin-top:2px;">「附回郵」＝對方寄支票時需附回郵信封，可與其他收款方式同時勾選</div>
         </div>
@@ -11191,13 +11294,21 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
      MODAL: 廠商
 ═══════════════════════════════════════════════════ -->
 <div class="modal fade" id="makerModal" tabindex="-1">
-<div class="modal-dialog modal-lg">
+<div class="modal-dialog modal-lg" style="width:1180px;max-width:96vw;">
 <div class="modal-content">
 <div class="modal-header">
     <button type="button" class="close" data-dismiss="modal">&times;</button>
     <h4 class="modal-title" id="makerModal-title">新增廠商</h4>
 </div>
-<div class="modal-body" style="max-height:75vh;overflow-y:auto;">
+<div class="modal-body" style="max-height:80vh;overflow-y:auto;padding:0;">
+<!-- 分頁切換（與客戶編輯跳窗相同做法） -->
+<ul class="nav nav-tabs" id="makerModalTabs" style="margin:0;padding:0 16px;background:#f8f9fb;border-bottom:1px solid #dee2e6;">
+    <li class="active"><a href="#" style="cursor:pointer;" onclick="switchMakerTab('basic',this);return false;">基本資訊</a></li>
+    <li><a href="#" style="cursor:pointer;" onclick="switchMakerTab('process',this);return false;">加工設定</a></li>
+    <li><a href="#" style="cursor:pointer;" onclick="switchMakerTab('payment',this);return false;">結帳 / 付款</a></li>
+    <li><a href="#" style="cursor:pointer;" onclick="switchMakerTab('contacts',this);return false;">聯絡人</a></li>
+</ul>
+<div class="tab-content" style="padding:16px;">
 <!-- 舊編號提示（編輯時若此廠商是某廠商的舊編號才顯示） -->
 <div id="mf-old-alias-notice" style="display:none;margin:0 0 12px;padding:10px 14px;background:#fff3e0;border-left:4px solid #e65100;border-radius:4px;font-size:12px;">
     <i class="fa fa-exclamation-triangle" style="color:#e65100;margin-right:6px;"></i>
@@ -11209,6 +11320,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 <input type="hidden" id="mf-is_new" name="is_new" value="1">
 
 <!-- ① 基本資訊 -->
+<div class="tab-pane active" id="maker-tab-basic">
 <div class="form-section-title"><i class="fa fa-info-circle"></i> 基本資訊</div>
 <div class="row">
     <div class="col-md-3">
@@ -11306,64 +11418,40 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
         </div>
     </div>
 </div>
+<div class="row">
+    <div class="col-md-12">
+        <div class="form-group">
+            <label>電子信箱</label>
+            <textarea class="form-control" id="mf-m_email" name="m_email" rows="1" maxlength="255" style="resize:vertical;" placeholder="公司信箱，多個以分號分隔" autocomplete="off" spellcheck="false"></textarea>
+        </div>
+    </div>
+</div>
 <!-- 隱藏欄位：保持與其他頁面讀取 maker_list.contact_person/title/email 的相容性，由 syncMakerContactsHidden 從主要聯絡人同步 -->
 <input type="hidden" id="mf-contact_person" name="contact_person">
 <input type="hidden" id="mf-contact_title"  name="contact_title">
 <input type="hidden" id="mf-email"          name="email">
 <input type="hidden" id="mf-maker-contacts" name="maker_contacts" value="[]">
-<div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 6px;">
-    <span style="font-size:12px;font-weight:700;color:#555;"><i class="fa fa-user"></i> 聯絡人列表</span>
-    <button type="button" class="btn btn-sm btn-default" onclick="addMakerContactRow()"><i class="fa fa-plus"></i> 新增聯絡人</button>
-</div>
-<div id="mf-contacts-wrap">
-    <!-- rows injected by JS -->
-</div>
-<p class="help-block" style="font-size:11px;color:#aaa;margin-top:4px;">* 點選「主要」radio 設定主要聯絡人；主要聯絡人的姓名/職稱/Email 會自動同步至廠商主檔</p>
 
-<!-- ③ 地址資訊 -->
-<div class="form-section-title"><i class="fa fa-map-marker"></i> 地址資訊</div>
+<!-- ③ 地址（與客戶相同：一組標準地址＋其他地址；工廠地址、帳單地址改在「其他地址」選類別填寫） -->
 <div class="row">
     <div class="col-md-2">
         <div class="form-group">
-            <label>發票郵遞區號</label>
+            <label>郵遞區號</label>
             <input type="text" class="form-control" id="mf-postal_code" name="postal_code" placeholder="000" maxlength="20">
         </div>
     </div>
     <div class="col-md-10">
         <div class="form-group">
-            <label>發票地址</label>
-            <input type="text" class="form-control" id="mf-invoice_address" name="invoice_address" placeholder="發票地址" maxlength="255">
+            <label>地址</label>
+            <input type="text" class="form-control" id="mf-invoice_address" name="invoice_address" placeholder="地址" maxlength="255">
         </div>
     </div>
 </div>
-<div class="row">
-    <div class="col-md-2">
-        <div class="form-group">
-            <label>工廠郵遞區號</label>
-            <input type="text" class="form-control" id="mf-factory_zip" name="factory_zip" placeholder="000" maxlength="20">
-        </div>
-    </div>
-    <div class="col-md-10">
-        <div class="form-group">
-            <label>工廠地址</label>
-            <input type="text" class="form-control" id="mf-factory_address" name="factory_address" placeholder="工廠地址" maxlength="255">
-        </div>
-    </div>
-</div>
-<div class="row">
-    <div class="col-md-2">
-        <div class="form-group">
-            <label>帳單郵遞區號</label>
-            <input type="text" class="form-control" id="mf-billing_zip" name="billing_zip" placeholder="000" maxlength="20">
-        </div>
-    </div>
-    <div class="col-md-10">
-        <div class="form-group">
-            <label>帳單地址</label>
-            <input type="text" class="form-control" id="mf-billing_address" name="billing_address" placeholder="帳單地址" maxlength="255">
-        </div>
-    </div>
-</div>
+<!-- 工廠／帳單地址欄位仍保留（供 BOM／對帳等其他頁面讀取），畫面上不再直接輸入，儲存時由「其他地址」的『工廠地址』『帳單地址』類別同步 -->
+<input type="hidden" id="mf-factory_zip" name="factory_zip">
+<input type="hidden" id="mf-factory_address" name="factory_address">
+<input type="hidden" id="mf-billing_zip" name="billing_zip">
+<input type="hidden" id="mf-billing_address" name="billing_address">
 <div id="mf-pe-addr"></div>
 <input type="hidden" id="mf-party_aliases" name="party_aliases" value="[]">
 <input type="hidden" id="mf-party_addrs" name="party_addrs" value="[]">
@@ -11372,7 +11460,10 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     <textarea class="form-control" id="mf-m_note" name="m_note" rows="2" placeholder="備用說明…" maxlength="255"></textarea>
 </div>
 
-<!-- ④ 加工類別設定 -->
+</div><!-- /maker-tab-basic -->
+
+<!-- ④ 加工設定 -->
+<div class="tab-pane" id="maker-tab-process">
 <div class="form-section-title"><i class="fa fa-sitemap"></i> 加工類別設定</div>
 <div class="form-group">
     <label>廠商大類</label>
@@ -11425,6 +11516,8 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 $mdMakerSettleView  = _mdPerm('settle','view', true);  $mdMakerSettleEditV  = _mdPerm('settle','edit', $canMakerAdd || $canMakerEdit);
 $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _mdPerm('payterm','edit', $canMakerAdd || $canMakerEdit);
 ?>
+</div><!-- /maker-tab-process -->
+<div class="tab-pane" id="maker-tab-payment">
 <!-- ⑤ 付款設定 -->
 <?php if ($mdMakerSettleView || $mdMakerPaytermView): ?>
 <div class="form-section-title"><i class="fa fa-money"></i> 付款設定</div>
@@ -11504,8 +11597,22 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <p class="help-block" style="font-size:11px;margin-top:4px;">舊編號必須已存在於廠商列表中才能連結。連結後可查詢舊編號的歷史加工單。</p>
 <?php endif; ?>
 </div>
+</div><!-- /maker-tab-payment -->
+
+<!-- ⑦ 聯絡人（與客戶相同，獨立分頁） -->
+<div class="tab-pane" id="maker-tab-contacts">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <div class="form-section-title" style="margin:0;border:0;padding:0;"><i class="fa fa-user"></i> 聯絡人列表</div>
+    <button type="button" class="btn btn-sm btn-default" onclick="addMakerContactRow()"><i class="fa fa-plus"></i> 新增聯絡人</button>
+</div>
+<div id="mf-contacts-wrap">
+    <!-- rows injected by JS -->
+</div>
+<p class="help-block" style="font-size:11px;color:#aaa;margin-top:8px;">* 點選「主要」radio 設定主要聯絡人；主要聯絡人的姓名/職稱/Email 會自動同步至廠商主檔</p>
+</div><!-- /maker-tab-contacts -->
 
 </form>
+</div><!-- /tab-content -->
 </div>
 <div class="modal-footer">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
@@ -19781,16 +19888,29 @@ function addMakerContactRow(c) {
     row.innerHTML =
         '<div style="flex-shrink:0;text-align:center;"><div style="font-size:10px;color:#aaa;">主要</div>'
         + '<input type="radio" name="maker_contact_primary" value="'+idx+'" '+isPrimary+' onchange="syncMakerContactsHidden()"></div>'
-        + '<input type="text" class="form-control input-sm mct-name"   style="flex:1.5;min-width:70px;"  placeholder="姓名*"  maxlength="50"  value="'+escAttr(c.name||'')+'">'
-        + '<input type="text" class="form-control input-sm mct-dept"   style="flex:1;min-width:60px;"    placeholder="部門"   maxlength="50"  value="'+escAttr(c.department||'')+'">'
-        + '<input type="text" class="form-control input-sm mct-title"  style="flex:1;min-width:60px;"    placeholder="職稱"   maxlength="50"  value="'+escAttr(c.title||'')+'">'
+        + '<textarea class="form-control input-sm mct-name" rows="1" style="flex:1.5;min-width:80px;resize:none;overflow:hidden;min-height:30px;" placeholder="姓名*" maxlength="50">'+escHtml(c.name||'')+'</textarea>'
+        + '<textarea class="form-control input-sm mct-dept" rows="1" style="flex:1;min-width:70px;resize:none;overflow:hidden;min-height:30px;" placeholder="部門" maxlength="50">'+escHtml(c.department||'')+'</textarea>'
+        + '<textarea class="form-control input-sm mct-title" rows="1" style="flex:1;min-width:70px;resize:none;overflow:hidden;min-height:30px;" placeholder="職稱" maxlength="50">'+escHtml(c.title||'')+'</textarea>'
         + '<input type="text" class="form-control input-sm mct-ext"    style="width:60px;"               placeholder="分機"   maxlength="20"  value="'+escAttr(c.phone_ext||'')+'">'
-        + '<input type="text" class="form-control input-sm mct-mobile" style="flex:1;min-width:85px;"    placeholder="手機"   maxlength="30"  value="'+escAttr(c.mobile||'')+'">'
-        + '<input type="text" class="form-control input-sm mct-email"  style="flex:1.5;min-width:100px;" placeholder="Email"  maxlength="100" value="'+escAttr(c.email||'')+'">'
-        + '<input type="text" class="form-control input-sm mct-note"   style="flex:1.2;min-width:80px;"  placeholder="備註"   maxlength="100" value="'+escAttr(c.note||'')+'">'
+        + '<input type="text" class="form-control input-sm mct-mobile" style="width:128px;flex:none;"    placeholder="0912-345-678" maxlength="30" autocomplete="off" value="'+escAttr(egFmtTwPhone(c.mobile||''))+'">'
+        + '<textarea class="form-control input-sm mct-email" rows="1" style="flex:2;min-width:140px;resize:none;overflow:hidden;min-height:30px;" placeholder="信箱（多個以分號分隔）" maxlength="255" autocomplete="off" spellcheck="false">'+escHtml(c.email||'')+'</textarea>'
+        + '<textarea class="form-control input-sm mct-note" rows="1" style="flex:1.2;min-width:90px;resize:none;overflow:hidden;min-height:30px;" placeholder="備註" maxlength="100">'+escHtml(c.note||'')+'</textarea>'
         + '<button type="button" class="btn btn-xs btn-default" style="flex-shrink:0;" onclick="this.closest(\'.maker-contact-row\').remove();syncMakerContactsHidden();"><i class="fa fa-times"></i></button>';
     wrap.appendChild(row);
-    row.querySelectorAll('input[type=text]').forEach(function(i){ i.oninput = syncMakerContactsHidden; });
+    row.querySelectorAll('input[type=text],textarea').forEach(function(i){
+        i.oninput = function(){ _ctAutoH(i); syncMakerContactsHidden(); };
+    });
+    row.querySelectorAll('textarea').forEach(_ctAutoH);
+    setTimeout(function(){ row.querySelectorAll('textarea').forEach(_ctAutoH); }, 300);   // 分頁隱藏時量不到高度，顯示後再量一次
+}
+function switchMakerTab(name, el) {
+    ['basic','process','payment','contacts'].forEach(function(n){
+        var p = document.getElementById('maker-tab-'+n); if (p) p.classList.remove('active');
+    });
+    document.querySelectorAll('#makerModalTabs li').forEach(function(li){ li.classList.remove('active'); });
+    var pane = document.getElementById('maker-tab-'+name); if (pane) pane.classList.add('active');
+    if (name === 'contacts') document.querySelectorAll('#mf-contacts-wrap textarea').forEach(_ctAutoH);
+    if (el) { var li = el.closest ? el.closest('li') : el.parentNode; if (li) li.classList.add('active'); }
 }
 
 function syncMakerContactsHidden() {
@@ -19799,16 +19919,16 @@ function syncMakerContactsHidden() {
     var primaryIdx = primaryEl ? parseInt(primaryEl.value) : 0;
     var contacts = [];
     rows.forEach(function(row, i) {
-        var name = row.querySelector('.mct-name').value.trim();
+        var name = _ctVal(row, '.mct-name');
         if (!name) return;
         contacts.push({
             name:       name,
-            department: (row.querySelector('.mct-dept')||{value:''}).value.trim(),
-            title:      row.querySelector('.mct-title').value.trim(),
+            department: _ctVal(row, '.mct-dept'),
+            title:      _ctVal(row, '.mct-title'),
             phone_ext:  row.querySelector('.mct-ext').value.trim(),
-            mobile:     row.querySelector('.mct-mobile').value.trim(),
-            email:      row.querySelector('.mct-email').value.trim(),
-            note:       row.querySelector('.mct-note').value.trim(),
+            mobile:     egFmtTwPhone(row.querySelector('.mct-mobile').value.trim()),
+            email:      _ctVal(row, '.mct-email'),
+            note:       _ctVal(row, '.mct-note'),
             is_primary: (i===primaryIdx) ? 1 : 0
         });
     });
@@ -19851,7 +19971,72 @@ function onNeedReconStmtChange() {
     var wrap = document.getElementById('cf-recon-provide-wrap');
     if (!chk || !wrap) return;
     wrap.style.display = chk.checked ? '' : 'none';
+    var crow = document.getElementById('cf-recon-channel-row');
+    if (crow) crow.style.display = chk.checked ? '' : 'none';
     onReconProvideByChange();
+}
+// ── 客戶可接受對帳單提供方式（多選）／選項維護 ──
+function _getRcList() { var a = []; document.querySelectorAll('#cf-rc-wrap .cf-rc-chk').forEach(function(c){ if (c.checked) a.push(c.value); }); return a; }
+function _setRcList(list) { list = list || []; document.querySelectorAll('#cf-rc-wrap .cf-rc-chk').forEach(function(c){ c.checked = list.indexOf(c.value) >= 0; }); }
+/** 管理員維護選項後，重畫勾選清單並保留目前勾選 */
+function _rebuildCustOpt(kind, options) {
+    var isPm = kind === 'pay_method';
+    var wrap = document.getElementById(isPm ? 'cf-pm-wrap' : 'cf-rc-wrap'); if (!wrap) return;
+    var cls = isPm ? 'cf-pm-chk' : 'cf-rc-chk';
+    var cur = isPm ? _getPmList() : _getRcList();
+    wrap.querySelectorAll('label').forEach(function(l){ l.remove(); });
+    var btn = wrap.querySelector('button');
+    options.forEach(function(o){
+        var lb = document.createElement('label');
+        lb.style.cssText = 'font-weight:normal;cursor:pointer;margin:0;white-space:nowrap;';
+        var ip = document.createElement('input'); ip.type = 'checkbox'; ip.className = cls; ip.value = o.opt_name; ip.style.marginRight = '4px';
+        if (isPm) ip.onchange = onPaymentMethodsChange;
+        ip.checked = cur.indexOf(o.opt_name) >= 0;
+        lb.appendChild(ip); lb.appendChild(document.createTextNode(o.opt_name));
+        wrap.insertBefore(lb, btn);
+    });
+    if (isPm) onPaymentMethodsChange();
+}
+function openCustOptMgr(kind) {
+    var title = kind === 'pay_method' ? '收款方式選項' : '客戶可接受提供方式選項';
+    var ov = document.getElementById('custOptMgr');
+    if (ov) ov.remove();
+    ov = document.createElement('div'); ov.id = 'custOptMgr';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20000;display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML = '<div style="background:#fff;border-radius:6px;width:460px;max-width:94vw;max-height:84vh;overflow:auto;padding:16px;">' +
+        '<div style="font-weight:bold;margin-bottom:6px;">' + title + '<button type="button" class="close" onclick="document.getElementById(\'custOptMgr\').remove()">&times;</button></div>' +
+        '<div class="id-hint" style="margin-bottom:8px;">已被客戶選用的選項不可修改名稱或刪除；名稱不可含逗號。</div>' +
+        '<div id="custOptMgrBody"></div></div>';
+    document.body.appendChild(ov);
+    var box = ov.querySelector('#custOptMgrBody');
+    function esc2(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+    function render(opts) {
+        var h = '';
+        opts.forEach(function(o){
+            var locked = o.used > 0;
+            h += '<div style="display:flex;gap:4px;margin-bottom:5px;align-items:center;">' +
+                 '<input type="text" class="form-control input-sm" maxlength="30" data-eg-skip data-oid="' + o.opt_id + '" value="' + esc2(o.opt_name) + '"' + (locked ? ' disabled' : '') + '>' +
+                 (locked ? '<span style="font-size:11px;color:#8a6d4b;white-space:nowrap;">已用 ' + o.used + ' 位</span>'
+                         : '<button type="button" class="btn btn-xs btn-default" data-save="' + o.opt_id + '">儲存</button><button type="button" class="btn btn-xs btn-danger" data-del="' + o.opt_id + '">刪除</button>') +
+                 '</div>';
+        });
+        h += '<div style="display:flex;gap:4px;margin-top:8px;"><input type="text" class="form-control input-sm" maxlength="30" data-eg-skip data-new="1" placeholder="新增選項名稱"><button type="button" class="btn btn-xs btn-primary" data-add="1">新增</button></div>';
+        box.innerHTML = h;
+    }
+    function call(d) {
+        d.kind = kind;
+        api(d).done(function(r){
+            showToast(r.message || (r.success ? '已儲存' : '失敗'), r.success ? 'success' : 'error');
+            if (r.options) { render(r.options); _rebuildCustOpt(kind, r.options); }
+        }).fail(function(){ showToast('網路錯誤', 'error'); });
+    }
+    box.addEventListener('click', function(e){
+        var b = e.target.closest('button'); if (!b) return;
+        if (b.hasAttribute('data-add')) { call({ action: 'cust_opt_save', opt_id: 0, opt_name: box.querySelector('[data-new]').value }); }
+        else if (b.hasAttribute('data-save')) { var id = b.getAttribute('data-save'); call({ action: 'cust_opt_save', opt_id: id, opt_name: box.querySelector('[data-oid="' + id + '"]').value }); }
+        else if (b.hasAttribute('data-del')) { if (confirm('確定刪除這個選項？')) call({ action: 'cust_opt_delete', opt_id: b.getAttribute('data-del') }); }
+    });
+    api({ action: 'cust_opt_list', kind: kind }).done(function(r){ render(r.options || []); });
 }
 function onReconProvideByChange() {
     var chk = document.getElementById('cf-need_recon_stmt');
@@ -20060,7 +20245,8 @@ function openCustomerModal(customer_id, readonly) {
             if (nrs) {
                 nrs.checked = (d.need_recon_stmt == 1 || d.need_recon_stmt === '1');
                 var rpb = document.getElementById('cf-recon_provide_by');
-                if (rpb) rpb.value = d.recon_provide_by || 'customer';
+                if (rpb) rpb.value = d.recon_provide_by || 'company';
+                _setRcList(d.recon_channels ? String(d.recon_channels).split(',').filter(Boolean) : []);
                 onNeedReconStmtChange();
             }
             // Contacts
@@ -20102,7 +20288,12 @@ function openCustomerModal(customer_id, readonly) {
         var exBtn = document.getElementById('cf-exception-btn');
         if (exBtn) exBtn.style.display = 'none';
         var nrs = document.getElementById('cf-need_recon_stmt');
-        if (nrs) { nrs.checked = false; onNeedReconStmtChange(); }
+        if (nrs) {   // 新客戶預設：需要對帳單、本公司提供
+            nrs.checked = true;
+            var rpb0 = document.getElementById('cf-recon_provide_by'); if (rpb0) rpb0.value = 'company';
+            _setRcList([]);
+            onNeedReconStmtChange();
+        }
         var ad = document.getElementById('cf-allow_deduct');
         if (ad) ad.checked = false;
         var gsel = document.getElementById('cf-customer_grade');
@@ -20179,6 +20370,7 @@ function submitCustomerForm() {
         recon_provide_by:     gv('cf-recon_provide_by'),
         est_date:             gv('cf-est_date')
     };
+    if (document.getElementById('cf-rc-wrap')) data.recon_channels = _getRcList().join(',');   // 無權限者頁面上沒有這組欄位＝不送＝後端不動
     if (!data.customer_id) { showToast('客戶代碼不可為空','error'); return; }
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }
     if (data.settlement_mode==='FIXED' && (!data.settlement_day||data.settlement_day<1||data.settlement_day>31)) {
@@ -20865,7 +21057,7 @@ function openMakerModal(maker_id_no) {
             document.getElementById('mf-is_new').value = '0';
             var midEl = document.getElementById('mf-maker_id_no');
             midEl.value = d.maker_id_no; midEl.readOnly = true; midEl.style.background = '#f5f5f5';
-            var fields = ['maker_id','maker_id_all','m_tel','m_tel2','m_fax','m_fax2','factory_zip','billing_zip','invoice_address','factory_address','billing_address','postal_code','tax_id','contact_person','contact_title','email','m_category','m_process_items','limit_dia','limit_len','m_note'];
+            var fields = ['maker_id','maker_id_all','m_tel','m_tel2','m_fax','m_fax2','factory_zip','billing_zip','invoice_address','factory_address','billing_address','postal_code','tax_id','contact_person','contact_title','email','m_email','m_category','m_process_items','limit_dia','limit_len','m_note'];
             fields.forEach(function(f){ var el=document.getElementById('mf-'+f); if(el) el.value=(d[f]!==null&&d[f]!==undefined)?d[f]:''; });
             document.getElementById('mf-status').value          = d.status||'';
             document.getElementById('mf-internal').checked      = (d.internal==1);
@@ -20908,6 +21100,7 @@ function openMakerModal(maker_id_no) {
             renderMakerAliases(d.aliases || []);
             // 加工限制標籤
             loadMakerProcLabelUI(d.proc_labels || []);
+            switchMakerTab('basic', document.querySelector('#makerModalTabs li:first-child a'));
             $('#makerModal').modal('show');
         });
     } else {
@@ -20937,10 +21130,14 @@ function openMakerModal(maker_id_no) {
         if (_notice) _notice.style.display = 'none';
         // 加工限制標籤（新增時空）
         loadMakerProcLabelUI([]);
+        switchMakerTab('basic', document.querySelector('#makerModalTabs li:first-child a'));
         $('#makerModal').modal('show');
     }
 }
 
+// 加工限制標籤：選中＝淺黃底＋深琥珀外框＋粗體加大字；未選＝灰底（字同樣加大），一眼看得出有沒有勾
+var _MPL_CHIP_ON  = 'background:#FFF1B8;color:#5b3a12;border:2px solid #D9A441;cursor:pointer;border-radius:12px;padding:3px 12px;font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:5px;';
+var _MPL_CHIP_OFF = 'background:#f5f7fa;color:#777;border:2px solid #ddd;cursor:pointer;border-radius:12px;padding:3px 12px;font-size:14px;display:inline-flex;align-items:center;gap:5px;';
 var _mplTmpCounter = 0;
 var _mplSubDefsMap = {}; // parent_lid (int) → [sub-label defs]
 
@@ -21007,9 +21204,7 @@ function loadMakerProcLabelUI(existingLabels) {
                 // Simple label: old chip+input behavior
                 var ex = existInsts.length > 0 ? existInsts[0].inst : null;
                 var isSel = !!ex;
-                var cs = isSel
-                    ? 'background:#e8f5f2;color:#1ABB9C;border:1.5px solid #1ABB9C;cursor:pointer;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:4px;'
-                    : 'background:#f5f7fa;color:#888;border:1.5px solid #ddd;cursor:pointer;border-radius:12px;padding:3px 10px;font-size:12px;display:inline-flex;align-items:center;gap:4px;';
+                var cs = isSel ? _MPL_CHIP_ON : _MPL_CHIP_OFF;
                 html += '<span style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px;">';
                 html += '<span class="mf-proc-chip" data-lid="'+lid+'" data-itype="'+escAttr(itype)+'" data-ntype="'+escAttr(ntype)+'" data-unit="'+escAttr(unit)+'" data-is-rep="0" data-has-subs="0" data-selected="'+(isSel?'1':'0')+'" style="'+cs+'" onclick="toggleMakerProcChip(this)">';
                 html += '<i class="fa fa-'+(isSel?'check-circle':'circle-o')+'" style="font-size:11px;"></i> '+escHtml(lbl.label_name)+'</span>';
@@ -21034,7 +21229,7 @@ function loadMakerProcLabelUI(existingLabels) {
                 } else if (itype === 'text') {
                     var vtxt = ex && ex.text_value !== null && ex.text_value !== undefined ? ex.text_value : '';
                     html += '<span class="mf-proc-inputs" data-lid="'+lid+'" style="'+ds+';align-items:center;">';
-                    html += '<input type="text" class="form-control input-sm mf-proc-text-val" data-lid="'+lid+'" maxlength="100" placeholder="文字說明" style="width:140px;" value="'+escAttr(String(vtxt))+'" oninput="syncMakerProcLabels()">';
+                    html += _procTextCtl('mf-proc-text-val', lbl, vtxt, 140, '文字說明', 'data-lid="'+lid+'"');
                     html += '</span>';
                 }
                 html += '</span>';
@@ -21042,9 +21237,7 @@ function loadMakerProcLabelUI(existingLabels) {
                 // Complex label: group box with instances
                 var hasInsts = existInsts.length > 0;
                 var chipActive = hasInsts;
-                var hcs = chipActive
-                    ? 'background:#e8f5f2;color:#1ABB9C;border:1.5px solid #1ABB9C;cursor:pointer;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:4px;'
-                    : 'background:#f5f7fa;color:#888;border:1.5px solid #ddd;cursor:pointer;border-radius:12px;padding:3px 10px;font-size:12px;display:inline-flex;align-items:center;gap:4px;';
+                var hcs = chipActive ? _MPL_CHIP_ON : _MPL_CHIP_OFF;
                 html += '<div class="mpl-group" data-parent-lid="'+lid+'" style="background:#f9f9f9;border:1px solid #e0e0e0;border-radius:8px;padding:5px 8px;min-width:140px;">';
                 html += '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">';
                 html += '<span class="mf-proc-chip mpl-group-chip" data-lid="'+lid+'" data-label-name="'+escAttr(lbl.label_name)+'" data-itype="'+escAttr(itype)+'" data-ntype="'+escAttr(ntype)+'" data-unit="'+escAttr(unit)+'" data-is-rep="'+(isRep?'1':'0')+'" data-has-subs="'+(subDefs.length?'1':'0')+'" data-selected="'+(chipActive?'1':'0')+'" style="'+hcs+'" onclick="toggleMakerProcChip(this)">';
@@ -21101,6 +21294,23 @@ function _buildProcInstanceHtml(parentLid, tmpId, itype, ntype, unit, subDefs, e
     return html;
 }
 
+/** 文字型加工限制標籤的輸入元件：有固定選項→下拉（可不選）；'#int'→整數輸入；否則一般文字框 */
+function _procTextCtl(cls, def, val, width, ph, extraAttr) {
+    var cv = (def && def.choice_values) ? String(def.choice_values) : '';
+    val = (val === null || val === undefined) ? '' : String(val);
+    var ex = extraAttr || '';
+    if (cv === '#int') {
+        return '<input type="number" class="form-control input-sm '+cls+'" min="0" step="1" placeholder="整數" style="width:'+Math.min(width,90)+'px;" value="'+escAttr(val)+'" '+ex+' oninput="syncMakerProcLabels()">';
+    }
+    if (cv) {
+        var opts = '<option value="">（不填）</option>';
+        var list = cv.split(',');
+        if (val && list.indexOf(val) < 0) list.push(val);   // 舊資料不在清單內時保留原值，不要在畫面上被安靜洗掉
+        list.forEach(function(o){ opts += '<option value="'+escAttr(o)+'"'+(o===val?' selected':'')+'>'+escHtml(o)+'</option>'; });
+        return '<select class="form-control input-sm '+cls+'" style="width:'+Math.max(width-20,80)+'px;padding-left:4px;padding-right:2px;" '+ex+' onchange="syncMakerProcLabels()">'+opts+'</select>';
+    }
+    return '<input type="text" class="form-control input-sm '+cls+'" maxlength="100" placeholder="'+ph+'" style="width:'+width+'px;" value="'+escAttr(val)+'" '+ex+' oninput="syncMakerProcLabels()">';
+}
 function _buildSubLabelInputHtml(sd, subTmpId, parentTmpId, exSub) {
     var itype = sd.input_type || 'none';
     var ntype = sd.numeric_type || 'range';
@@ -21125,7 +21335,7 @@ function _buildSubLabelInputHtml(sd, subTmpId, parentTmpId, exSub) {
         html += '<span style="font-size:11px;color:#888;">'+escHtml(unit)+'</span>';
     } else if (itype === 'text') {
         var vtxt = exSub && exSub.text_value !== null && exSub.text_value !== undefined ? exSub.text_value : '';
-        html += '<input type="text" class="form-control input-sm mpl-text-val" maxlength="100" placeholder="文字" style="width:100px;" value="'+escAttr(String(vtxt))+'" oninput="syncMakerProcLabels()">';
+        html += _procTextCtl('mpl-text-val', sd, vtxt, 100, '文字');
     }
     html += '</span>';
     return html;
@@ -21142,8 +21352,7 @@ function toggleMakerProcChip(chip) {
         // Simple chip: toggle
         chip.dataset.selected = isNow ? '0' : '1';
         chip.querySelector('.fa').className = 'fa fa-' + (isNow ? 'circle-o' : 'check-circle');
-        if (isNow) { chip.style.background='#f5f7fa'; chip.style.color='#888'; chip.style.borderColor='#ddd'; }
-        else       { chip.style.background='#e8f5f2'; chip.style.color='#1ABB9C'; chip.style.borderColor='#1ABB9C'; }
+        chip.style.cssText = isNow ? _MPL_CHIP_OFF : _MPL_CHIP_ON;
         var inputs = document.querySelector('#mf-proc-label-area .mf-proc-inputs[data-lid="'+lid+'"]');
         if (inputs) {
             inputs.style.display = isNow ? 'none' : 'inline-flex';
@@ -21156,7 +21365,7 @@ function toggleMakerProcChip(chip) {
             // Activate group
             chip.dataset.selected = '1';
             chip.querySelector('.fa').className = 'fa fa-check-circle';
-            chip.style.background='#e8f5f2'; chip.style.color='#1ABB9C'; chip.style.borderColor='#1ABB9C';
+            chip.style.cssText = _MPL_CHIP_ON;
             if (instArea) { instArea.style.display='flex'; instArea.style.flexDirection='column'; instArea.style.gap='4px'; }
         }
         _addProcInstanceToArea(lid, instArea, chip);
@@ -21213,7 +21422,7 @@ function removeProcInstance(btn) {
         if (chip) {
             chip.dataset.selected = '0';
             chip.querySelector('.fa').className = 'fa fa-circle-o';
-            chip.style.background='#f5f7fa'; chip.style.color='#888'; chip.style.borderColor='#ddd';
+            chip.style.cssText = _MPL_CHIP_OFF;
             var cnt = chip.querySelector('.mpl-count'); if (cnt) cnt.remove();
             var grp = chip.closest ? chip.closest('.mpl-group') : null;
             if (grp) { var ab = grp.querySelector('.mpl-add-btn'); if (ab) ab.remove(); }
@@ -21277,7 +21486,7 @@ function syncMakerProcLabels() {
             if ((ntype==='range'||ntype==='MAX') && pmx) e.value_max = pmx.value;
         } else if (itype === 'text') {
             var ptv=null;
-            inst.querySelectorAll('input').forEach(function(inp){
+            inst.querySelectorAll('input,select').forEach(function(inp){
                 if (inp.closest && inp.closest('.mpl-sub-row')) return;
                 if (inp.classList.contains('mpl-text-val')) ptv=inp;
             });
@@ -22304,6 +22513,8 @@ var dictConfig = {
             html += '<select id="dict-f-numeric-type" class="form-control input-sm" style="width:70px;"><option value="range">範圍</option><option value="MAX">MAX</option><option value="MIN">MIN</option></select></div>';
             html += '<div id="dict-f-unit-wrap" style="display:none;"><label style="font-size:11px;color:#888;margin-bottom:3px;">單位</label>';
             html += '<select id="dict-f-unit" class="form-control input-sm" style="width:70px;"><option value="mm">mm</option><option value="kg">kg</option></select></div>';
+            html += '<div id="dict-f-choice-wrap" style="display:none;"><label style="font-size:11px;color:#888;margin-bottom:3px;">固定選項（逗號分隔，留白＝自由填寫；填 #整數＝限填整數）</label>';
+            html += '<input type="text" id="dict-f-choice" class="form-control input-sm" style="width:230px;" maxlength="200" placeholder="例：3,3.5,4.5,5"></div>';
             html += '<div id="dict-f-rep-wrap" style="display:flex;align-items:flex-end;padding-bottom:5px;"><label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer;margin:0;">';
             html += '<input type="checkbox" id="dict-f-is-rep" style="margin:0;"> 可多組</label></div>';
             html += dictSaveBtn('maker-proc-label');
@@ -22340,6 +22551,8 @@ var dictConfig = {
                 if (u) u.value = d.unit||'mm';
                 var rep = document.getElementById('dict-f-is-rep');
                 if (rep) rep.checked = !!parseInt(d.is_repeatable,10);
+                var cvEl = document.getElementById('dict-f-choice');
+                if (cvEl) cvEl.value = (d.choice_values === '#int') ? '#整數' : (d.choice_values || '');
             }, 50);
         },
         getData: function() {
@@ -22352,7 +22565,7 @@ var dictConfig = {
             var isRep = parentIds.length ? 0 : ((document.getElementById('dict-f-is-rep')||{}).checked ? 1 : 0);
             var id = $('#dict-edit-id').val();
             if (!name) { showToast('請填寫標籤名稱','error'); return null; }
-            return { action:'manage_maker_proc_labels', op:'save', proc_label_id:id, label_name:name, input_type:itype, numeric_type:ntype, unit:unit, parent_label_ids:parentIds.join(','), is_repeatable:isRep };
+            return { action:'manage_maker_proc_labels', op:'save', proc_label_id:id, label_name:name, input_type:itype, numeric_type:ntype, unit:unit, parent_label_ids:parentIds.join(','), is_repeatable:isRep, choice_values: (itype === 'text' ? ((document.getElementById('dict-f-choice')||{}).value||'') : '') };
         },
         getDeleteId: function(d){ return d.proc_label_id; }
     },
@@ -22475,6 +22688,8 @@ function dictProcLabelTypeChange(val) {
     var uw = document.getElementById('dict-f-unit-wrap');
     if (nw) nw.style.display = (val === 'numeric') ? '' : 'none';
     if (uw) uw.style.display = (val === 'numeric') ? '' : 'none';
+    var cw = document.getElementById('dict-f-choice-wrap');
+    if (cw) cw.style.display = (val === 'text') ? '' : 'none';
 }
 function dictProcLabelParentChange() {
     var anyChecked = !!document.querySelector('#dict-proc-parent-checkboxes .dpl-parent-chk input:checked');

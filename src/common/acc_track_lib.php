@@ -738,6 +738,8 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'total_amt'       => (float)$r['total_amt'],
             'need_recon_stmt' => $c['need_recon_stmt'] ?? null,
             'recon_provide_by'=> $c['recon_provide_by'] ?? null,
+            'recon_channels'  => $c['recon_channels'] ?? null,
+            'billing_note'    => $c['billing_note'] ?? null,
             'settlement_mode' => $c['settlement_mode'] ?? null,
             'settlement_day'  => $c['settlement_day'] ?? null,
             'payment_method'  => $r['payment_method'] ?? null,
@@ -771,6 +773,7 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'owner_id' => $owner['owner_id'], 'owner_name' => $owner['owner_name'],
             'ship_amt' => 0, 'ret_amt' => 0, 'net_amt' => 0, 'tax_amt' => 0, 'total_amt' => 0,
             'need_recon_stmt' => $c['need_recon_stmt'] ?? null, 'recon_provide_by' => $c['recon_provide_by'] ?? null,
+            'recon_channels' => $c['recon_channels'] ?? null, 'billing_note' => $c['billing_note'] ?? null,
             'settlement_mode' => $c['settlement_mode'] ?? null, 'settlement_day' => $c['settlement_day'] ?? null,
             'payment_method' => $c['payment_method'] ?? null, 'net_days' => $c['net_days'] ?? null,
         ];
@@ -813,8 +816,20 @@ function act_prior_unrecon_map(PDO $db, string $side, string $bm): array
                         WHERE side=? AND billing_month IN ($ph) AND status IN ('','processing') AND skipped_at IS NULL
                         ORDER BY billing_month");
     $st->execute(array_merge([$side], $months));
+    // 追蹤列可能是「當時有單、後來被改到別的帳款月份」而殘留的空列：該月份現在沒有任何資料的對象不算未對帳
+    $live = [];
+    foreach ($months as $m) {
+        try {
+            $rows = $side === 'ar' ? act_ar_rows($db, $m) : act_ap_rows($db, $m, false);
+            foreach ($rows as $x) $live[$m][(string)$x['party_key']] = true;
+        } catch (Throwable $e) { $live[$m] = null; }   // 查詢失敗時退回原判定，不漏提醒
+    }
     $out = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['party_key']][] = $r['billing_month'];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $m = $r['billing_month'];
+        if (array_key_exists($m, $live) && $live[$m] !== null && empty($live[$m][(string)$r['party_key']])) continue;
+        $out[(string)$r['party_key']][] = $m;
+    }
     return $out;
 }}
 

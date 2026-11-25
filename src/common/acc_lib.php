@@ -1542,11 +1542,14 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
     if ($map !== null && !$reload) return $map;
     $map = [];
     try {
+        require_once __DIR__ . '/cust_option_lib.php';
+        eg_cust_opt_ensure($db);   // recon_channels 欄位保證存在
         $byId = [];
         foreach ($db->query("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
                                     customer_address, customer_tel, customer_fax,
                                     billing_contact, settlement_mode, settlement_day,
-                                    payment_method, net_days, need_recon_stmt, recon_provide_by
+                                    payment_method, net_days, need_recon_stmt, recon_provide_by,
+                                    recon_channels, billing_note
                              FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
             $c['alias_of'] = null;
             $byId[trim((string)$c['customer_id'])] = $c;
@@ -2238,7 +2241,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         if ($bm !== $billingMonth) continue;
         $items[] = ['kind' => 'ship', 'src_type' => 'IS', 'src_id' => (int)$r['IS_id'],
                     'no' => $r['IS_number'], 'date' => $r['d'],
-                    'order_oo' => $r['Order_oo'], 'product_id' => $r['Product_id'],
+                    'order_oo' => $r['Order_oo'], 'product_id' => $r['Product_id'], 'part_no' => $r['Product_id'],
                     'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
                     'unit_price' => (float)$r['Unit_price'], 'amount' => $amt,
                     'note' => $r['Note'], 'sale_type' => $r['sale_type_name']];
@@ -2247,9 +2250,10 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
     $st2 = $db->prepare("
         SELECT it.IR_id, it.IR_no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d, it.d_id, it.Specification,
                it.Qty, it.Unit_price, it.IR_ps, it.billing_month_override,
-               COALESCE(rt.is_note,0) AS is_note
+               COALESCE(rt.is_note,0) AS is_note, ds.D_Setting_Id AS part_no
         FROM ir_track it
         LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
+        LEFT JOIN d_setting ds ON ds.d_id = it.d_id
         WHERE it.Client_name IN ($nmPh)
           AND (it.IR_date BETWEEN ? AND ? OR it.billing_month_override = ?)
         ORDER BY it.IR_date, it.IR_no");
@@ -2263,7 +2267,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         if ($bm !== $billingMonth) continue;
         $items[] = ['kind' => 'return', 'src_type' => 'IR', 'src_id' => (int)$r['IR_id'],
                     'no' => $r['IR_no'], 'date' => $r['d'],
-                    'order_oo' => null, 'product_id' => $r['d_id'], 'spec' => $r['Specification'],
+                    'order_oo' => null, 'product_id' => $r['d_id'], 'part_no' => $r['part_no'], 'spec' => $r['Specification'],
                     'qty' => -(int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'],
                     'amount' => -$amt, 'note' => $r['IR_ps'], 'sale_type' => '退貨'];
     }

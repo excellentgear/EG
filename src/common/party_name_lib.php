@@ -72,6 +72,7 @@ function eg_party_ensure_schema(PDO $db): void
                                 'is_invoice_recv' => "TINYINT NOT NULL DEFAULT 0 COMMENT '發票（電子發票）收件人'"],
         'party_address' => ['addr_type_id' => "INT NULL COMMENT '地址類別（party_addr_type）'"],
         'maker_list'    => ['m_fax2' => "VARCHAR(50) NULL COMMENT '傳真2'",
+                            'm_email' => "VARCHAR(255) NULL COMMENT '公司電子信箱（可多個，分號或空白分隔）'",
                             'factory_zip' => "VARCHAR(20) NULL COMMENT '工廠地址郵遞區號'",
                             'billing_zip' => "VARCHAR(20) NULL COMMENT '帳單地址郵遞區號'"],
     ];
@@ -84,6 +85,41 @@ function eg_party_ensure_schema(PDO $db): void
             }
         } catch (Throwable $e) {}
     }
+}
+
+/**
+ * 廠商編輯改成與客戶相同的地址輸入（一組標準地址＋其他地址）後，原本獨立的「工廠地址」「帳單地址」
+ * 改放在「其他地址」的同名類別。這裡把 maker_list 上既有的工廠／帳單地址補進 party_address（只補沒有同類別者，
+ * 可重複執行）。maker_list 的 factory 與 billing 地址欄位保留，儲存時由「其他地址」同步回去（BOM、對帳等頁面仍在讀）。
+ * $mid=null 處理全部廠商。回傳新增筆數。呼叫端不可在 transaction 內呼叫（內含 DDL/INSERT 前置）。
+ */
+function eg_maker_addr_migrate(PDO $db, ?string $mid = null): int
+{
+    eg_party_ensure_schema($db);
+    $n = 0;
+    try {
+        $db->exec("INSERT IGNORE INTO party_addr_type (type_name,sort_order) VALUES ('工廠地址',3),('帳單地址',4)");
+        $tid = [];
+        foreach ($db->query("SELECT type_id,type_name FROM party_addr_type WHERE type_name IN ('工廠地址','帳單地址')")->fetchAll(PDO::FETCH_ASSOC) as $r) $tid[$r['type_name']] = (int)$r['type_id'];
+        if (count($tid) < 2) return 0;
+        $defs = [['工廠地址', 'factory_zip', 'factory_address'], ['帳單地址', 'billing_zip', 'billing_address']];
+        foreach ($defs as [$tn, $zc, $ac]) {
+            $sql = "SELECT m.maker_id_no, m.$zc AS zip, m.$ac AS addr FROM maker_list m
+                    WHERE m.$ac IS NOT NULL AND TRIM(m.$ac)<>''
+                      AND NOT EXISTS (SELECT 1 FROM party_address a WHERE a.party_type='maker' AND a.party_id=m.maker_id_no AND a.addr_type_id=?)"
+                 . ($mid !== null ? " AND m.maker_id_no=?" : '');
+            $q = $db->prepare($sql);
+            $q->execute($mid !== null ? [$tid[$tn], $mid] : [$tid[$tn]]);
+            $ins = $db->prepare("INSERT INTO party_address (party_type,party_id,addr_type_id,addr_label,zip,address,sort_order) VALUES ('maker',?,?,?,?,?,?)");
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $mx = $db->prepare("SELECT COALESCE(MAX(sort_order),-1)+1 FROM party_address WHERE party_type='maker' AND party_id=?");
+                $mx->execute([$r['maker_id_no']]);
+                $ins->execute([$r['maker_id_no'], $tid[$tn], '', mb_substr((string)$r['zip'], 0, 20), mb_substr((string)$r['addr'], 0, 255), (int)$mx->fetchColumn()]);
+                $n++;
+            }
+        }
+    } catch (Throwable $e) { error_log('eg_maker_addr_migrate: ' . $e->getMessage()); }
+    return $n;
 }
 
 /** 讀別名（含更名歷史）與額外地址，供 get_customer / get_maker 回傳 */
