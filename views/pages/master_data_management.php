@@ -4286,6 +4286,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 } catch (Throwable $_le) {}
             }
+            // 電子發票設定（頁數上限／同料號合併）：與對帳單設定同權限，沒送＝不動
+            if (_mdPerm('recon', 'edit', $is_admin) && array_key_exists('einv_max_pages', $_POST)) {
+                $_ep = trim((string)$_POST['einv_max_pages']);
+                $_ep = ($_ep === '' || !ctype_digit($_ep) || (int)$_ep < 1) ? null : min(99, (int)$_ep);
+                $pdo->prepare("UPDATE customer_list SET einv_max_pages=?, einv_merge_part=? WHERE customer_id=?")
+                    ->execute([$_ep, intval($_POST['einv_merge_part'] ?? 0) ? 1 : 0, $customer_id]);
+            }
             // 客戶可接受的對帳單提供方式（獨立欄位，沒送＝不動）
             if ($recon_channels !== null) {
                 $pdo->prepare("UPDATE customer_list SET recon_channels=? WHERE customer_id=?")->execute([$recon_channels === '' ? null : $recon_channels, $customer_id]);
@@ -11061,6 +11068,22 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     <div class="col-md-4">
         <div class="form-group" id="cf-recon-provide-hint-wrap" style="padding-top:24px;display:none;">
             <div style="font-size:11px;color:#888;" id="cf-recon-provide-hint"></div>
+        </div>
+    </div>
+</div>
+<div class="row">
+    <div class="col-md-4">
+        <div class="form-group">
+            <label>電子發票頁數上限</label>
+            <input type="number" class="form-control" id="cf-einv_max_pages" min="1" max="99" step="1" placeholder="留空＝不設定" <?= $mdReconEdit?'':'disabled' ?>>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="form-group" style="padding-top:24px;">
+            <label style="font-weight:normal;cursor:pointer;">
+                <input type="checkbox" id="cf-einv_merge_part" value="1" style="margin-right:6px;" <?= $mdReconEdit?'':'disabled' ?>>同料號合併一筆（不分出貨單，區間內同料號數量加總）
+            </label>
+            <div style="font-size:11px;color:#888;">頁數上限的筆數＝管理員在「發票開立」設定的每張發票筆數上限 × 頁數；超過時會把同出貨單同料號同數量的金額加總。</div>
         </div>
     </div>
 </div>
@@ -20246,6 +20269,8 @@ function openCustomerModal(customer_id, readonly) {
                 nrs.checked = (d.need_recon_stmt == 1 || d.need_recon_stmt === '1');
                 var rpb = document.getElementById('cf-recon_provide_by');
                 if (rpb) rpb.value = d.recon_provide_by || 'company';
+                var _ep = document.getElementById('cf-einv_max_pages'); if (_ep) _ep.value = d.einv_max_pages || '';
+                var _em = document.getElementById('cf-einv_merge_part'); if (_em) _em.checked = (d.einv_merge_part == 1 || d.einv_merge_part === '1');
                 _setRcList(d.recon_channels ? String(d.recon_channels).split(',').filter(Boolean) : []);
                 onNeedReconStmtChange();
             }
@@ -20291,6 +20316,8 @@ function openCustomerModal(customer_id, readonly) {
         if (nrs) {   // 新客戶預設：需要對帳單、本公司提供
             nrs.checked = true;
             var rpb0 = document.getElementById('cf-recon_provide_by'); if (rpb0) rpb0.value = 'company';
+            var _ep0 = document.getElementById('cf-einv_max_pages'); if (_ep0) _ep0.value = '';
+            var _em0 = document.getElementById('cf-einv_merge_part'); if (_em0) _em0.checked = false;
             _setRcList([]);
             onNeedReconStmtChange();
         }
@@ -20370,6 +20397,10 @@ function submitCustomerForm() {
         recon_provide_by:     gv('cf-recon_provide_by'),
         est_date:             gv('cf-est_date')
     };
+    if (document.getElementById('cf-einv_max_pages')) {
+        data.einv_max_pages  = document.getElementById('cf-einv_max_pages').value;
+        data.einv_merge_part = document.getElementById('cf-einv_merge_part').checked ? 1 : 0;
+    }
     if (document.getElementById('cf-rc-wrap')) data.recon_channels = _getRcList().join(',');   // 無權限者頁面上沒有這組欄位＝不送＝後端不動
     if (!data.customer_id) { showToast('客戶代碼不可為空','error'); return; }
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }

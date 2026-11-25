@@ -484,6 +484,32 @@ function acc_sheet_save(PDO $db, array $sheet, array $lines, ?array $user): arra
         }
     }
 
+    // 已開傳票（已做帳）的明細：金額／數量不可在對帳底稿被調整（DDL 在交易外先跑）
+    try {
+        require_once __DIR__ . '/acc_voucher_lib.php';
+        $vmap = acc_voucher_src_map($db);
+        if ($vmap) {
+            $old = [];
+            if ($cur) {
+                $q = $db->prepare("SELECT src_type, src_id, adj_qty, adj_price, adj_amount FROM acc_recon_line WHERE sheet_id=? AND split_parent IS NULL");
+                $q->execute([(int)$cur['sheet_id']]);
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $o) $old[strtoupper($o['src_type']) . '-' . (int)$o['src_id']] = $o;
+            }
+            $nv = fn($v) => ($v === '' || $v === null) ? null : round((float)$v, 4);
+            foreach ($lines as $l) {
+                if (!empty($l['split_parent_key'])) continue;
+                $k = strtoupper((string)($l['src_type'] ?? '')) . '-' . (int)($l['src_id'] ?? 0);
+                if (!isset($vmap[$k])) continue;
+                $o = $old[$k] ?? ['adj_qty' => null, 'adj_price' => null, 'adj_amount' => null];
+                foreach (['adj_qty', 'adj_price', 'adj_amount'] as $f)
+                    if ($nv($l[$f] ?? null) !== $nv($o[$f])) {
+                        return ['success' => false, 'message' => (string)($l['doc_no'] ?? $k) . ' 已有傳票 '
+                            . ($vmap[$k]['voucher_no'] ?: '(未填號碼)') . '，金額／數量已鎖定不可調整（需調整請先作廢該傳票）'];
+                    }
+            }
+        }
+    } catch (Throwable $e) { error_log('acc_sheet_save voucher guard: ' . $e->getMessage()); }
+
     $t = acc_sheet_totals($db, $lines);
     try {
         $db->beginTransaction();
@@ -1549,7 +1575,7 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
                                     customer_address, customer_tel, customer_fax,
                                     billing_contact, settlement_mode, settlement_day,
                                     payment_method, net_days, need_recon_stmt, recon_provide_by,
-                                    recon_channels, billing_note
+                                    recon_channels, billing_note, einv_max_pages, einv_merge_part
                              FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
             $c['alias_of'] = null;
             $byId[trim((string)$c['customer_id'])] = $c;
@@ -3005,9 +3031,12 @@ function acc_alloc_save(PDO $db, int $receiptId, array $allocs, string $userId):
     }
     foreach ($clean as $amt) $sum += $amt;
 
-    if ($sum > (float)$rc['amount'] + 0.005) {
+    // settle_extra=1（新版收款單）：客戶扣款與匯費也算沖掉發票；舊收款單維持上限＝收款金額
+    $extra = !empty($rc['settle_extra']) ? (float)($rc['deduct_amt'] ?? 0) + (float)$rc['fee'] : 0.0;
+    if ($sum > (float)$rc['amount'] + $extra + 0.005) {
         return ['success' => false, 'message' => '沖帳總額 ' . number_format($sum)
-                . ' 超過收款金額 ' . number_format((float)$rc['amount'])];
+                . ' 超過可沖金額 ' . number_format((float)$rc['amount'] + $extra)
+                . ($extra > 0 ? '（實收 ' . number_format((float)$rc['amount']) . '＋扣款／匯費 ' . number_format($extra) . '）' : '（收款金額）')];
     }
 
     try {
@@ -3050,7 +3079,7 @@ function acc_alloc_save(PDO $db, int $receiptId, array $allocs, string $userId):
         return ['success' => false, 'message' => '沖帳失敗：' . $e->getMessage()];
     }
 
-    $left = round((float)$rc['amount'] - $sum, 2);
+    $left = round((float)$rc['amount'] + $extra - $sum, 2);
     return ['success' => true, 'allocated' => $sum, 'unallocated' => $left,
             'count' => count($clean),
             'message' => '已沖帳 ' . count($clean) . ' 張發票、合計 ' . number_format($sum)
@@ -3087,7 +3116,8 @@ function acc_receipt_list(PDO $db, array $f): array
         $r['fee']         = (float)$r['fee'];
         $r['allocated']   = (float)$r['allocated'];
         $r['alloc_cnt']   = (int)$r['alloc_cnt'];
-        $r['unallocated'] = round($r['amount'] - $r['allocated'], 2);
+        $r['extra']       = !empty($r['settle_extra']) ? (float)($r['deduct_amt'] ?? 0) + $r['fee'] : 0.0;
+        $r['unallocated'] = round($r['amount'] + $r['extra'] - $r['allocated'], 2);
     }
     unset($r);
 

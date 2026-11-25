@@ -208,6 +208,9 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
         <input type="number" id="candAmtMax" placeholder="最大" style="width:110px;" min="0" step="1">
         <button id="btnCandFilterClear">清除篩選</button>
         <span id="candFilterInfo" style="color:#8a6d45;font-size:13px;"></span>
+        <?php if ($perms['canAdmin']): ?>
+        <button id="btnEinvCfg" style="margin-left:auto;"><i class="fa fa-cog"></i> 電子發票設定</button>
+        <?php endif; ?>
       </div>
 
       <div class="a-stat">
@@ -228,6 +231,8 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
         <?php if ($perms['canEdit']): ?>
         <button id="btnCdCreate" class="btn-warm" disabled><i class="fa fa-file-text-o"></i> 產生發票草稿</button>
         <?php endif; ?>
+        <a href="erp_stmt_import.php" style="text-decoration:none;"><button type="button"><i class="fa fa-upload"></i> 匯入ERP對帳單</button></a>
+        <a href="voucher.php" style="text-decoration:none;"><button type="button"><i class="fa fa-book"></i> 傳票管理</button></a>
         <a href="customer_invoice_data.php" style="text-decoration:none;">
           <button type="button"><i class="fa fa-id-card-o"></i> 去補客戶發票資料</button></a>
       </div>
@@ -358,6 +363,25 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
     <button data-close="mkEinv">稍後再說</button>
     <button class="go" id="btnEinvDl"><i class="fa fa-download"></i> 下載 xlsx 並標記已轉出</button>
   </div>
+</div></div>
+
+<div class="a-mask" id="mkEinvCfg"><div class="a-modal narrow">
+  <div class="m-head"><i class="fa fa-cog"></i>&nbsp;電子發票設定
+    <span class="m-close" data-close="mkEinvCfg">✕</span></div>
+  <div class="m-body">
+    <div style="margin-bottom:12px;">
+      <label>每張電子發票筆數上限</label><br>
+      <input type="number" id="cfgMaxRows" min="1" max="500" step="1" style="width:120px;"> 筆
+      <div style="font-size:12px;color:#8a6d45;">超過時自動切成多張（訂單編號加 -1、-2…）。各客戶的「頁數上限」＝此筆數 × 頁數。</div>
+    </div>
+    <div>
+      <label>開立日期可往前幾天</label><br>
+      <input type="number" id="cfgBackDays" min="0" max="60" step="1" style="width:120px;"> 天
+      <div style="font-size:12px;color:#8a6d45;">往後固定到「今天所在月份」月底。</div>
+    </div>
+  </div>
+  <div class="m-foot"><button data-close="mkEinvCfg">取消</button>
+    <button class="go" id="btnEinvCfgSave"><i class="fa fa-check"></i> 儲存</button></div>
 </div></div>
 
 <div class="a-mask" id="mkBf"><div class="a-modal">
@@ -655,7 +679,7 @@ $('#btnCdCreate').on('click',function(){
     });
 });
 /* 電子發票匯入檔預覽／下載 */
-var einvIds=[];
+var einvIds=[], CAN_CFG=false;
 function einvLoad(){
   var d=$('#einvDate').val();
   $('#tblEinv').html('<tr><td style="padding:18px;color:#8a6d45;">載入中…</td></tr>');
@@ -672,6 +696,15 @@ function einvLoad(){
     $('#einvWarn').html(noMail.length
       ? '<div class="warn">'+noMail.map(function(x){return esc(x.customer);}).join('、')
         +' 沒有設定會計聯絡人 EMAIL（買方電子信箱會是空白）。</div>' : '');
+    var notes=[];
+    r.invoices.forEach(function(x){
+      if(x.mode==='merge_part') notes.push(esc(x.customer)+'：同料號合併，'+x.raw_rows+' 筆 → '+x.rows+' 筆');
+      else if(x.mode==='same_qty') notes.push(esc(x.customer)+'：同出貨單同料號同數量金額加總，'+x.raw_rows+' 筆 → '+x.rows+' 筆');
+      if(x.invoices_out>1) notes.push(esc(x.customer)+'：共 '+x.rows+' 筆，已切成 '+x.invoices_out+' 張發票');
+    });
+    var over=r.invoices.filter(function(x){ return x.over_pages; });
+    $('#einvWarn').append((notes.length?'<div class="warn" style="background:#FFF3D1;color:#5b3a1e;">'+notes.join('<br>')+'</div>':'')
+      +(over.length?'<div class="warn">'+over.map(function(x){return esc(x.customer);}).join('、')+' 壓縮後仍超過頁數上限，請檢查。</div>':''));
     var tot=r.invoices.reduce(function(a,x){return a+x.total;},0);
     $('#einvSum').text(r.invoices.length+' 張發票、'+r.rows.length+' 列明細、含稅合計 '+nf(tot));
   },'json').fail(function(x){
@@ -684,10 +717,26 @@ function openEinv(ids){
   $.getJSON(API,{action:'inv_einv_range'},function(r){
     if(!r.ok){ toast(esc(r.error||'無法取得日期範圍'), true); return; }
     $('#einvDate').attr({min:r.min,max:r.max}).val(r.today);
-    $('#einvRange').text('可選 '+r.min+' ~ '+r.max+'（往前最多 '+r.back_days+' 天，往後到本月月底）');
+    CAN_CFG=r.can_admin; $('#einvRange').text('可選 '+r.min+' ~ '+r.max+'（往前最多 '+r.back_days+' 天，往後到本月月底）');
     openMask('mkEinv'); einvLoad();
   });
 }
+$('#btnEinvCfg').on('click',function(){
+  $.getJSON(API,{action:'inv_einv_range'},function(r){
+    if(!r.ok){ toast(esc(r.error||'讀取失敗'), true); return; }
+    $('#cfgMaxRows').val(r.settings.max_rows); $('#cfgBackDays').val(r.settings.back_days);
+    openMask('mkEinvCfg');
+  });
+});
+$('#btnEinvCfgSave').on('click',function(){
+  var mr=$('#cfgMaxRows').val(), bd=$('#cfgBackDays').val();
+  if(!/^\d+$/.test(mr)||+mr<1||+mr>500){ toast('每張發票筆數上限須為 1~500 的整數', true); return; }
+  if(!/^\d+$/.test(bd)||+bd>60){ toast('可往前開立天數須為 0~60 的整數', true); return; }
+  $.post(API+'?action=inv_einv_settings_save',{csrf:CSRF,max_rows:mr,back_days:bd},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
+    closeMask('mkEinvCfg'); toast('已儲存電子發票設定');
+  },'json').fail(function(x){ var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+});
 $('#einvDate').on('change',function(){
   var v=$(this).val(), mn=$(this).attr('min'), mx=$(this).attr('max');
   if(!v || v<mn || v>mx){ toast('開立日期須在 '+mn+' ~ '+mx+' 之間', true); $('#btnEinvDl').prop('disabled',true); return; }

@@ -47,6 +47,12 @@ function eg_cust_opt_ensure(PDO $db): void
         if (!isset($have['recon_channels'])) {
             $db->exec("ALTER TABLE customer_list ADD COLUMN recon_channels VARCHAR(200) NULL DEFAULT NULL COMMENT '客戶可接受的對帳單提供方式（逗號分隔，選項見 cust_option recon_channel）'");
         }
+        if (!isset($have['einv_max_pages'])) {
+            $db->exec("ALTER TABLE customer_list ADD COLUMN einv_max_pages INT NULL DEFAULT NULL COMMENT '電子發票頁數上限（NULL=不限；1頁=每張發票筆數上限的1倍，超過時同出貨單同料號同數量金額加總）'");
+        }
+        if (!isset($have['einv_merge_part'])) {
+            $db->exec("ALTER TABLE customer_list ADD COLUMN einv_merge_part TINYINT(1) NOT NULL DEFAULT 0 COMMENT '電子發票同料號合併一筆（1=不分出貨單、區間內同料號數量加總）'");
+        }
     } catch (Throwable $e) { error_log('eg_cust_opt_ensure: ' . $e->getMessage()); }
 }
 

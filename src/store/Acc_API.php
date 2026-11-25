@@ -528,19 +528,30 @@ case 'inv_einv_xlsx': {
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($s['ids'] ?? '')))));
     if (!$ids) acc_err('沒有選取發票');
     $d = trim((string)($s['inv_date'] ?? date('Y-m-d')));
-    if ($e = acc_einv_date_check($d)) acc_err($e);
+    if ($e = acc_einv_date_check($db, $d)) acc_err($e);
     $built = acc_einv_build($db, $ids, $d);
     if (!$built['rows']) acc_err('沒有可匯出的發票明細');
     if ($action === 'inv_einv_preview') {
         acc_out(['header' => $built['header'], 'rows' => $built['rows'],
-                 'invoices' => $built['invoices'], 'range' => acc_einv_date_range()]);
+                 'invoices' => $built['invoices'], 'range' => acc_einv_date_range($db), 'settings' => acc_einv_settings($db)]);
     }
     acc_einv_send_xlsx($built, '電子發票匯入_' . str_replace('-', '', $d) . '_' . date('His') . '.xlsx');
 }
 
 case 'inv_einv_range': {
     require_once $document_root . '/EGsystem/src/common/acc_einvoice_lib.php';
-    acc_out(acc_einv_date_range());
+    acc_out(acc_einv_date_range($db) + ['settings' => acc_einv_settings($db), 'can_admin' => (bool)$perms['canAdmin']]);
+}
+
+/* 電子發票設定（僅會計管理員可改） */
+case 'inv_einv_settings_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_einvoice_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改設定', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_einv_settings_save($db, $_POST['max_rows'] ?? '', $_POST['back_days'] ?? '', (string)$uid, (string)($_SESSION['userName'] ?? ''));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
 }
 
 case 'inv_export_csv': {
@@ -597,9 +608,134 @@ case 'inv_export_csv': {
     exit;
 }
 
+/* ══ ERP 客戶對帳單匯入（以 ERP 為準，更新網頁出貨明細的單價／數量） ══════ */
+case 'erp_stmt_upload': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $f = $_FILES['file'] ?? null;
+    if (!$f || $f['error'] !== UPLOAD_ERR_OK) acc_err('請選擇要上傳的 ERP 對帳單檔案');
+    $ext = strtolower(pathinfo((string)$f['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, ['xls', 'xlsx'], true)) acc_err('只接受 .xls 或 .xlsx 檔案');
+    if ($f['size'] > 10 * 1024 * 1024) acc_err('檔案過大（上限 10MB）');
+    try { $parsed = acc_erp_stmt_parse($f['tmp_name']); }
+    catch (Throwable $e) { acc_err('無法讀取檔案：' . $e->getMessage()); }
+    if (!$parsed['lines']) acc_err('檔案裡找不到對帳明細（需有「日期｜單號｜品名規格｜數量｜單位｜單價｜金額」表頭的 ERP 客戶對帳單）');
+    $m = acc_erp_stmt_match($db, $parsed['lines']);
+    $token = bin2hex(random_bytes(10));
+    $fname = acc_u8((string)$f['name']);
+    $_SESSION['acc_erp_stmt'] = array_slice(($_SESSION['acc_erp_stmt'] ?? []) + [$token => [
+        'token' => $token, 'file_name' => $fname, 'entries' => $m['entries']]], -3, 3, true);
+    $sumAmt = 0.0; foreach ($parsed['lines'] as $l) $sumAmt += $l['amount'];
+    acc_out(['token' => $token, 'file_name' => $fname, 'customer_id' => $parsed['customer_id'],
+             'customer_name' => $parsed['customer_name'], 'range' => $parsed['range'],
+             'line_cnt' => count($parsed['lines']), 'lines_amount' => $sumAmt,
+             'declared_total' => $parsed['total_declared'],
+             'entries' => $m['entries'], 'summary' => $m['summary'], 'is_numbers' => $m['is_numbers']]);
+}
+
+case 'erp_stmt_apply': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $token = (string)($_POST['token'] ?? '');
+    $stash = $_SESSION['acc_erp_stmt'][$token] ?? null;
+    if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
+    $ids = json_decode($_POST['is_ids'] ?? '[]', true);
+    if (!is_array($ids) || !$ids) acc_err('沒有勾選要更新的明細');
+    $r = acc_erp_stmt_apply($db, $stash, $ids, (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* ══ 傳票（請款） ═════════════════════════════════════════════════════ */
+case 'vch_parties': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    $s = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $bm = trim((string)($s['bm'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('請指定帳款月份');
+    $out = [];
+    if ($side === 'ar') {
+        $r = acc_ar_summary($db, ['bm_from' => $bm, 'bm_to' => $bm, 'per_page' => 0]);
+        foreach ($r['rows'] as $x) $out[] = ['id' => $x['customer'], 'name' => $x['customer'], 'code' => $x['customer_id'],
+                                             'full' => $x['customer_full'], 'cnt' => (int)$x['ship_cnt'] + (int)$x['ret_cnt'], 'amount' => (float)$x['net_amt']];
+    } else {
+        $r = acc_ap_summary($db, ['ym_from' => $bm, 'ym_to' => $bm, 'per_page' => 0]);
+        foreach ($r['rows'] as $x) $out[] = ['id' => $x['maker_id_no'], 'name' => $x['maker_name'], 'code' => $x['maker_id_no'],
+                                             'full' => $x['maker_full'], 'cnt' => (int)$x['cnt'], 'amount' => (float)$x['amount']];
+    }
+    acc_out(['parties' => $out]);
+}
+
+case 'vch_candidates': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    $s = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $pid = acc_u8(trim((string)($s['party_id'] ?? '')));
+    $bm = trim((string)($s['bm'] ?? ''));
+    if ($pid === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少對象或帳款月份');
+    acc_out(acc_voucher_candidates($db, $side, $pid, $bm));
+}
+
+case 'vch_create': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $sel = json_decode($_POST['sel'] ?? '[]', true);
+    if (!is_array($sel)) acc_err('資料格式錯誤');
+    $r = acc_voucher_create($db, (string)($_POST['side'] ?? 'ar'), acc_u8(trim((string)($_POST['party_id'] ?? ''))),
+        trim((string)($_POST['bm'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
+        acc_u8((string)($_POST['voucher_no'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), $sel,
+        (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_list': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    $s = $_POST ?: $_GET;
+    $s['kw'] = acc_u8(trim((string)($s['kw'] ?? '')));
+    acc_out(acc_voucher_list($db, $s));
+}
+
+case 'vch_get': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    $s = $_POST ?: $_GET;
+    $v = acc_voucher_get($db, (int)($s['voucher_id'] ?? 0));
+    if (!$v) acc_err('找不到傳票', 404);
+    acc_out($v);
+}
+
+case 'vch_update': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_voucher_update($db, (int)($_POST['voucher_id'] ?? 0), acc_u8((string)($_POST['voucher_no'] ?? '')),
+        trim((string)($_POST['voucher_date'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_void': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以作廢傳票', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_voucher_void($db, (int)($_POST['voucher_id'] ?? 0), acc_u8((string)($_POST['reason'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
 /* ══ 收款與沖帳 ═══════════════════════════════════════════════════════ */
 
 case 'rcpt_list': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_ext_lib.php';
+    acc_rcpt_ext_ensure($db);
     $s = $_POST ?: $_GET;
     acc_out(acc_receipt_list($db, [
         'date_from'     => trim((string)($s['date_from'] ?? '')),
@@ -611,6 +747,24 @@ case 'rcpt_list': {
     ]));
 }
 
+case 'rcpt_due_list': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_ext_lib.php';
+    $s = $_POST ?: $_GET;
+    $rows = acc_rcpt_due_list($db, ['kw' => acc_u8(trim((string)($s['kw'] ?? ''))), 'only_overdue' => (string)($s['only_overdue'] ?? '')]);
+    $sum = ['count' => count($rows), 'open' => 0.0, 'overdue' => 0.0, 'overdue_cnt' => 0];
+    foreach ($rows as $x) { $sum['open'] += $x['open']; if ($x['overdue_days'] > 0) { $sum['overdue'] += $x['open']; $sum['overdue_cnt']++; } }
+    acc_out(['rows' => $rows, 'summary' => $sum]);
+}
+
+case 'rcpt_opts': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_ext_lib.php';
+    $s = $_POST ?: $_GET;
+    $out = ['methods' => acc_rcpt_methods($db)];
+    $cn = acc_u8(trim((string)($s['customer'] ?? '')));
+    if ($cn !== '') { $t = acc_rcpt_cust_terms($db, $cn); $t['terms_text'] = acc_rcpt_terms_text($t); $out['terms'] = $t; }
+    acc_out($out);
+}
+
 case 'rcpt_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
@@ -619,8 +773,22 @@ case 'rcpt_save': {
     if (!is_array($d)) acc_err('資料格式錯誤');
     foreach (['customer_name', 'bank', 'note', 'method'] as $k)
         if (isset($d[$k])) $d[$k] = acc_u8((string)$d[$k]);
+    // 新版收款延伸欄位（入帳類型必填資料、扣%／匯費）：先檢核再存；DDL 在交易外先跑
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_ext_lib.php';
+    acc_rcpt_ext_ensure($db);
+    // 舊收款單（延伸欄位建立前）修改時維持舊規則，不要求補匯入帳號／票號，也不改變沖帳上限
+    $legacy = false;
+    if ((int)($d['receipt_id'] ?? 0) > 0) {
+        $q = $db->prepare("SELECT settle_extra FROM acc_receipt WHERE receipt_id=?");
+        $q->execute([(int)$d['receipt_id']]);
+        $legacy = ((int)$q->fetchColumn() === 0);
+    }
+    $chk = $legacy ? ['ok' => true, 'ext' => null, 'warn' => []] : acc_rcpt_ext_check($db, $d);
+    if (!$chk['ok']) acc_err($chk['message']);
     $r = acc_receipt_save($db, $d, (string)$uid);
     if (!$r['success']) acc_err($r['message']);
+    if ($chk['ext']) acc_rcpt_ext_save($db, (int)$r['receipt_id'], $chk['ext']);
+    if ($chk['warn']) $r['message'] .= '（' . implode('；', $chk['warn']) . '）';
     acc_out($r);
 }
 

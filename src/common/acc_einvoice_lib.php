@@ -11,23 +11,52 @@
 require_once __DIR__ . '/acc_lib.php';
 require_once __DIR__ . '/order_as_tag_lib.php';
 
-/** 開立日期可選範圍：今天往前最多 N 天、往後到「今天所在月份」月底 */
-const ACC_INV_BACK_DAYS = 6;
-
-function acc_einv_date_range(?string $today = null): array
+/** 管理員設定（system_settings）：每張電子發票筆數上限、開立日期可往前幾天 */
+function acc_einv_settings(PDO $db): array
 {
+    $out = ['max_rows' => 36, 'back_days' => 6];
+    try {
+        $st = $db->query("SELECT setting_key, setting_value FROM system_settings
+                          WHERE setting_key IN ('acc_einv_max_rows','acc_einv_back_days')");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['setting_value']);
+            if (!ctype_digit($v)) continue;
+            if ($r['setting_key'] === 'acc_einv_max_rows' && (int)$v >= 1)  $out['max_rows']  = min(500, (int)$v);
+            if ($r['setting_key'] === 'acc_einv_back_days' && (int)$v >= 0) $out['back_days'] = min(60, (int)$v);
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, string $uname): array
+{
+    $maxRows = trim((string)$maxRows); $backDays = trim((string)$backDays);
+    if (!ctype_digit($maxRows) || (int)$maxRows < 1 || (int)$maxRows > 500) return ['success' => false, 'message' => '每張發票筆數上限須為 1~500 的整數'];
+    if (!ctype_digit($backDays) || (int)$backDays > 60) return ['success' => false, 'message' => '可往前開立天數須為 0~60 的整數'];
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                        VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
+                        updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)");
+    $st->execute(['acc_einv_max_rows',  $maxRows,  (int)$uid, $uname]);
+    $st->execute(['acc_einv_back_days', $backDays, (int)$uid, $uname]);
+    return ['success' => true, 'message' => '已儲存', 'settings' => acc_einv_settings($db)];
+}
+
+/** 開立日期可選範圍：今天往前最多 N 天（管理員設定）、往後到「今天所在月份」月底 */
+function acc_einv_date_range(?PDO $db = null, ?string $today = null): array
+{
+    $back = $db ? acc_einv_settings($db)['back_days'] : 6;
     $t = new DateTime($today ?: date('Y-m-d'));
-    $min = (clone $t)->modify('-' . ACC_INV_BACK_DAYS . ' days')->format('Y-m-d');
+    $min = (clone $t)->modify('-' . $back . ' days')->format('Y-m-d');
     $max = $t->format('Y-m-t');
-    return ['min' => $min, 'max' => $max, 'today' => $t->format('Y-m-d'), 'back_days' => ACC_INV_BACK_DAYS];
+    return ['min' => $min, 'max' => $max, 'today' => $t->format('Y-m-d'), 'back_days' => $back];
 }
 
 /** 驗證開立日期；不合法回錯誤字串，合法回 null */
-function acc_einv_date_check(string $d): ?string
+function acc_einv_date_check(PDO $db, string $d): ?string
 {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) || !strtotime($d)) return '開立日期格式錯誤';
-    $r = acc_einv_date_range();
-    if ($d < $r['min']) return '開立日期最早只能到 ' . $r['min'] . '（往前最多 ' . ACC_INV_BACK_DAYS . ' 天）';
+    $r = acc_einv_date_range($db);
+    if ($d < $r['min']) return '開立日期最早只能到 ' . $r['min'] . '（往前最多 ' . $r['back_days'] . ' 天）';
     if ($d > $r['max']) return '開立日期最晚只能到 ' . $r['max'] . '（本月月底）';
     return null;
 }
@@ -120,6 +149,8 @@ function acc_einv_build(PDO $db, array $ids, string $invDate): array
     }
 
     $cust = acc_customer_by_name($db);
+    $cfg  = acc_einv_settings($db);
+    $maxRows = $cfg['max_rows'];
     $dateTxt = str_replace('-', '/', $invDate) . ' ' . ($invDate === date('Y-m-d') ? date('H:i') : '12:00');
     $rows = []; $sum = []; $seen = [];
 
@@ -129,40 +160,81 @@ function acc_einv_build(PDO $db, array $ids, string $invDate): array
         $cid  = trim((string)$v['customer_id']) !== '' ? trim((string)$v['customer_id']) : (string)($c['customer_id'] ?? '');
         $base = $cid . '-' . str_replace('-', '', (string)$v['billing_month']);
         $seen[$base] = ($seen[$base] ?? 0) + 1;
-        $orderNo = $seen[$base] > 1 ? $base . '-' . $seen[$base] : $base;
+        $orderBase = $seen[$base] > 1 ? $base . '-' . $seen[$base] : $base;
         $email = acc_einv_email($db, $cid, $c);
+        $pages = (isset($c['einv_max_pages']) && (int)$c['einv_max_pages'] > 0) ? (int)$c['einv_max_pages'] : 0;
+        $mergePart = !empty($c['einv_merge_part']);
 
-        $first = true; $lastNo = null; $cnt = 0;
+        // 1) 明細轉成中性資料列
+        $lines = [];
         foreach ($itemsBy[$iid] ?? [] as $it) {
             $isRet = ($it['src_type'] === 'IR');
             $part = (string)$it['product_id'];
             if ($isRet && ctype_digit($part)) $part = (string)($dName[(int)$part] ?? $part);
             $tag  = (!$isRet && isset($isOrder[(int)$it['src_id']])) ? ($tags[$isOrder[(int)$it['src_id']]] ?? null) : null;
-            $desc = acc_einv_desc_of_tag($tag);
-            $name = trim($part . ' ' . $desc);
-            $qty  = (float)$it['qty'];
-            $price = (float)$it['unit_price'];
-            $amt  = round($qty * $price);                       // 數量*單價（退貨 qty 為負）
-            $note = ($it['src_no'] !== $lastNo) ? (string)$it['src_no'] : '';
-            $lastNo = $it['src_no'];
-
-            $rows[] = [
-                $orderNo,
-                $first ? $dateTxt : null,
-                $first ? 'B2B存證' : null,
-                $first ? '公司戶' : null,
-                null, null, null,
-                $first ? (string)$v['tax_id'] : null,
-                null, null, null,
-                $first ? $email : null,
-                $name, '應稅', $qty, null, $price, $amt,
-                $note !== '' ? mb_substr($note, 0, 40) : null,
-                null,
-            ];
-            $first = false; $cnt++;
+            $lines[] = ['part' => $part, 'desc' => acc_einv_desc_of_tag($tag), 'qty' => (float)$it['qty'],
+                        'amt' => (float)$it['amount'], 'no' => (string)$it['src_no'], 'merged' => 1];
         }
-        $sum[] = ['invoice_id' => $iid, 'customer' => $v['customer_name'], 'order_no' => $orderNo,
-                  'email' => $email, 'tax_id' => $v['tax_id'], 'rows' => $cnt,
+        $rawCnt = count($lines);
+        $mode = '';
+
+        // 2) 壓縮：勾「同料號合併一筆」→ 不分出貨單、同料號（同說明）數量與金額加總
+        if ($mergePart && $lines) {
+            $g = [];
+            foreach ($lines as $l) {
+                $k = $l['part'] . '|' . $l['desc'];
+                if (!isset($g[$k])) { $g[$k] = $l; $g[$k]['nos'] = []; $g[$k]['merged'] = 0; }
+                else { $g[$k]['qty'] += $l['qty']; $g[$k]['amt'] += $l['amt']; }
+                $g[$k]['merged']++;
+                $g[$k]['nos'][$l['no']] = 1;
+            }
+            foreach ($g as &$x) { $x['no'] = ''; } unset($x);
+            $lines = array_values($g); $mode = 'merge_part';
+        }
+        // 3) 有頁數上限且仍超出 → 同出貨單同料號同數量的金額加總（數量不加總）
+        elseif ($pages > 0 && $rawCnt > $pages * $maxRows) {
+            $g = [];
+            foreach ($lines as $l) {
+                $k = $l['no'] . '|' . $l['part'] . '|' . $l['desc'] . '|' . $l['qty'];
+                if (!isset($g[$k])) { $g[$k] = $l; $g[$k]['merged'] = 1; }
+                else { $g[$k]['amt'] += $l['amt']; $g[$k]['merged']++; }
+            }
+            $lines = array_values($g); $mode = 'same_qty';
+        }
+
+        // 4) 依每張筆數上限切成多張（各自一個訂單編號）
+        $chunks = array_chunk($lines, $maxRows);
+        $over = ($pages > 0 && count($chunks) > $pages);
+        $multi = count($chunks) > 1;
+        foreach ($chunks as $ci => $chunk) {
+            $orderNo = $multi ? $orderBase . '-' . ($ci + 1) : $orderBase;
+            $first = true; $lastNo = null;
+            foreach ($chunk as $l) {
+                $qty = $l['qty'];
+                $amt = round($l['amt']);
+                $price = ($l['merged'] > 1 || $mode !== '') ? ($qty != 0 ? round($l['amt'] / $qty, 4) : 0) : ($qty != 0 ? round($l['amt'] / $qty, 4) : 0);
+                $note = '';
+                if ($l['no'] !== '' && $l['no'] !== $lastNo) $note = $l['no'];
+                $lastNo = $l['no'];
+                $rows[] = [
+                    $orderNo,
+                    $first ? $dateTxt : null,
+                    $first ? 'B2B存證' : null,
+                    $first ? '公司戶' : null,
+                    null, null, null,
+                    $first ? (string)$v['tax_id'] : null,
+                    null, null, null,
+                    $first ? $email : null,
+                    trim($l['part'] . ' ' . $l['desc']), '應稅', $qty, null, $price, $amt,
+                    $note !== '' ? mb_substr($note, 0, 40) : null,
+                    null,
+                ];
+                $first = false;
+            }
+        }
+        $sum[] = ['invoice_id' => $iid, 'customer' => $v['customer_name'], 'order_no' => $orderBase,
+                  'email' => $email, 'tax_id' => $v['tax_id'], 'rows' => count($lines), 'raw_rows' => $rawCnt,
+                  'invoices_out' => count($chunks), 'mode' => $mode, 'pages' => $pages, 'over_pages' => $over,
                   'sales' => (float)$v['sales_amount'], 'tax' => (float)$v['tax_amount'],
                   'total' => (float)$v['total_amount'], 'no_email' => ($email === '')];
     }

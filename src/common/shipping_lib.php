@@ -2147,11 +2147,14 @@ function sq_price_batch(PDO $db, array $in, bool $apply, array $user): array
     if (!$apply) return $out;
     if (!$rows) return ['success' => false, 'message' => '期間內找不到單價為 ' . $oldP . ' 的出貨明細'];
 
+    require_once __DIR__ . '/acc_voucher_lib.php';
+    $vmap = acc_voucher_src_map($db);        // 內含 DDL，必須在交易外先跑
     $db->beginTransaction();
     try {
         $up = $db->prepare("UPDATE is_list SET Unit_price = ? WHERE IS_id = ? AND ABS(Unit_price - ?) < 0.00005");
         $n = 0;
         foreach ($rows as $r) {
+            if (isset($vmap['IS-' . (int)$r['IS_id']])) continue;   // 已開傳票（已做帳）：單價鎖定
             $up->execute([$newP, (int)$r['IS_id'], $oldP]);
             if ($up->rowCount() > 0) {
                 $n++;
