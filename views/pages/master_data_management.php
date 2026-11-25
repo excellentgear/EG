@@ -283,8 +283,9 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
         <div class="cv-row">
             <?php cv_field('結帳模式', $cvSettleMap[$cv['settlement_mode']] ?? $cv['settlement_mode']);
                   cv_field('固定結帳日', $cv['settlement_day']);
-                  cv_field(($cv['net_unit'] ?? '') === 'months' ? '月結方式' : '月結天數',
-                           ($cv['net_unit'] ?? '') === 'months' ? ('次月結 ' . (int)($cv['net_months'] ?? 0) . ' 個月') : $cv['net_days']);
+                  $cvNu = $cv['net_unit'] ?? '';
+                  cv_field($cvNu === 'month' || $cvNu === 'next' ? '月結方式' : '月結天數',
+                           $cvNu === 'month' ? '月結' : ($cvNu === 'next' ? '次月結（月結＋30天）' : $cv['net_days']));
                   cv_field('接受扣%', !empty($cv['allow_deduct']) ? '是' : '否'); ?>
         </div>
         <div class="cv-row">
@@ -4111,14 +4112,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $net_days     = $old_settle_block['net_days'] ?? null;
                 $allow_deduct = intval($old_settle_block['allow_deduct'] ?? 0);
             }
-            // 月結方式：依天數（原本）或「次月結 N 個月」。選月數時 net_days 同步存 月數×30，其他讀 net_days 的程式不受影響
-            $net_unit = null; $net_months = null;   // null＝不更新這兩欄
+            // 月結方式：依天數（填天數，原本做法）／月結（當月結帳，net_days=0）／次月結（＝月結＋30天，net_days=30）。
+            // net_days 一律同步存對應天數，其他讀 net_days 的程式不受影響
+            $net_unit = null; $net_months = null;   // null＝不更新這兩欄（net_months 已不使用，固定清為 NULL）
             if ($canSettle && array_key_exists('net_unit', $_POST)) {
-                if (($_POST['net_unit'] ?? '') === 'months') {
-                    $net_months = intval($_POST['net_months'] ?? 0);
-                    if ($net_months < 1 || $net_months > 24) throw new Exception('次月結請輸入 1～24 個月');
-                    $net_unit = 'months'; $net_days = $net_months * 30;
-                } else { $net_unit = 'days'; $net_months = null; }
+                $nu = (string)($_POST['net_unit'] ?? '');
+                if ($nu === 'month')     { $net_unit = 'month'; $net_days = 0; }
+                elseif ($nu === 'next')  { $net_unit = 'next';  $net_days = 30; }
+                else                     { $net_unit = 'days'; }
             }
             $quote_method    = $canQuoteMeth ? (trim($_POST['quote_method'] ?? 'FOB') ?: 'FOB')
                               : ($is_new ? 'FOB' : ($old_settle_block['quote_method'] ?? 'FOB'));
@@ -10908,14 +10909,12 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
             <div style="display:flex;gap:4px;align-items:center;">
                 <select class="form-control" id="cf-net_unit" name="net_unit" style="width:96px;flex:none;padding-left:6px;padding-right:2px;" onchange="onNetUnitChange()" <?= $mdSettleEdit?'':'disabled' ?>>
                     <option value="days">依天數</option>
-                    <option value="months">次月結</option>
+                    <option value="month">月結</option>
+                    <option value="next">次月結</option>
                 </select>
                 <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdSettleEdit?'':'disabled' ?>>
-                <span id="cf-net_months_wrap" style="display:none;white-space:nowrap;align-items:center;gap:3px;">
-                    <input type="number" class="form-control" id="cf-net_months" name="net_months" placeholder="幾" min="1" max="24" style="width:64px;display:inline-block;" <?= $mdSettleEdit?'':'disabled' ?>> 個月
-                </span>
             </div>
-            <div class="id-hint" id="cf-net-hint" style="display:none;">次月結＝當月帳款隔月起算幾個月後收款（例：3＝次月結3個月）</div>
+            <div class="id-hint" id="cf-net-hint" style="display:none;"></div>
         </div>
     </div>
     <div class="col-md-2">
@@ -11815,7 +11814,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <tr><td style="white-space:nowrap;"><strong>廠商本體操作</strong></td><td>新增、編輯（含批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
 <tr><td style="white-space:nowrap;"><strong>齒輪規格操作</strong></td><td>新增/編輯齒輪規格、刪除齒輪規格列、修改既有齒輪規格列</td></tr>
 <tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
-<tr><td style="white-space:nowrap;"><strong>客戶編輯：結帳／付款與備註</strong></td><td>「收款方式」可多選，另可勾「附回郵」；「月結」可選依天數，或「次月結 N 個月」；發票收件人／部門與帳務備註都在「結帳／付款」分頁；<b>會計聯絡人／發票收件人</b>在「聯絡人」分頁於該聯絡人勾「會計」「發票」（Email 可填多個，以分號分隔），對帳作業選到該客戶時會自動提示；基本資料有「電子信箱」；出貨要求可勾「無特殊要求」（與「還沒填」不同）；「其他地址」先選地址類別（發票地址、送貨地址…），再填類別說明——地址類別由有字典設定權限者按「管理地址類別」維護，<b>已被使用的類別不可改名或刪除</b>（客戶、廠商共用同一份類別）</td></tr>
+<tr><td style="white-space:nowrap;"><strong>客戶編輯：結帳／付款與備註</strong></td><td>「收款方式」可多選，另可勾「附回郵」；「月結」可選依天數、月結（當月結清）或次月結（＝月結＋30天）；發票收件人／部門與帳務備註都在「結帳／付款」分頁；<b>會計聯絡人／發票收件人</b>在「聯絡人」分頁於該聯絡人勾「會計」「發票」（Email 可填多個，以分號分隔），對帳作業選到該客戶時會自動提示；基本資料有「電子信箱」；出貨要求可勾「無特殊要求」（與「還沒填」不同）；「其他地址」先選地址類別（發票地址、送貨地址…），再填類別說明——地址類別由有字典設定權限者按「管理地址類別」維護，<b>已被使用的類別不可改名或刪除</b>（客戶、廠商共用同一份類別）</td></tr>
 <tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤（沒有後者的人仍可改動/移除自己指派過的那一筆）／刪除已指派的必填標籤——料號上已經選了的「必填」標籤（字典設定裡勾選「新增料號時必填」的那種）<b>預設不給移除</b>，就算有上面「修改或移除他人指派的標籤」權限也一樣；要有這格權限才能把已指派的必填標籤從料號上刪掉</td></tr>
 <tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
 <tr><td style="white-space:nowrap;"><strong>廠商分類維護</strong></td><td>廠商大類/小類、加工限制標籤、大類製程設定</td></tr>
@@ -19576,13 +19575,13 @@ function addContactRow(c) {
     row.innerHTML =
         '<div style="flex-shrink:0;text-align:center;"><div style="font-size:10px;color:#aaa;">主要</div>'
         + '<input type="radio" name="contact_primary" value="'+idx+'" '+isPrimary+' onchange="syncContactsHidden()"></div>'
-        + '<textarea class="form-control input-sm ct-name" rows="1" style="flex:1.5;min-width:80px; resize:none;overflow:hidden;" placeholder="姓名*" maxlength="50">'+escHtml(c.name||'')+'</textarea>'
-        + '<textarea class="form-control input-sm ct-dept" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;" placeholder="部門" maxlength="50">'+escHtml(c.department||'')+'</textarea>'
-        + '<textarea class="form-control input-sm ct-title" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;" placeholder="職稱" maxlength="50">'+escHtml(c.title||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-name" rows="1" style="flex:1.5;min-width:80px; resize:none;overflow:hidden;min-height:30px;" placeholder="姓名*" maxlength="50">'+escHtml(c.name||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-dept" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;min-height:30px;" placeholder="部門" maxlength="50">'+escHtml(c.department||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-title" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;min-height:30px;" placeholder="職稱" maxlength="50">'+escHtml(c.title||'')+'</textarea>'
         + '<input type="text" class="form-control input-sm ct-ext"        style="width:60px;"               placeholder="分機"   maxlength="20"  value="'+escAttr(c.phone_ext||'')+'">'
         + '<input type="text" class="form-control input-sm ct-mobile"     style="flex:1;min-width:85px;"    placeholder="0912-345-678"   maxlength="30" autocomplete="off" value="'+escAttr(egFmtTwPhone(c.mobile||''))+'">'
-        + '<textarea class="form-control input-sm ct-email" rows="1" style="flex:2;min-width:140px; resize:none;overflow:hidden;" placeholder="信箱（多個以分號分隔）" maxlength="255" autocomplete="off" spellcheck="false">'+escHtml(c.email||'')+'</textarea>'
-        + '<textarea class="form-control input-sm ct-note" rows="1" style="flex:1.2;min-width:90px; resize:none;overflow:hidden;" placeholder="備註" maxlength="100">'+escHtml(c.note||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-email" rows="1" style="flex:2;min-width:140px; resize:none;overflow:hidden;min-height:30px;" placeholder="信箱（多個以分號分隔）" maxlength="255" autocomplete="off" spellcheck="false">'+escHtml(c.email||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-note" rows="1" style="flex:1.2;min-width:90px; resize:none;overflow:hidden;min-height:30px;" placeholder="備註" maxlength="100">'+escHtml(c.note||'')+'</textarea>'
         + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝會計聯絡人（對帳、請款聯絡對象，對帳頁會自動提示）"><div style="font-size:10px;color:#aaa;">會計</div><input type="checkbox" class="ct-acct" ' + (c.is_accounting==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
         + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝電子發票收件人（Email 可填多個）；對帳頁會自動提示"><div style="font-size:10px;color:#aaa;">發票</div><input type="checkbox" class="ct-inv" ' + (c.is_invoice_recv==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
         + '<button type="button" class="btn btn-xs btn-default" style="flex-shrink:0;" onclick="this.closest(\'.contact-row\').remove();syncContactsHidden();"><i class="fa fa-times"></i></button>';
@@ -19632,7 +19631,13 @@ document.addEventListener('input', function(e) {
     try { t.setSelectionRange(np, np); } catch (x) {}
 });
 /** 聯絡人文字欄：內容多時自動長高、完整顯示（不橫向截斷） */
-function _ctAutoH(t) { if (!t) return; t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
+function _ctAutoH(t) {
+    if (!t) return;
+    t.style.height = 'auto';
+    // 跳窗／分頁隱藏時 scrollHeight 是 0，不可寫入（會把欄位壓扁成一條線）；顯示後由 switchCustTab 再量一次
+    if (t.scrollHeight > 30) t.style.height = (t.scrollHeight + 2) + 'px';
+}
+function _ctAutoAll() { document.querySelectorAll('#cf-contacts-wrap textarea').forEach(_ctAutoH); }
 function _ctVal(row, sel) { var e = row.querySelector(sel); return e ? e.value.replace(/\s*[\r\n]+\s*/g, ' ').trim() : ''; }
 
 function syncContactsHidden() {
@@ -19668,6 +19673,7 @@ function switchCustTab(name, el) {
     document.querySelectorAll('#custModalTabs li').forEach(function(li){ li.classList.remove('active'); });
     var pane = document.getElementById('cust-tab-'+name);
     if (pane) pane.classList.add('active');
+    if (name === 'contacts') _ctAutoAll();
     if (el) {
         var li = el.closest ? el.closest('li') : el.parentNode;
         if (li) li.classList.add('active');
@@ -19846,10 +19852,12 @@ function onPaymentMethodsChange() {
 }
 function onNetUnitChange() {
     var u = (document.getElementById('cf-net_unit')||{}).value || 'days';
-    var d = document.getElementById('cf-net_days'), mw = document.getElementById('cf-net_months_wrap'), hint = document.getElementById('cf-net-hint');
-    if (d)  d.style.display  = (u === 'months') ? 'none' : '';
-    if (mw) mw.style.display = (u === 'months') ? 'inline-flex' : 'none';
-    if (hint) hint.style.display = (u === 'months') ? '' : 'none';
+    var d = document.getElementById('cf-net_days'), hint = document.getElementById('cf-net-hint');
+    if (d)  d.style.display  = (u === 'days') ? '' : 'none';
+    if (hint) {
+        hint.style.display = (u === 'days') ? 'none' : '';
+        hint.textContent = (u === 'month') ? '月結＝依結帳日當月結清，不另加天數' : '次月結＝月結＋30天（收款日再順延 30 天）';
+    }
 }
 function onShippingNoneChange() {
     var n = document.getElementById('cf-shipping_req_none'), t = document.getElementById('cf-shipping_req');
@@ -19860,9 +19868,8 @@ function onShippingNoneChange() {
 }
 /** 載入月結方式：months 顯示月數，其餘顯示天數 */
 function _setNetFields(d) {
-    var u = (d && d.net_unit === 'months') ? 'months' : 'days';
+    var u = (d && (d.net_unit === 'month' || d.net_unit === 'next')) ? d.net_unit : 'days';   // 舊值（含 months）一律當依天數，天數仍在 net_days
     var su = document.getElementById('cf-net_unit'); if (su) su.value = u;
-    var nm = document.getElementById('cf-net_months'); if (nm) nm.value = (u === 'months' && d.net_months) ? d.net_months : '';
     onNetUnitChange();
 }
 function _applyCustPaymentDefaultHints(mode, day, pay, nd, dbConfirmSettle, dbConfirmPay) {
@@ -20007,7 +20014,7 @@ function openCustomerModal(customer_id, readonly) {
             }
             var cDay = d.settlement_day||'25';
             var cPay = pmList.length ? pmList.join(',') : (d.payment_method||'匯款');   // 多選或含附回郵時≠系統預設，視為已設定
-            var cNd  = (d.net_unit === 'months') ? ('M' + d.net_months) : ((d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '');
+            var cNd  = (d.net_unit === 'month' || d.net_unit === 'next') ? ('U' + d.net_unit) : ((d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '');
             _applyCustPaymentDefaultHints(mode, cDay, cPay, cNd, d.confirmed_settlement, d.confirmed_payment);
             var exBtn = document.getElementById('cf-exception-btn');
             if (exBtn) exBtn.style.display = '';
@@ -20110,7 +20117,6 @@ function submitCustomerForm() {
         payment_methods:  _getPmList().join(','),
         net_days:         gv('cf-net_days'),
         net_unit:         gv('cf-net_unit'),
-        net_months:       gv('cf-net_months'),
         customer_email:   gv('cf-customer_email'),
         invoice_recipient: gv('cf-invoice_recipient'),
         invoice_dept:     gv('cf-invoice_dept'),
@@ -20138,11 +20144,6 @@ function submitCustomerForm() {
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }
     if (data.settlement_mode==='FIXED' && (!data.settlement_day||data.settlement_day<1||data.settlement_day>31)) {
         showToast('固定日請輸入 1~31','error'); return;
-    }
-    if (data.net_unit === 'months' && (!(data.net_months >= 1) || data.net_months > 24)) {
-        switchCustTab('payment', document.querySelector('#custModalTabs li:nth-child(2) a'));
-        var nmEl = document.getElementById('cf-net_months'); if (nmEl) { nmEl.focus(); }
-        showToast('次月結請輸入 1～24 個月','error'); return;
     }
     if (data.primary_user_id && data.deputy_user_id && data.primary_user_id === data.deputy_user_id) {
         showToast('主要業務與代理業務不可為同一人','error'); return;
