@@ -366,6 +366,11 @@ case 'get_detail': {
     $m['gm_approval'] = $ap['gm'];
     $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true) && !$m['notifying'];
     $m['can_print'] = meeting_can_print($uid, $perms, $m);
+    // 內稽通知單建立的會議：日期／時間／地點鎖定（畫面反灰、後端 save 也會以通知單為準）
+    try {
+        require_once $document_root . '/EGsystem/src/common/internal_audit_lib.php';
+        $m['ia_locked'] = ia_meeting_link($db, $id) ? 1 : 0;
+    } catch (Throwable $e) { $m['ia_locked'] = 0; }
     // 解出「目前實際該簽的人」(含代理)，前端才能正確顯示簽核按鈕給代理人看，不只給原本的主席/總經理
     $m['chair_signer_id'] = $m['chair_user_id'] ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name'])['id'] : null;
     $gmSigner = meeting_gm_signer_effective($db);
@@ -568,6 +573,13 @@ case 'save': {
         // 「回簽中」鎖定(2026-08-10使用者明確要求)：存檔並通知後，負責人尚未全部回覆確認前不可編輯，
         // 避免對方回覆的是已經被改掉的舊內容；要改內容請先按「撤回」解除鎖定。
         if (meeting_has_active_item_notices($db, $id)) jerr('此會議記錄「存檔並通知」後正在回簽中，無法編輯；如需修改請先按「撤回」解除鎖定');
+    }
+    // 由內部稽核通知單建立的會議：日期／時間／地點一律以通知單為準，不接受前端修改（通知與實際才不會不符）
+    if ($id > 0) {
+        require_once $document_root . '/EGsystem/src/common/internal_audit_lib.php';
+        if ($lk = ia_meeting_link($db, $id)) {
+            [$date, $start, $end, $loc] = ia_case_meet_fields($lk['case'], $lk['kind']);
+        }
     }
     // 記錄一律自動帶入建立者，不接受前端覆寫（避免代填他人姓名）；新建時＝目前登入者，編輯時沿用原記錄人
     $recorderName = $id > 0 ? (string)($m['recorder_name'] ?? $uname) : $uname;

@@ -657,6 +657,11 @@ case 'case_save': {
     $ems = iaTime($_POST['end_meet_start'] ?? '');
     $eme = iaTime($_POST['end_meet_end'] ?? '');
     if ($ems && $eme && $eme < $ems) jerr('結束會議的結束時間不可早於開始時間');
+    // 事前會議（日期前端預設＝稽核起）；與受稽時段的重疊／先後檢查在下面受稽列解析完之後做
+    $pmd = iaDate($_POST['pre_meet_date'] ?? '');
+    $pms = iaTime($_POST['pre_meet_start'] ?? '');
+    $pme = iaTime($_POST['pre_meet_end'] ?? '');
+    $pmp = mb_substr(trim((string)($_POST['pre_meet_place'] ?? '')), 0, 150) ?: null;
 
     /* 已完成的通知單一律不可修改（2026-09-18 使用者要求）：前端會把欄位鎖起來，
        這裡同規則再擋一次（鐵律8）。要改請先由內稽管理員輸入操作確認密碼取消完成。 */
@@ -816,6 +821,14 @@ foreach ($depts as $di => $d) {
     $rowPeople[$di] = $people;
 }
 
+    // 事前會議不可與受稽時段重疊、要在第一列受稽前結束（前端同規則即時檢查；這裡再擋一次＝鐵律8）
+    if ($pmd && $pms) {
+        $pcErr = ia_pre_meet_check($pmd, $pms, $pme, array_map(function ($d) {
+            return ['audited_date' => iaDate($d['audited_date'] ?? ''), 'audited_time' => iaTime($d['audited_time'] ?? '')];
+        }, $depts), $unitMin ?: 60);
+        if ($pcErr !== '') jerr($pcErr);
+    }
+
     $db->beginTransaction();
     try {
         if ($cid) {
@@ -826,11 +839,13 @@ foreach ($depts as $di => $d) {
             $db->prepare("UPDATE ia_case SET year=?, notify_date=?, audit_from=?, audit_to=?,
                               leader_id=?, leader_name=?, leader_dept_id=?, leader_position_id=?,
                               end_meet_date=?, end_meet_start=?, end_meet_end=?,
-                              end_meet_place=?, remark=?, unit_minutes=?, updated_at=NOW() WHERE case_id=?")
+                              end_meet_place=?, remark=?, unit_minutes=?,
+                              pre_meet_date=?, pre_meet_start=?, pre_meet_end=?, pre_meet_place=?, updated_at=NOW() WHERE case_id=?")
                ->execute([$year, $nd, $af, $at, $leader, $leaderName ?: null, $leaderDept, $leaderPos,
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
-                          trim((string)($_POST['remark'] ?? '')) ?: null, $unitMin, $cid]);
+                          trim((string)($_POST['remark'] ?? '')) ?: null, $unitMin,
+                          $pmd, $pms, $pme, $pmp, $cid]);
             // 製表人可事後修改（2026-09-14）
             if (($mk = iaMakerFromPost($db, (string)($old['maker_date'] ?? ''))) !== null) {
                 $db->prepare("UPDATE ia_case SET maker_id=?, maker_name=?, maker_date=? WHERE case_id=?")
@@ -850,13 +865,15 @@ foreach ($depts as $di => $d) {
                               leader_id, leader_name, leader_dept_id, leader_position_id,
                               end_meet_date, end_meet_start, end_meet_end, end_meet_place,
                               remark, status, maker_id, maker_name, maker_date, unit_minutes,
+                              pre_meet_date, pre_meet_start, pre_meet_end, pre_meet_place,
                               created_by, created_by_name, created_at, updated_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?,?,?,?, NOW(), NOW())")
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?,?,?,?,?,?,?,?, NOW(), NOW())")
                ->execute([$year, $seq, $caseNo, $nd, $af, $at, $leader, $leaderName ?: null, $leaderDept, $leaderPos,
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
                           trim((string)($_POST['remark'] ?? '')) ?: null,
-                          $mkNew['id'], $mkNew['name'], $mkNew['date'], $unitMin, $uid, $uname]);
+                          $mkNew['id'], $mkNew['name'], $mkNew['date'], $unitMin,
+                          $pmd, $pms, $pme, $pmp, $uid, $uname]);
             $cid = (int)$db->lastInsertId();
         }
 
@@ -896,6 +913,9 @@ foreach ($depts as $di => $d) {
         if ($db->inTransaction()) $db->rollBack();
         jerr('儲存失敗：' . $e->getMessage(), 500);
     }
+
+    // 已建立的會議紀錄（草稿／退回中）一律跟著通知單的日期時間地點走，避免通知與實際不符
+    try { ia_case_meetings_sync($db, $cid); } catch (Throwable $e) { error_log('ia_case_meetings_sync: ' . $e->getMessage()); }
 
     // 稽核日期被改過的話件號要跟著重編（只重編還是草稿且未執行的；已發出的紙本印著舊號不動）
     $sync = ia_case_sync_no($db, $cid);
@@ -2879,12 +2899,15 @@ case 'meeting_create': {
     // 主題不附稽核件號（2026-09-17 使用者要求）：紙本會議紀錄的主題就只有主題，
     // 要對回是哪一場稽核，通知單上本來就有「開啟會議紀錄」的連結。
 
-    $mdate = $kind === 'pre'
-        ? ($c['notify_date'] ?: $c['audit_from'] ?: $today)
-        : ($c['end_meet_date'] ?: $c['audit_to'] ?: $c['audit_from'] ?: $today);
-    $stime = $kind === 'end' ? ($c['end_meet_start'] ?: null) : null;
-    $etime = $kind === 'end' ? ($c['end_meet_end'] ?: null)   : null;
-    $place = $kind === 'end' ? ($c['end_meet_place'] ?: null) : null;
+    /* 日期／時間／地點一律取通知單上設定的值（建立後在會議紀錄不可修改，通知與實際才不會不符）。
+       通知單上沒設就不給建，請先回通知單補齊再建立。 */
+    [$mdate, $stime, $etime, $place] = ia_case_meet_fields($c, $kind);
+    if ($kind === 'pre' && !$mdate) {
+        // 事前會議欄位上線前建立的舊通知單：沿用舊作法（日期＝通知日期、不帶時間地點；該會議不鎖定）
+        $mdate = $c['notify_date'] ?: $c['audit_from'] ?: $today;
+    } elseif (!$mdate || !$stime || !$place) {
+        jerr(($kind === 'pre' ? '事前會議' : '結束會議') . '的日期、開始時間與地點還沒設定，請先在通知單補齊並儲存');
+    }
 
     /* 主席固定＝稽核組長、出席人員一律走共用的 ia_meeting_attendees_apply()
        （建立會議與「依目前小組重新帶入」共用同一份規則＝鐵律4）。 */

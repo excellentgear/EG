@@ -503,6 +503,11 @@ function ia_ensure_schema(PDO $db): void
             ['ia_case',      'approver_at',         "DATETIME NULL COMMENT '核准簽核的精確時間（業務日期在 approver_date）'"],
             // 每個受稽單位需要幾分鐘（表頭那個欄位，之前只活在畫面上、重開就變回預設 60）
             ['ia_case',      'cal_event_ids',       "TEXT NULL COMMENT '完成時自動建立的行事曆事件 evenement.id（JSON 陣列，取消完成時移除）'"],
+            // 事前會議的日期／時間／地點（預設日期＝稽核起；建立會議紀錄時帶入且鎖定，通知與實際才不會不符）
+            ['ia_case',      'pre_meet_date',       "DATE NULL COMMENT '事前會議日期'"],
+            ['ia_case',      'pre_meet_start',      "VARCHAR(5) NULL"],
+            ['ia_case',      'pre_meet_end',        "VARCHAR(5) NULL"],
+            ['ia_case',      'pre_meet_place',      "VARCHAR(150) NULL"],
             ['ia_case',      'unit_minutes',        "INT NULL COMMENT '受稽時間：每個單位需要幾分鐘（結束時間與送出前檢查都用它）'"],
             // 稽核報告表改成「送出通知」流程（2026-09-17 使用者要求：不要核准、不要製表人）
             ['ia_report',    'submit_date',         "DATE NULL COMMENT '送出的業務日期'"],
@@ -2486,6 +2491,88 @@ const IA_MEET_GAP_MIN = 30;
 
 /* ============================ 通知單完成：人員衝突檢查／通知／行事曆 ============================ */
 
+/**
+ * 事前會議時間檢查（前端同規則；案件儲存與完成時後端再驗一次）。
+ * 規則：①會議日期不可晚於第一列（最早的）受稽日期 ②與會議同一天的受稽時段不可重疊
+ *       ③會議要在第一列受稽開始前結束。$rows 是受稽列（需有 audited_date／audited_time）。
+ * 回傳錯誤說明，空字串＝通過。
+ */
+function ia_pre_meet_check($date, $start, $end, array $rows, int $dur): string
+{
+    $date = (string)$date;
+    if ($date === '' || !preg_match('/^(\d{1,2}):(\d{2})/', (string)$start, $m1)) return '';
+    $ps = (int)$m1[1] * 60 + (int)$m1[2];
+    $pe = preg_match('/^(\d{1,2}):(\d{2})/', (string)$end, $m2) ? ((int)$m2[1] * 60 + (int)$m2[2]) : $ps;
+    if ($pe < $ps) return '事前會議的結束時間不可早於開始時間';
+    $fmt = function ($m) { return sprintf('%02d:%02d', intdiv($m, 60), $m % 60); };
+    $first = null;                                   // [date, minutes]
+    foreach ($rows as $r) {
+        $d = (string)($r['audited_date'] ?? '');
+        if ($d === '') continue;
+        $t = preg_match('/^(\d{1,2}):(\d{2})/', (string)($r['audited_time'] ?? ''), $tm) ? ((int)$tm[1] * 60 + (int)$tm[2]) : 0;
+        if ($first === null || $d < $first[0] || ($d === $first[0] && $t < $first[1])) $first = [$d, $t];
+    }
+    if ($first === null) return '';
+    if ($date > $first[0]) return '事前會議日期不可晚於第一列受稽日期（' . $first[0] . '）';
+    foreach ($rows as $r) {
+        if ((string)($r['audited_date'] ?? '') !== $date) continue;
+        if (!preg_match('/^(\d{1,2}):(\d{2})/', (string)($r['audited_time'] ?? ''), $tm)) continue;
+        $rs = (int)$tm[1] * 60 + (int)$tm[2];
+        $re = $rs + $dur;
+        if ($ps < $re && $pe > $rs) {
+            return '事前會議 ' . $fmt($ps) . '~' . $fmt($pe) . ' 與受稽時段 ' . $fmt($rs) . '~' . $fmt($re) . ' 重疊';
+        }
+    }
+    if ($date === $first[0] && $pe > $first[1]) {
+        return '事前會議要在第一列受稽時間 ' . $fmt($first[1]) . ' 之前結束（目前結束於 ' . $fmt($pe) . '）';
+    }
+    return '';
+}
+
+/**
+ * 這個會議紀錄是不是由內稽通知單建立／連結的（回傳 ['kind'=>'pre|end','case'=>ia_case 列] 或 null）。
+ * 是的話，會議的日期、時間、地點一律由通知單決定且不可在會議紀錄修改（通知與實際才不會不符）。
+ */
+function ia_meeting_link(PDO $db, int $meetingId): ?array
+{
+    if ($meetingId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT * FROM ia_case WHERE COALESCE(is_deleted,0)=0 AND (pre_meeting_id=? OR end_meeting_id=?) LIMIT 1");
+        $st->execute([$meetingId, $meetingId]);
+        $c = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$c) return null;
+        $kind = ((int)$c['pre_meeting_id'] === $meetingId ? 'pre' : 'end');
+        if (!ia_case_meet_fields($c, $kind)[0]) return null;      // 通知單沒設會議日期（舊單）＝不鎖定
+        return ['kind' => $kind, 'case' => $c];
+    } catch (Throwable $e) { return null; }
+}
+
+/** 通知單的會議日期／時間／地點（kind=pre|end）→ [date,start,end,place]（空值為 null） */
+function ia_case_meet_fields(array $c, string $kind): array
+{
+    $p = $kind === 'pre' ? 'pre_meet_' : 'end_meet_';
+    $v = function ($k) use ($c, $p) { $x = trim((string)($c[$p . $k] ?? '')); return $x === '' ? null : $x; };
+    return [$v('date'), $v('start'), $v('end'), $v('place')];
+}
+
+/** 通知單存檔後，把已建立且仍是草稿／退回的會議紀錄日期時間地點同步成通知單的值 */
+function ia_case_meetings_sync(PDO $db, int $caseId): void
+{
+    $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=?");
+    $st->execute([$caseId]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) return;
+    foreach (['pre' => 'pre_meeting_id', 'end' => 'end_meeting_id'] as $kind => $col) {
+        $mid = (int)($c[$col] ?? 0);
+        if (!$mid) continue;
+        [$d, $s, $e, $pl] = ia_case_meet_fields($c, $kind);
+        if (!$d) continue;
+        $db->prepare("UPDATE meeting_record SET meeting_date=?, start_time=?, end_time=?, location=?, updated_at=NOW()
+                       WHERE meeting_id=? AND status IN ('draft','rejected')")
+           ->execute([$d, $s, $e, $pl, $mid]);
+    }
+}
+
 /** 通知單的受稽列依「過程＋日期＋時間」合併成場次，並把稽核員／陪檢員整理好 */
 function ia_case_slots(PDO $db, array $c): array
 {
@@ -2585,6 +2672,16 @@ function ia_case_calendar_sync(PDO $db, array $c, array $slots): int
             $mk('內部稽核 ' . $s['sp'] . '（' . implode('、', $s['units']) . '）', $s['date'] . ' ' . $t . ':00', $s['date'] . ' ' . $e . ':00',
                 array_keys($s['aud'] + $s['esc']), '由內部稽核通知單 ' . $no . ' 自動建立');
         }
+        if (!empty($c['pre_meet_date'])) {
+            $all = [];
+            foreach ($slots as $s) foreach (array_keys($s['aud'] + $s['esc']) as $u) $all[] = $u;
+            if (!empty($c['leader_id'])) $all[] = (int)$c['leader_id'];
+            $ps = substr((string)($c['pre_meet_start'] ?: '09:00'), 0, 5);
+            $pe = substr((string)($c['pre_meet_end'] ?: $ps), 0, 5);
+            $pp = trim((string)($c['pre_meet_place'] ?? ''));
+            $mk('內部稽核事前會議 ' . $no, $c['pre_meet_date'] . ' ' . $ps . ':00', $c['pre_meet_date'] . ' ' . $pe . ':00', $all,
+                '由內部稽核通知單 ' . $no . ' 自動建立' . ($pp !== '' ? '（地點：' . $pp . '）' : ''));
+        }
         if (!empty($c['end_meet_date'])) {
             $all = [];
             foreach ($slots as $s) foreach (array_keys($s['aud'] + $s['esc']) as $u) $all[] = $u;
@@ -2614,10 +2711,15 @@ function ia_case_notice_build(array $c, array $slots): array
     if (!empty($c['leader_id'])) $per[(int)$c['leader_id']][] = '您是本次稽核的稽核組長';
     $hdr = '稽核期間：' . eg_fmt_date((string)$c['audit_from']) . ' ~ ' . eg_fmt_date((string)($c['audit_to'] ?: $c['audit_from']))
          . ((string)($c['leader_name'] ?? '') !== '' ? "\n稽核組長：" . $c['leader_name'] : '');
-    $tail = !empty($c['end_meet_date'])
-        ? ("\n結束會議：" . eg_fmt_date((string)$c['end_meet_date']) . ' ' . substr((string)$c['end_meet_start'], 0, 5)
-           . ((string)($c['end_meet_place'] ?? '') !== '' ? '　地點：' . $c['end_meet_place'] : ''))
-        : '';
+    $mt = function (string $label, string $d, $s, $e, $pl): string {
+        if ($d === '') return '';
+        $tm = substr((string)$s, 0, 5);
+        $te = substr((string)$e, 0, 5);
+        return "\n" . $label . '：' . eg_fmt_date($d) . ($tm !== '' ? ' ' . $tm . ($te !== '' ? '~' . $te : '') : '')
+             . ((string)$pl !== '' ? '　地點：' . $pl : '');
+    };
+    $tail = $mt('事前會議', (string)($c['pre_meet_date'] ?? ''), $c['pre_meet_start'] ?? '', $c['pre_meet_end'] ?? '', $c['pre_meet_place'] ?? '')
+          . $mt('結束會議', (string)($c['end_meet_date'] ?? ''), $c['end_meet_start'] ?? '', $c['end_meet_end'] ?? '', $c['end_meet_place'] ?? '');
     return [$per, $hdr, $tail];
 }
 
@@ -2718,11 +2820,20 @@ function ia_case_required_missing(PDO $db, int $caseId): array
        時長取這張單自己存的 unit_minutes（表頭那個欄位），沒存過就用預設 60。 */
     $c = [];
     try {
-        $q = $db->prepare("SELECT end_meet_date, end_meet_start, unit_minutes, end_meet_place FROM ia_case WHERE case_id=?");
+        $q = $db->prepare("SELECT end_meet_date, end_meet_start, unit_minutes, end_meet_place,
+                                  pre_meet_date, pre_meet_start, pre_meet_end, pre_meet_place FROM ia_case WHERE case_id=?");
         $q->execute([$caseId]);
         $c = $q->fetch(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) {}
     if (trim((string)($c['end_meet_place'] ?? '')) === '') $out[] = '結束會議地點還沒選';
+    // 事前會議（日期預設＝稽核起）：日期、開始時間、地點都要有，且不可與受稽時段重疊、要在第一列受稽之前結束
+    if (trim((string)($c['pre_meet_place'] ?? '')) === '') $out[] = '事前會議地點還沒選';
+    if (trim((string)($c['pre_meet_date'] ?? '')) === '' || trim((string)($c['pre_meet_start'] ?? '')) === '') {
+        $out[] = '事前會議的日期與開始時間還沒填';
+    } else {
+        $pe = ia_pre_meet_check($c['pre_meet_date'], $c['pre_meet_start'], $c['pre_meet_end'], $rows, (int)($c['unit_minutes'] ?? 0) ?: 60);
+        if ($pe !== '') $out[] = $pe;
+    }
     $mDate = (string)($c['end_meet_date'] ?? '');
     $mStart = (string)($c['end_meet_start'] ?? '');
     if ($mDate !== '' && preg_match('/^(\d{1,2}):(\d{2})/', $mStart, $mm)) {

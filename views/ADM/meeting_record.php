@@ -1083,6 +1083,13 @@ var EDIT_ID = 0, ATT = [], ITEMS_D = [], ITEMS_G = [], ITEMS_A = [], KPI_SNAP = 
    出貨目標達成率／附件）先收起來——刻意不另刻一套表頭編輯器，那會變成同一批欄位有兩個寫入點
    （鐵律4），而且兩邊的驗證遲早走鐘。存好之後直接把通知單畫面接著打開。 */
 var ED_NOTICE_MODE = false;
+/* 由內部稽核通知單建立的會議：日期／開始結束時間／地點鎖定，一律以通知單為準（通知與實際才不會不符）；
+   後端 save 也會以通知單的值蓋掉，這裡只是讓畫面誠實。 */
+function edIaLock(on){
+    $('#edDate,#edStart,#edEnd,#edLoc').prop('disabled', !!on).css(on ? {background:'#f1ece4'} : {background:''});
+    $('#edIaLockHint').remove();
+    if (on) $('#edDate').closest('div').before('<div id="edIaLockHint" style="grid-column:1/-1;font-size:12px;color:#8A5A2B;background:#FDF3E3;border:1px solid #E9C892;border-radius:4px;padding:4px 8px;margin-bottom:4px;">此會議由內部稽核通知單建立，日期、時間、地點以通知單為準，不可在此修改（要改請回內部稽核修改通知單）。</div>');
+}
 function edApplyNoticeMode(on){
     ED_NOTICE_MODE = !!on;
     $('#edSecAnnounce,#edSecDirective,#edSecGeneral,#edSecKpi,#edSecAttach').toggle(!on);
@@ -1094,6 +1101,7 @@ function edApplyNoticeMode(on){
 function openCreate(noticeMode){
     DISC = []; renderDisc(); MR_SUM = {}; mrSumRender();
     EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = []; MR_WAIVE = {}; MR_CL = null;
+    edIaLock(false);
     $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
     $('#edLoc').val(''); $('#edRecorder').val(META.uname);
@@ -1200,6 +1208,7 @@ function openEdit(id, keepSaved){
         // 依會議日期載入當時在職的人（含現已離職者），已選負責人標籤才認得出來，載完再重畫
         PEOPLE_ASOF = ''; loadPeopleAsof(function(){ renderItems('directive'); renderItems('general'); });
         $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
+        edIaLock(+m.ia_locked === 1);
         openMask('edMask');
         if (edScroll) $('#edMask .m-body').scrollTop(edScroll);
         edMarkClean();

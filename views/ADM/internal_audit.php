@@ -1037,6 +1037,13 @@ $roleLabel = ia_role_label($perms);
                 <label>稽核組長</label><div><select id="cLeader" data-eg-filter="輸入人員姓名篩選…"></select></div>
                 <label>稽核起</label><div><input type="date" id="cFrom"></div>
                 <label>稽核迄</label><div><input type="date" id="cTo"><div class="err-msg" id="errCTo"></div></div>
+                <label>事前會議</label><div><input type="date" id="cPreDate">
+                    <div class="ia-hint" style="margin:3px 0 0;">日期預設＝稽核起日；要在第一列受稽時間前結束，且不可與受稽時間重疊</div></div>
+                <label>時間</label>
+                <div><input type="text" id="cPreStart" data-eg-hint="直接輸入，例 08:30（打 830 也可以）" style="width:80px;"> ～
+                     <input type="text" id="cPreEnd" data-eg-hint="直接輸入，例 09:00" style="width:80px;">
+                     <div class="err-msg" id="errCPreTime"></div></div>
+                <label>地點 <span style="color:#C4442D;">*</span></label><div class="full"><select id="cPrePlace" data-eg-filter="輸入地點名稱篩選…"></select></div>
                 <label>結束會議</label><div><input type="date" id="cMeetDate"></div>
                 <label>時間</label>
                 <div><input type="text" id="cMeetStart" data-eg-hint="直接輸入，例 16:00（打 1600 或 16 也可以）" style="width:80px;"> ～
@@ -2808,12 +2815,13 @@ function openCase(id){
         peopleAsof(META.today, function(){
         $('#caseTitle').text('新增稽核通知單');
         $('#cNo,#cSeq').val(''); $('#cNotify').val(META.today);
-        $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace,#cAllAudited,#cAllDue').val('');
+        $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace,#cPreDate,#cPreStart,#cPreEnd,#cPrePlace,#cAllAudited,#cAllDue').val('');
         /* 會議地點自動帶入（2026-09-21 使用者回報「第2次的會議地點沒有顯示」）。
            查下來不是列印漏印，是那張通知單的 end_meet_place 本來就是空的——
            每開一張新的都要重打一次，忘了打就印出一張沒有地點的通知單。
            優先序：設定頁的「預設地點」→ 沒設就沿用**上一張通知單**的地點（多半就是同一間）。 */
         casePlaceVal(defaultMeetPlace());
+        casePlaceVal(defaultMeetPlace(), '#cPrePlace');
         $('#cRemark').val(defaultCaseRemark());
         $('#cTimeStep').val(60); $('#cTimeFrom,#cTimeTo').val('');
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
@@ -2851,6 +2859,8 @@ function openCaseRender(c){
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
         casePlaceVal(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
+        $('#cPreDate').val(inputDate(c.pre_meet_date)); $('#cPreStart').val(c.pre_meet_start||''); $('#cPreEnd').val(c.pre_meet_end||'');
+        casePlaceVal(c.pre_meet_place||'', '#cPrePlace');
         $('#cTimeStep').val(c.unit_minutes || 60);   // 每單位分鐘存在單據上，重開不會變回預設值
         $('#cAllAudited,#cAllDue').val('');
         $('#cMaker').html(makerOptions(c.maker_id, c.maker_name));
@@ -3176,27 +3186,29 @@ $(document).on('change', '#cFrom, #cNotify', function(){
    CASES 是清單目前載入的通知單（依件號新→舊），取第一張有填地點的。 */
 /** 結束會議地點：共用地點選單（與會議紀錄、訪談記錄同一份），可就地新增 */
 function fillCasePlaces(){
-    var $s = $('#cMeetPlace'), cur = $s.val() || '', h = '<option value="">（請選擇）</option>', has = false;
+    ['#cPrePlace', '#cMeetPlace'].forEach(function(sel){
+    var $s = $(sel), cur = $s.val() || '', h = '<option value="">（請選擇）</option>', has = false;
     (META.places||[]).forEach(function(p){ if (+p.is_active || p.name===cur) { h += '<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>'; if (p.name===cur) has = true; } });
     if (cur && !has) h += '<option value="'+esc(cur)+'">'+esc(cur)+'</option>';
     h += '<option value="__new">＋新增地點…</option>';
     $s.html(h).val(cur);
+    });
 }
-function casePlaceVal(v){
-    v = v || ''; var $s = $('#cMeetPlace');
+function casePlaceVal(v, sel){
+    v = v || ''; var $s = $(sel || '#cMeetPlace');
     if (!$s.find('option').length) fillCasePlaces();
     if (v && !$s.find('option').filter(function(){ return this.value===v; }).length) $s.find('option[value="__new"]').before('<option value="'+esc(v)+'">'+esc(v)+'</option>');
     $s.val(v);
 }
-$(document).on('change', '#cMeetPlace', function(){
-    var $s = $(this); if ($s.val() !== '__new') return;
+$(document).on('change', '#cMeetPlace, #cPrePlace', function(){
+    var $s = $(this), selId = '#' + this.id; if ($s.val() !== '__new') return;
     var n = $.trim(prompt('新地點名稱：') || '');
     if (!n) { $s.val(''); return; }
     $.post(API, {action:'place_add', name:n}, function(res){
         if (!res.ok) { alert(res.error||'新增失敗'); $s.val(''); return; }
         META.places = META.places || [];
         if (!META.places.some(function(p){ return p.name===res.name; })) META.places.push({name:res.name, is_active:1, used:0}); else META.places.forEach(function(p){ if (p.name===res.name) p.is_active=1; });
-        fillCasePlaces(); casePlaceVal(res.name);
+        fillCasePlaces(); casePlaceVal(res.name, selId);
     }, 'json');
 });
 function defaultMeetPlace(){
@@ -3452,6 +3464,7 @@ function validateCase(){
         ok = fieldErr($('#cMeetEnd'), 'errCMeetTime', '結束時間不可早於開始時間') && ok;
     }
     if (!checkAuditedDates()) ok = false;
+    if (!checkPreMeet()) ok = false;
     if (!caseSyncMakerDateMax()) ok = false;
     return ok;
 }
@@ -3495,6 +3508,49 @@ function checkAuditedDates(){
 $(document).on('change', '#cFrom, #cTo, #cDeptBody input[data-f=audited_date]', function(){
     if ($('#caseMask').is(':visible')) checkAuditedDates();
 });
+/* 事前會議時間檢查（後端 ia_pre_meet_check 同規則）：不可晚於第一列受稽日期、不可與受稽時段重疊、
+   要在第一列受稽開始前結束。 */
+function preMeetMsg(){
+    var d = $('#cPreDate').val(), s0 = normTime($('#cPreStart').val()), e0 = normTime($('#cPreEnd').val());
+    if (!d || !s0) return '';
+    var ps = iaT2M(s0), pe = e0 ? iaT2M(e0) : ps, dur = iaTimeStep();
+    if (pe < ps) return '事前會議的結束時間不可早於開始時間';
+    var fm = function(m){ return ('0'+Math.floor(m/60)).slice(-2)+':'+('0'+(m%60)).slice(-2); };
+    var rows = CASE_ROWS.filter(caseRowHasContent), first = null;
+    rows.forEach(function(r){
+        var rd = String(r.audited_date||''); if (!rd) return;
+        var t = iaT2M(r.audited_time); if (t === null) t = 0;
+        if (!first || rd < first[0] || (rd === first[0] && t < first[1])) first = [rd, t];
+    });
+    if (!first) return '';
+    if (d > first[0]) return '事前會議日期不可晚於第一列受稽日期（' + dispDate(first[0]) + '）';
+    var msg = '';
+    rows.forEach(function(r){
+        if (msg || String(r.audited_date||'') !== d) return;
+        var t = iaT2M(r.audited_time); if (t === null) return;
+        if (ps < t + dur && pe > t) msg = '事前會議 ' + fm(ps) + '~' + fm(pe) + ' 與受稽時段 ' + fm(t) + '~' + fm(t + dur) + ' 重疊';
+    });
+    if (msg) return msg;
+    if (d === first[0] && pe > first[1]) return '事前會議要在第一列受稽時間 ' + fm(first[1]) + ' 之前結束（目前結束於 ' + fm(pe) + '）';
+    return '';
+}
+function checkPreMeet(){
+    var m = preMeetMsg();
+    return fieldErr($('#cPreEnd'), 'errCPreTime', m) && !m;
+}
+/* 事前會議日期自動＝稽核起日（使用者還沒改過它、或它仍等於上一個稽核起日時才跟著動） */
+var PRE_LAST_FROM = '';
+$(document).on('change', '#cFrom', function(){
+    var f = $(this).val(), cur = $('#cPreDate').val();
+    if (!cur || cur === PRE_LAST_FROM) $('#cPreDate').val(f);
+    PRE_LAST_FROM = f;
+});
+$(document).on('input change blur', '#cPreDate, #cPreStart, #cPreEnd, #cTimeStep, #cDeptBody input, #cDeptBody select', function(){
+    if (!$('#caseMask').is(':visible')) return;
+    if ($(this).is('#cPreStart,#cPreEnd')) { var n = normTime($(this).val()); if (n && $(this).val() !== n && ev0(this)) $(this).val(n); }
+    checkPreMeet();
+});
+function ev0(el){ return document.activeElement !== el; }
 /* 送出（完成）前的必填檢查（2026-09-18 使用者要求）：稽核起始主過程／受稽單位／稽核員／
    陪檢員／受稽日期／時間／預定完成改善，每一列都要填齊。
    **草稿存檔刻意不檢查**（現場本來就是邊排邊填），只有按「完成」＝這張單要發出去時才擋；
@@ -3551,6 +3607,9 @@ function caseRequiredCheck(){
     });
     if (!$('#cMeetPlace').val() || $('#cMeetPlace').val() === '__new') { $('#cMeetPlace').addClass('err'); bad.unshift('結束會議地點還沒選'); }
     else $('#cMeetPlace').removeClass('err');
+    if (!$('#cPrePlace').val() || $('#cPrePlace').val() === '__new') { $('#cPrePlace').addClass('err'); bad.unshift('事前會議地點還沒選'); }
+    else $('#cPrePlace').removeClass('err');
+    if (!$('#cPreDate').val() || !normTime($('#cPreStart').val())) bad.unshift('事前會議的日期與開始時間還沒填');
     var gm = grpCompleteMsg(); if (gm) bad.push(gm);
     var over = (typeof caseTimeOverrun === 'function') ? caseTimeOverrun() : '';
     var few = auditorShortMsg();
@@ -3579,6 +3638,8 @@ function caseSavePayload(){
         audit_from:$('#cFrom').val(), audit_to:$('#cTo').val(), leader_key:$('#cLeader').val(),
         end_meet_date:$('#cMeetDate').val(), end_meet_start:$('#cMeetStart').val(), end_meet_end:$('#cMeetEnd').val(),
         end_meet_place:$('#cMeetPlace').val(), remark:$('#cRemark').val(),
+        pre_meet_date:$('#cPreDate').val(), pre_meet_start:$('#cPreStart').val(), pre_meet_end:$('#cPreEnd').val(),
+        pre_meet_place:($('#cPrePlace').val() === '__new' ? '' : $('#cPrePlace').val()),
         maker_id:($('#cMaker').val()||''), maker_date:($('#cMakerDate').val()||''),
         unit_minutes:iaTimeStep(),          // 每個受稽單位需要幾分鐘（送出前的時間檢查後端也要用）
         depts:JSON.stringify(collectCaseRows())};
