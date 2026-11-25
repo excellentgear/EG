@@ -2387,11 +2387,14 @@ LBLSQL;
     if ($_POST['action'] === 'unbound_parts_list') {
         try {
             stk_need('stock_unbound_check');
-            $rows = $pdo->query("SELECT si.stock_item_id, si.d_id, si.qty, si.item_type, si.storage_location,
-                                        COALESCE(c.category_name,'') AS category_name
+            // 三種需要處理：unbound＝完全沒綁／dangling＝綁的料號主檔已不存在／nocust＝綁到的主檔本身沒有客戶
+            $rows = $pdo->query("SELECT si.stock_item_id, si.d_id, si.qty, si.item_type, si.storage_location, si.client_name AS old_client, si.d_setting_id,
+                                        COALESCE(c.category_name,'') AS category_name,
+                                        ds.d_id AS ds_pk, ds.Customer_Id AS ds_cust
                                  FROM stock_items si
                                  LEFT JOIN stock_item_categories c ON c.category_id=si.item_type
-                                 WHERE si.is_active=1 AND (si.d_setting_id IS NULL OR si.d_setting_id=0)
+                                 LEFT JOIN d_setting ds ON ds.d_id=si.d_setting_id
+                                 WHERE si.is_active=1 AND (si.d_setting_id IS NULL OR si.d_setting_id=0 OR ds.d_id IS NULL OR ds.Customer_Id IS NULL OR TRIM(ds.Customer_Id)='')
                                  ORDER BY si.d_id")->fetchAll(PDO::FETCH_ASSOC);
             // 一次撈出所有候選（同名料號可能有多筆主檔：不同客戶／版次／備註）
             $out = [];
@@ -2405,7 +2408,23 @@ LBLSQL;
                 $byName = [];
                 foreach ($cs->fetchAll(PDO::FETCH_ASSOC) as $c2) { $byName[$c2['D_Setting_Id']][] = $c2; }
                 foreach ($rows as $r) {
-                    $r['candidates'] = $byName[$r['d_id']] ?? [];
+                    $cur = intval($r['d_setting_id']);
+                    if ($cur <= 0) $r['kind'] = 'unbound';
+                    elseif ($r['ds_pk'] === null) $r['kind'] = 'dangling';
+                    else $r['kind'] = 'nocust';
+                    $cands = $byName[$r['d_id']] ?? [];
+                    if ($r['kind'] !== 'unbound') {
+                        // 重綁：候選只列「有客戶」且不是目前這一筆的同名料號
+                        $cands = array_values(array_filter($cands, function($c) use ($cur){
+                            return intval($c['d_id']) !== $cur && trim((string)$c['Customer_Id']) !== '';
+                        }));
+                    }
+                    // 舊快照客戶名與候選客戶相同者標為建議（唯一時才預選）
+                    $match = [];
+                    foreach ($cands as $c) { if ($r['old_client'] !== null && $r['old_client'] !== '' && (string)$c['client_name'] === (string)$r['old_client']) $match[] = $c['d_id']; }
+                    $r['suggest'] = count($match) === 1 ? $match[0] : null;
+                    $r['candidates'] = $cands;
+                    unset($r['ds_pk']);
                     $out[] = $r;
                 }
             }
@@ -2423,7 +2442,8 @@ LBLSQL;
             $pdo->beginTransaction();
             $done = 0; $skipped = [];
             $selSt = $pdo->prepare("SELECT d_id, d_setting_id FROM stock_items WHERE stock_item_id=? AND is_active=1");
-            $dsSt  = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $dsSt  = $pdo->prepare("SELECT D_Setting_Id, Customer_Id FROM d_setting WHERE d_id=?");
+            $curSt = $pdo->prepare("SELECT d_id, Customer_Id FROM d_setting WHERE d_id=?");
             $updSt = $pdo->prepare("UPDATE stock_items SET d_setting_id=?, Modified_By=?, Modified_At=NOW() WHERE stock_item_id=?");
             foreach ($pairs as $pr) {
                 $sid = intval($pr['stock_item_id'] ?? 0);
@@ -2431,16 +2451,24 @@ LBLSQL;
                 if (!$sid || !$dsid) { $skipped[] = "#$sid 參數不完整"; continue; }
                 $selSt->execute([$sid]); $srow = $selSt->fetch(PDO::FETCH_ASSOC);
                 if (!$srow) { $skipped[] = "#$sid 查無此品項"; continue; }
-                if (!empty($srow['d_setting_id'])) { $skipped[] = $srow['d_id'].'：已經綁定過，請重新整理'; continue; }
-                $dsSt->execute([$dsid]); $dname = $dsSt->fetchColumn();
-                if ($dname === false) { $skipped[] = $srow['d_id'].'：目標料號不存在'; continue; }
+                // 已綁定且正常（主檔存在且有客戶）才視為「已綁過」；綁到不存在／沒客戶的主檔允許重綁
+                $rebind = false;
+                if (!empty($srow['d_setting_id'])) {
+                    $curSt->execute([intval($srow['d_setting_id'])]); $cur = $curSt->fetch(PDO::FETCH_ASSOC);
+                    if ($cur && trim((string)$cur['Customer_Id']) !== '') { $skipped[] = $srow['d_id'].'：已經綁定過，請重新整理'; continue; }
+                    $rebind = true;
+                }
+                $dsSt->execute([$dsid]); $dsr = $dsSt->fetch(PDO::FETCH_ASSOC);
+                if (!$dsr) { $skipped[] = $srow['d_id'].'：目標料號不存在'; continue; }
+                $dname = $dsr['D_Setting_Id'];
+                if ($rebind && trim((string)$dsr['Customer_Id']) === '') { $skipped[] = $srow['d_id'].'：目標料號也沒有客戶，不予重綁'; continue; }
                 // 只准綁到「料號文字完全相同」的主檔——否則直接打 API 就能把庫存綁到別的料號上（鐵律8）
                 if ((string)$dname !== (string)$srow['d_id']) { $skipped[] = $srow['d_id'].'：與目標料號「'.$dname.'」不相同，不予綁定'; continue; }
                 $updSt->execute([$dsid, $userId, $sid]);
                 $done++;
                 try {
                     $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator,created_at) VALUES ('update','stock_part_bind',?,?,?,?,?,NOW())")
-                        ->execute([$sid, $srow['d_id'], json_encode(['d_setting_id'=>['from'=>null,'to'=>$dsid]], JSON_UNESCAPED_UNICODE), $userId, $_SESSION['userName'] ?? '']);
+                        ->execute([$sid, $srow['d_id'], json_encode(['d_setting_id'=>['from'=>($srow['d_setting_id'] ?: null),'to'=>$dsid]], JSON_UNESCAPED_UNICODE), $userId, $_SESSION['userName'] ?? '']);
                 } catch(Exception $e2){}
             }
             $pdo->commit();
@@ -4864,8 +4892,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <div class="setting-card" id="bind-card" style="display:none;">
       <h5><i class="fa fa-link"></i> 料號綁定檢查 <button id="btn-open-bind" class="btn btn-xs" style="background:var(--accent);color:#fff;" onclick="openBindModal()"><i class="fa fa-wrench"></i> 開啟</button></h5>
       <div style="font-size:12px;color:#666;line-height:1.7;">
-        沒有綁定「料號ID」的庫存品項，客戶欄不會自動帶入、也連不到圖面與料號資料。
-        這裡會列出所有未綁定的品項，並自動比對料號資料表中<b>名稱完全相同</b>的料號供一鍵補綁。
+        沒有正確綁定「料號ID」的庫存品項，客戶欄不會自動帶入、也連不到圖面與料號資料。
+        這裡會列出三種需處理的品項：<b>未綁定</b>、<b>綁的料號主檔已不存在</b>、<b>綁到的料號主檔沒填客戶</b>，並比對料號資料表中<b>名稱完全相同</b>的料號供一鍵補綁（後兩種只列「有客戶」的候選）。
         <div id="bind-summary" style="margin-top:8px;font-weight:700;color:var(--primary);">統計中…</div>
       </div>
     </div>
@@ -4881,7 +4909,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
      <div style="background:#FDF6EC;border:1px solid #F0D9B5;border-radius:6px;padding:8px 10px;font-size:12px;color:#8a6d3b;line-height:1.7;margin-bottom:10px;">
        「建議綁定」是以<b>料號名稱完全相同</b>比對出來的。同名料號有多筆（不同客戶／版次／備註）時請自行挑一筆；
        料號資料表中查無同名料號的，要先到<b>基本設定</b>新增料號才綁得起來。
-       綁定只會補上料號ID，<b>不會更動數量、儲位或任何庫存異動</b>。
+       綁定只會補上／更換料號ID，<b>不會更動數量、儲位或任何庫存異動</b>；更換前後的料號ID都會寫入稽核紀錄。
      </div>
      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
        <button class="btn btn-xs" style="background:#16a085;color:#fff;" onclick="bindSelectAllSuggested()"><i class="fa fa-check-square-o"></i> 全選有建議的</button>
@@ -8583,10 +8611,10 @@ function loadBindSummary(){
     ajx({action:'unbound_parts_list'}, function(r){
         if(!r.success){ $('#bind-summary').text('讀取失敗：'+(r.message||'')).css('color','#DD5138'); return; }
         BIND_ROWS = r.data||[];
-        var one=0, multi=0, none=0;
-        BIND_ROWS.forEach(function(x){ var n=(x.candidates||[]).length; if(n===1)one++; else if(n>1)multi++; else none++; });
-        if(!BIND_ROWS.length){ $('#bind-summary').html('<i class="fa fa-check-circle"></i> 全部品項都已綁定料號ID').css('color','#16a085'); }
-        else $('#bind-summary').html('未綁定共 <b>'+BIND_ROWS.length+'</b> 筆　（可直接補綁 '+one+' 筆、同名多筆需自選 '+multi+' 筆、查無此料號 '+none+' 筆）').css('color','var(--primary)');
+        var one=0, multi=0, none=0, kc={unbound:0,dangling:0,nocust:0};
+        BIND_ROWS.forEach(function(x){ var n=(x.candidates||[]).length; kc[x.kind]=(kc[x.kind]||0)+1; if(n===1||x.suggest)one++; else if(n>1)multi++; else none++; });
+        if(!BIND_ROWS.length){ $('#bind-summary').html('<i class="fa fa-check-circle"></i> 全部品項都已綁定料號ID且有客戶').css('color','#16a085'); }
+        else $('#bind-summary').html('需處理共 <b>'+BIND_ROWS.length+'</b> 筆（未綁定 '+kc.unbound+'、綁的料號已不存在 '+kc.dangling+'、料號主檔沒填客戶 '+kc.nocust+'）<br>可直接補綁 '+one+' 筆、同名多筆需自選 '+multi+' 筆、無可綁的料號 '+none+' 筆').css('color','var(--primary)');
     });
 }
 function openBindModal(){
@@ -8606,24 +8634,25 @@ function renderBindTable(){
     BIND_ROWS.forEach(function(x){
         var cands=x.candidates||[];
         var sel='';
+        var kindTxt={unbound:'<span class="label label-default">未綁定</span>',dangling:'<span class="label label-danger">料號已不存在</span>',nocust:'<span class="label label-warning">主檔無客戶</span>'}[x.kind]||'';
         if(!cands.length){
-            sel='<span style="color:#DD5138;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 查無此料號，請至基本設定內新增料號</span>';
+            sel='<span style="color:#DD5138;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> '+(x.kind==='unbound'?'查無此料號，請至基本設定內新增料號':'沒有「同名且有客戶」的其他料號可綁；請到主檔管理替該料號補客戶，或新增正確料號')+'</span>';
         }else{
             // 本頁不在 eg_input_rules.js 覆蓋範圍（列於 input_rules_baseline.txt），
             // 掛 data-eg-filter 會是死屬性；同名料號候選一般只有 2~3 筆，不需要篩選框。
             sel='<select class="form-control input-sm bind-sel" data-sid="'+x.stock_item_id+'" style="height:30px;">';
-            if(cands.length>1) sel+='<option value="">— 請選擇要綁定的料號 —</option>';
+            if(cands.length>1&&!x.suggest) sel+='<option value="">— 請選擇要綁定的料號 —</option>';
             cands.forEach(function(c){
                 var lbl=c.D_Setting_Id+(c.Revision?'　版次'+c.Revision:'')+(c.client_name?'　'+c.client_name:'')+(c.Remark?'　'+c.Remark:'')+(c.Spec_No?'　'+c.Spec_No:'');
-                sel+='<option value="'+c.d_id+'">'+esc(lbl)+'</option>';
+                sel+='<option value="'+c.d_id+'"'+(String(x.suggest)===String(c.d_id)?' selected':'')+'>'+esc(lbl)+'</option>';
             });
             sel+='</select>';
-            if(cands.length>1) sel+='<div style="font-size:11px;color:#8a6d3b;margin-top:3px;">同名料號有 '+cands.length+' 筆，請確認要綁哪一筆</div>';
+            if(cands.length>1) sel+='<div style="font-size:11px;color:#8a6d3b;margin-top:3px;">同名料號有 '+cands.length+' 筆，'+(x.suggest?'已依庫存原記載的客戶預選，請確認':'請確認要綁哪一筆')+'</div>';
         }
         var canChk=cands.length>0;
         h+='<tr>'
-          +'<td>'+(canChk?'<input type="checkbox" class="bind-chk" data-sid="'+x.stock_item_id+'"'+(cands.length===1?' checked':'')+'>':'')+'</td>'
-          +'<td><b>'+esc(x.d_id)+'</b></td>'
+          +'<td>'+(canChk?'<input type="checkbox" class="bind-chk" data-sid="'+x.stock_item_id+'"'+((cands.length===1||x.suggest)?' checked':'')+'>':'')+'</td>'
+          +'<td><b>'+esc(x.d_id)+'</b><div>'+kindTxt+'</div>'+(x.old_client?'<div style="font-size:11px;color:#888;">原記載客戶：'+esc(x.old_client)+'</div>':'')+'</td>'
           +'<td>'+esc(x.category_name||'')+'</td>'
           +'<td>'+(x.qty||0)+'</td>'
           +'<td>'+esc(x.storage_location||'')+'</td>'
