@@ -285,7 +285,8 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
                   cv_field('固定結帳日', $cv['settlement_day']);
                   $cvNu = $cv['net_unit'] ?? '';
                   cv_field($cvNu === 'month' || $cvNu === 'next' ? '月結方式' : '月結天數',
-                           $cvNu === 'month' ? '月結' : ($cvNu === 'next' ? '次月結（月結＋30天）' : $cv['net_days']));
+                           $cvNu === 'month' ? ('月結 ' . (int)$cv['net_days'] . ' 天')
+                         : ($cvNu === 'next' ? ('次月結（月結 ' . (int)($cv['net_months'] ?? 0) . ' 天＋30天）') : $cv['net_days']));
                   cv_field('接受扣%', !empty($cv['allow_deduct']) ? '是' : '否'); ?>
         </div>
         <div class="cv-row">
@@ -4112,13 +4113,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $net_days     = $old_settle_block['net_days'] ?? null;
                 $allow_deduct = intval($old_settle_block['allow_deduct'] ?? 0);
             }
-            // 月結方式：依天數（填天數，原本做法）／月結（當月結帳，net_days=0）／次月結（＝月結＋30天，net_days=30）。
-            // net_days 一律同步存對應天數，其他讀 net_days 的程式不受影響
-            $net_unit = null; $net_months = null;   // null＝不更新這兩欄（net_months 已不使用，固定清為 NULL）
+            // 月結方式：三種都要填天數。依天數＝N天；月結＝N天（60天＝月結2個月）；次月結＝月結N天＋30天。
+            // net_days 一律存「實際天數」（次月結已含 +30），其他讀 net_days 的程式不受影響；次月結填的基礎天數另存 net_months
+            $net_unit = null; $net_months = null;   // null＝不更新這兩欄（net_months 只在次月結時存基礎天數，其餘清為 NULL）
             if ($canSettle && array_key_exists('net_unit', $_POST)) {
                 $nu = (string)($_POST['net_unit'] ?? '');
-                if ($nu === 'month')     { $net_unit = 'month'; $net_days = 0; }
-                elseif ($nu === 'next')  { $net_unit = 'next';  $net_days = 30; }
+                $base = max(0, min(365, intval($net_days ?? 0)));   // 使用者填的天數
+                if ($nu === 'month')     { $net_unit = 'month'; $net_days = $base; }                      // 月結 N 天（60天＝月結2個月）
+                elseif ($nu === 'next')  { $net_unit = 'next';  $net_months = $base; $net_days = $base + 30; }   // 次月結＝月結N天＋30天；net_months 暫存填的基礎天數
                 else                     { $net_unit = 'days'; }
             }
             $quote_method    = $canQuoteMeth ? (trim($_POST['quote_method'] ?? 'FOB') ?: 'FOB')
@@ -10713,7 +10715,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 </div>
 </div></div></div>
 <div class="modal fade" id="customerModal" tabindex="-1">
-<div class="modal-dialog modal-lg" style="width:900px;max-width:96vw;">
+<div class="modal-dialog modal-lg" style="width:1180px;max-width:96vw;">
 <div class="modal-content">
 <div class="modal-header">
     <button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -19579,7 +19581,7 @@ function addContactRow(c) {
         + '<textarea class="form-control input-sm ct-dept" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;min-height:30px;" placeholder="部門" maxlength="50">'+escHtml(c.department||'')+'</textarea>'
         + '<textarea class="form-control input-sm ct-title" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;min-height:30px;" placeholder="職稱" maxlength="50">'+escHtml(c.title||'')+'</textarea>'
         + '<input type="text" class="form-control input-sm ct-ext"        style="width:60px;"               placeholder="分機"   maxlength="20"  value="'+escAttr(c.phone_ext||'')+'">'
-        + '<input type="text" class="form-control input-sm ct-mobile"     style="flex:1;min-width:85px;"    placeholder="0912-345-678"   maxlength="30" autocomplete="off" value="'+escAttr(egFmtTwPhone(c.mobile||''))+'">'
+        + '<input type="text" class="form-control input-sm ct-mobile"     style="width:128px;flex:none;"    placeholder="0912-345-678"   maxlength="30" autocomplete="off" value="'+escAttr(egFmtTwPhone(c.mobile||''))+'">'
         + '<textarea class="form-control input-sm ct-email" rows="1" style="flex:2;min-width:140px; resize:none;overflow:hidden;min-height:30px;" placeholder="信箱（多個以分號分隔）" maxlength="255" autocomplete="off" spellcheck="false">'+escHtml(c.email||'')+'</textarea>'
         + '<textarea class="form-control input-sm ct-note" rows="1" style="flex:1.2;min-width:90px; resize:none;overflow:hidden;min-height:30px;" placeholder="備註" maxlength="100">'+escHtml(c.note||'')+'</textarea>'
         + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝會計聯絡人（對帳、請款聯絡對象，對帳頁會自動提示）"><div style="font-size:10px;color:#aaa;">會計</div><input type="checkbox" class="ct-acct" ' + (c.is_accounting==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
@@ -19853,10 +19855,11 @@ function onPaymentMethodsChange() {
 function onNetUnitChange() {
     var u = (document.getElementById('cf-net_unit')||{}).value || 'days';
     var d = document.getElementById('cf-net_days'), hint = document.getElementById('cf-net-hint');
-    if (d)  d.style.display  = (u === 'days') ? '' : 'none';
+    var n = d ? parseInt(d.value, 10) : NaN;
     if (hint) {
         hint.style.display = (u === 'days') ? 'none' : '';
-        hint.textContent = (u === 'month') ? '月結＝依結帳日當月結清，不另加天數' : '次月結＝月結＋30天（收款日再順延 30 天）';
+        if (u === 'month') hint.textContent = '月結' + (n >= 0 ? n + ' 天' + (n % 30 === 0 && n > 0 ? '＝月結 ' + (n / 30) + ' 個月' : '') : '：請填天數（例：60＝月結2個月）');
+        if (u === 'next')  hint.textContent = '次月結＝月結天數＋30天' + (n >= 0 ? '（共 ' + (n + 30) + ' 天）' : '，請填月結天數');
     }
 }
 function onShippingNoneChange() {
@@ -19870,6 +19873,8 @@ function onShippingNoneChange() {
 function _setNetFields(d) {
     var u = (d && (d.net_unit === 'month' || d.net_unit === 'next')) ? d.net_unit : 'days';   // 舊值（含 months）一律當依天數，天數仍在 net_days
     var su = document.getElementById('cf-net_unit'); if (su) su.value = u;
+    if (u === 'next') { var nd = document.getElementById('cf-net_days'); if (nd) nd.value = (d.net_months != null ? d.net_months : ''); }   // 次月結：欄位顯示的是月結基礎天數
+    var nd2 = document.getElementById('cf-net_days'); if (nd2 && !nd2.__nuBound) { nd2.__nuBound = true; nd2.addEventListener('input', onNetUnitChange); }
     onNetUnitChange();
 }
 function _applyCustPaymentDefaultHints(mode, day, pay, nd, dbConfirmSettle, dbConfirmPay) {
@@ -20014,7 +20019,7 @@ function openCustomerModal(customer_id, readonly) {
             }
             var cDay = d.settlement_day||'25';
             var cPay = pmList.length ? pmList.join(',') : (d.payment_method||'匯款');   // 多選或含附回郵時≠系統預設，視為已設定
-            var cNd  = (d.net_unit === 'month' || d.net_unit === 'next') ? ('U' + d.net_unit) : ((d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '');
+            var cNd  = (d.net_unit === 'month' || d.net_unit === 'next') ? ('U' + d.net_unit + d.net_days) : ((d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '');
             _applyCustPaymentDefaultHints(mode, cDay, cPay, cNd, d.confirmed_settlement, d.confirmed_payment);
             var exBtn = document.getElementById('cf-exception-btn');
             if (exBtn) exBtn.style.display = '';
