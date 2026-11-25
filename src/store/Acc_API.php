@@ -12,6 +12,7 @@ require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/acc_lib.php';
+include_once $document_root . '/EGsystem/src/common/party_name_lib.php';
 
 function acc_out(array $a) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(array_merge(['ok' => true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function acc_err(string $m, int $c = 400) { header('Content-Type: application/json; charset=utf-8'); http_response_code($c); echo json_encode(['ok' => false, 'error' => $m], JSON_UNESCAPED_UNICODE); exit; }
@@ -31,6 +32,14 @@ set_exception_handler(function (Throwable $e) {
     error_log('Acc_API 未攔截例外: ' . $e->getMessage());
     acc_err('伺服器錯誤：' . $e->getMessage(), 500);
 });
+
+/** 對帳頁選到客戶時的聯絡提示（會計聯絡人／發票收件人／電子發票 Email／帳務備註）；應付側或查無資料回 null */
+function acc_contact_hint_for(PDO $db, string $side, string $pid): ?array {
+    if ($side !== 'ar') return null;
+    $m = acc_customer_by_name($db);
+    $cid = trim((string)($m[$pid]['customer_id'] ?? ''));
+    return $cid !== '' ? eg_party_contact_hint($db, $cid) : null;
+}
 
 /** 把輸入正規化成 UTF-8（Big5/CP950 來源會讓 SQL 直接炸掉） */
 function acc_u8(string $s): string {
@@ -1289,6 +1298,7 @@ case 'sheet_load': {
                  'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
                  'opt' => acc_recon_party_opt($db, $side, $pid),
                  'settlement' => acc_default_billing_month($db, $side, $pid),
+                 'contact_hint' => acc_contact_hint_for($db, $side, $pid),
                  'missing' => $missing, 'stale' => $stale]);
     }
     $built = acc_sheet_build($db, $side, $pid, $bm);
@@ -1303,6 +1313,7 @@ case 'sheet_load': {
              'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
              'opt' => acc_recon_party_opt($db, $side, $pid),
              'settlement' => acc_default_billing_month($db, $side, $pid),
+             'contact_hint' => acc_contact_hint_for($db, $side, $pid),
              'missing' => [], 'stale' => []]);
 }
 

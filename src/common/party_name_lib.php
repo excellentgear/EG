@@ -62,10 +62,12 @@ function eg_party_ensure_schema(PDO $db): void
                             'payment_methods'   => "VARCHAR(100) NULL COMMENT '收款方式（多選，逗號分隔，含附回郵）；payment_method 仍存第一個實際收款方式供舊程式使用'",
                             'net_unit'          => "VARCHAR(10) NULL COMMENT '月結方式 days=依天數 months=次月結N個月'",
                             'net_months'        => "SMALLINT NULL COMMENT '次月結幾個月（net_unit=months 時有值，net_days 同步存 月數*30）'",
+                            'customer_email'    => "VARCHAR(255) NULL COMMENT '公司電子信箱（可多個，分號或空白分隔）'",
                             'invoice_recipient' => "VARCHAR(100) NULL COMMENT '發票收件人'",
                             'invoice_dept'      => "VARCHAR(100) NULL COMMENT '發票收件部門'",
                             'shipping_req_none' => "TINYINT NOT NULL DEFAULT 0 COMMENT '出貨要求：1=已確認無特殊要求'"],
-        'customer_contacts' => ['is_accounting' => "TINYINT NOT NULL DEFAULT 0 COMMENT '會計聯絡人'"],
+        'customer_contacts' => ['is_accounting' => "TINYINT NOT NULL DEFAULT 0 COMMENT '會計聯絡人'",
+                                'is_invoice_recv' => "TINYINT NOT NULL DEFAULT 0 COMMENT '發票（電子發票）收件人'"],
         'party_address' => ['addr_type_id' => "INT NULL COMMENT '地址類別（party_addr_type）'"],
         'maker_list'    => ['m_fax2' => "VARCHAR(50) NULL COMMENT '傳真2'",
                             'factory_zip' => "VARCHAR(20) NULL COMMENT '工廠地址郵遞區號'",
@@ -265,4 +267,31 @@ function eg_party_alias_exists_sql(string $type, string $idExpr, string $param):
 {
     return "EXISTS (SELECT 1 FROM party_name_alias pna WHERE pna.party_type='" . ($type === 'maker' ? 'maker' : 'customer')
          . "' AND pna.party_id=$idExpr AND (pna.alias_name LIKE $param OR pna.alias_full LIKE $param))";
+}
+
+/**
+ * 對帳／請款用的聯絡提示：會計聯絡人、發票收件人（聯絡人勾選）＋電子發票 Email／發票收件人部門／帳務備註。
+ * 對帳頁選到客戶時顯示。查不到或都沒設定回 null。唯讀。
+ */
+function eg_party_contact_hint(PDO $db, string $customerId): ?array
+{
+    if ($customerId === '') return null;
+    try {
+        $c = $db->prepare("SELECT customer, invoice_email, customer_email, invoice_recipient, invoice_dept, billing_note FROM customer_list WHERE customer_id=?");
+        $c->execute([$customerId]); $row = $c->fetch(PDO::FETCH_ASSOC);
+        if (!$row) return null;
+        $acct = []; $inv = [];
+        $q = $db->prepare("SELECT name, department, title, phone_ext, mobile, email, is_accounting, is_invoice_recv FROM customer_contacts WHERE customer_id=? AND (is_accounting=1 OR is_invoice_recv=1) ORDER BY sort_order, contact_id");
+        $q->execute([$customerId]);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $one = ['name' => $r['name'], 'dept' => trim($r['department'] . ' ' . $r['title']), 'tel' => trim($r['mobile'] . ' ' . ($r['phone_ext'] !== '' ? '#' . $r['phone_ext'] : '')), 'email' => $r['email']];
+            if ((int)$r['is_accounting'])  $acct[] = $one;
+            if ((int)$r['is_invoice_recv']) $inv[] = $one;
+        }
+        $out = ['customer' => $row['customer'], 'accounting' => $acct, 'invoice_recv' => $inv,
+                'invoice_email' => (string)$row['invoice_email'], 'invoice_recipient' => (string)$row['invoice_recipient'],
+                'invoice_dept' => (string)$row['invoice_dept'], 'billing_note' => (string)$row['billing_note']];
+        $any = $acct || $inv || $out['invoice_email'] !== '' || $out['invoice_recipient'] !== '' || $out['invoice_dept'] !== '' || trim($out['billing_note']) !== '';
+        return $any ? $out : null;
+    } catch (Throwable $e) { return null; }
 }

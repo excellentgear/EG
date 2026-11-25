@@ -426,6 +426,7 @@ table.ot tr.lock{color:#a08a6a;}
     </div>
 
     <div id="sheetBox" style="display:none;">
+      <div id="contactHint" style="display:none;margin:0 0 8px;padding:8px 12px;border:1px solid #E4D3BC;background:#FFF8EC;border-radius:6px;font-size:12px;color:#5b3a12;line-height:1.7;"></div>
       <div class="a-stat">
         <div><span class="st-pill" id="stStatus">—</span></div>
         <div class="sep"></div>
@@ -1077,6 +1078,26 @@ $('#bm').on('change', loadParties);
 $('#btnLoad').on('click', loadSheet);
 $('#partySel').on('change',function(){ if($(this).val()) loadSheet(); });
 
+/* 對帳／請款聯絡提示：會計聯絡人、發票收件人（客戶主檔聯絡人勾選）＋電子發票 Email＋帳務備註；沒設定就不顯示 */
+function renderContactHint(h){
+  var $b=$('#contactHint');
+  if(!h){ $b.hide().empty(); return; }
+  function ppl(a){ return a.map(function(x){
+    return '<b>'+esc(x.name)+'</b>'+(x.dept?'（'+esc(x.dept)+'）':'')+(x.tel?' ☎ '+esc(x.tel):'')+(x.email?' ✉ '+esc(x.email):''); }).join('；'); }
+  var t='<b><i class="fa fa-bell"></i> 對帳／請款提醒（'+esc(h.customer||'')+'）</b>';
+  if(h.accounting && h.accounting.length) t+='<div>會計聯絡人：'+ppl(h.accounting)+'</div>';
+  if((h.invoice_recv&&h.invoice_recv.length)||h.invoice_email||h.invoice_recipient||h.invoice_dept){
+    t+='<div>發票收件：';
+    var p=[];
+    if(h.invoice_recipient||h.invoice_dept) p.push(esc((h.invoice_dept||'')+' '+(h.invoice_recipient||'')).trim());
+    if(h.invoice_recv&&h.invoice_recv.length) p.push(ppl(h.invoice_recv));
+    if(h.invoice_email) p.push('電子發票 Email：<span style="white-space:pre-wrap;word-break:break-word;">'+esc(h.invoice_email)+'</span>');
+    t+=p.join('；')+'</div>';
+  }
+  if(h.billing_note && $.trim(h.billing_note)) t+='<div>帳務備註：<span style="white-space:pre-wrap;word-break:break-word;">'+esc(h.billing_note)+'</span></div>';
+  $b.html(t).show();
+}
+
 function loadSheet(){
   var bm=$('#bm').val(), pid=$('#partySel').val();
   if(!bm || !pid){ toast('請選擇帳款月份與對象', true); return; }
@@ -1106,6 +1127,7 @@ function loadSheet(){
     $('#btnReopen').toggle(P.canAdmin && sheet.status==='confirmed');
     render();
     renderSync(r.missing||[], r.stale||[]);
+    renderContactHint(r.contact_hint);
     toast(r.from==='draft'
       ? '已接續上次暫存的進度（'+esc(sheet.party_name)+' '+esc(sheet.billing_month)+'）'
       : '已依該月份的單據組出新的對帳單（尚未暫存）');

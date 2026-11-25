@@ -4262,7 +4262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($payment_methods !== null) { $ex_sets[] = 'payment_methods=?'; $ex_args[] = implode(',', $payment_methods); }
             if ($net_unit !== null)        { $ex_sets[] = 'net_unit=?'; $ex_args[] = $net_unit; $ex_sets[] = 'net_months=?'; $ex_args[] = $net_months; }
             if ($shipping_req_none !== null) { $ex_sets[] = 'shipping_req_none=?'; $ex_args[] = $shipping_req_none; }
-            foreach (['invoice_recipient' => 100, 'invoice_dept' => 100] as $exf => $exmax) {
+            foreach (['invoice_recipient' => 100, 'invoice_dept' => 100, 'customer_email' => 255] as $exf => $exmax) {
                 if (array_key_exists($exf, $_POST)) { $ex_sets[] = "$exf=?"; $ex_args[] = mb_substr(trim((string)$_POST[$exf]), 0, $exmax); }
             }
             $old_extra = []; $new_extra = [];
@@ -4290,12 +4290,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 聯絡人 Delete-then-Insert
             $pdo->prepare("DELETE FROM customer_contacts WHERE customer_id=?")->execute([$customer_id]);
             if (!empty($contacts)) {
-                $hasAcct = (bool)$pdo->query("SHOW COLUMNS FROM customer_contacts LIKE 'is_accounting'")->fetch();
-                $ins_c = $pdo->prepare("INSERT INTO customer_contacts (customer_id,name,department,title,phone_ext,mobile,email,note,is_primary,sort_order" . ($hasAcct ? ",is_accounting" : "") . ") VALUES (?,?,?,?,?,?,?,?,?,?" . ($hasAcct ? ",?" : "") . ")");
+                $hasAcct = (bool)$pdo->query("SHOW COLUMNS FROM customer_contacts LIKE 'is_invoice_recv'")->fetch();   // 兩個新欄位同時建立
+                $ins_c = $pdo->prepare("INSERT INTO customer_contacts (customer_id,name,department,title,phone_ext,mobile,email,note,is_primary,sort_order" . ($hasAcct ? ",is_accounting,is_invoice_recv" : "") . ") VALUES (?,?,?,?,?,?,?,?,?,?" . ($hasAcct ? ",?,?" : "") . ")");
                 foreach (array_values($contacts) as $k => $c) {
                     if (empty(trim($c['name']??''))) continue;
                     $cargs = [$customer_id,trim($c['name']??''),trim($c['department']??''),trim($c['title']??''),trim($c['phone_ext']??''),trim($c['mobile']??''),trim($c['email']??''),trim($c['note']??''),intval($c['is_primary']??0),$k];
-                    if ($hasAcct) $cargs[] = intval($c['is_accounting'] ?? 0) ? 1 : 0;
+                    if ($hasAcct) { $cargs[] = intval($c['is_accounting'] ?? 0) ? 1 : 0; $cargs[] = intval($c['is_invoice_recv'] ?? 0) ? 1 : 0; }
                     $ins_c->execute($cargs);
                 }
             }
@@ -10759,6 +10759,10 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
             <label>電話</label>
             <input type="text" class="form-control" id="cf-customer_tel" name="customer_tel" placeholder="電話" maxlength="30">
         </div>
+        <div class="form-group">
+            <label>電子信箱</label>
+            <textarea class="form-control" id="cf-customer_email" name="customer_email" rows="1" maxlength="255" style="resize:vertical;" placeholder="公司信箱，多個以分號分隔"></textarea>
+        </div>
     </div>
     <div class="col-md-4">
         <div class="form-group">
@@ -11811,7 +11815,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <tr><td style="white-space:nowrap;"><strong>廠商本體操作</strong></td><td>新增、編輯（含批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
 <tr><td style="white-space:nowrap;"><strong>齒輪規格操作</strong></td><td>新增/編輯齒輪規格、刪除齒輪規格列、修改既有齒輪規格列</td></tr>
 <tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
-<tr><td style="white-space:nowrap;"><strong>客戶編輯：結帳／付款與備註</strong></td><td>「收款方式」可多選，另可勾「附回郵」；「月結」可選依天數，或「次月結 N 個月」；發票收件人／部門與帳務備註都在「結帳／付款」分頁；<b>會計聯絡人</b>在「聯絡人」分頁於該聯絡人勾「會計」；出貨要求可勾「無特殊要求」（與「還沒填」不同）；「其他地址」先選地址類別（發票地址、送貨地址…），再填類別說明——地址類別由有字典設定權限者按「管理地址類別」維護，<b>已被使用的類別不可改名或刪除</b>（客戶、廠商共用同一份類別）</td></tr>
+<tr><td style="white-space:nowrap;"><strong>客戶編輯：結帳／付款與備註</strong></td><td>「收款方式」可多選，另可勾「附回郵」；「月結」可選依天數，或「次月結 N 個月」；發票收件人／部門與帳務備註都在「結帳／付款」分頁；<b>會計聯絡人／發票收件人</b>在「聯絡人」分頁於該聯絡人勾「會計」「發票」（Email 可填多個，以分號分隔），對帳作業選到該客戶時會自動提示；基本資料有「電子信箱」；出貨要求可勾「無特殊要求」（與「還沒填」不同）；「其他地址」先選地址類別（發票地址、送貨地址…），再填類別說明——地址類別由有字典設定權限者按「管理地址類別」維護，<b>已被使用的類別不可改名或刪除</b>（客戶、廠商共用同一份類別）</td></tr>
 <tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤（沒有後者的人仍可改動/移除自己指派過的那一筆）／刪除已指派的必填標籤——料號上已經選了的「必填」標籤（字典設定裡勾選「新增料號時必填」的那種）<b>預設不給移除</b>，就算有上面「修改或移除他人指派的標籤」權限也一樣；要有這格權限才能把已指派的必填標籤從料號上刪掉</td></tr>
 <tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
 <tr><td style="white-space:nowrap;"><strong>廠商分類維護</strong></td><td>廠商大類/小類、加工限制標籤、大類製程設定</td></tr>
@@ -19572,18 +19576,27 @@ function addContactRow(c) {
     row.innerHTML =
         '<div style="flex-shrink:0;text-align:center;"><div style="font-size:10px;color:#aaa;">主要</div>'
         + '<input type="radio" name="contact_primary" value="'+idx+'" '+isPrimary+' onchange="syncContactsHidden()"></div>'
-        + '<input type="text" class="form-control input-sm ct-name"       style="flex:1.5;min-width:70px;"  placeholder="姓名*"  maxlength="50"  value="'+escAttr(c.name||'')+'">'
-        + '<input type="text" class="form-control input-sm ct-dept"       style="flex:1;min-width:60px;"    placeholder="部門"   maxlength="50"  value="'+escAttr(c.department||'')+'">'
-        + '<input type="text" class="form-control input-sm ct-title"      style="flex:1;min-width:60px;"    placeholder="職稱"   maxlength="50"  value="'+escAttr(c.title||'')+'">'
+        + '<textarea class="form-control input-sm ct-name" rows="1" style="flex:1.5;min-width:80px; resize:none;overflow:hidden;" placeholder="姓名*" maxlength="50">'+escHtml(c.name||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-dept" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;" placeholder="部門" maxlength="50">'+escHtml(c.department||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-title" rows="1" style="flex:1;min-width:70px; resize:none;overflow:hidden;" placeholder="職稱" maxlength="50">'+escHtml(c.title||'')+'</textarea>'
         + '<input type="text" class="form-control input-sm ct-ext"        style="width:60px;"               placeholder="分機"   maxlength="20"  value="'+escAttr(c.phone_ext||'')+'">'
         + '<input type="text" class="form-control input-sm ct-mobile"     style="flex:1;min-width:85px;"    placeholder="手機"   maxlength="30"  value="'+escAttr(c.mobile||'')+'">'
-        + '<input type="text" class="form-control input-sm ct-email"      style="flex:1.5;min-width:100px;" placeholder="Email"  maxlength="100" value="'+escAttr(c.email||'')+'">'
-        + '<input type="text" class="form-control input-sm ct-note"       style="flex:1.2;min-width:80px;"  placeholder="備註"   maxlength="100" value="'+escAttr(c.note||'')+'">'
-        + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝會計聯絡人（對帳、發票、請款聯絡對象）"><div style="font-size:10px;color:#aaa;">會計</div><input type="checkbox" class="ct-acct" ' + (c.is_accounting==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
+        + '<textarea class="form-control input-sm ct-email" rows="1" style="flex:2;min-width:140px; resize:none;overflow:hidden;" placeholder="Email（多個以分號分隔）" maxlength="255">'+escHtml(c.email||'')+'</textarea>'
+        + '<textarea class="form-control input-sm ct-note" rows="1" style="flex:1.2;min-width:90px; resize:none;overflow:hidden;" placeholder="備註" maxlength="100">'+escHtml(c.note||'')+'</textarea>'
+        + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝會計聯絡人（對帳、請款聯絡對象，對帳頁會自動提示）"><div style="font-size:10px;color:#aaa;">會計</div><input type="checkbox" class="ct-acct" ' + (c.is_accounting==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
+        + '<label style="flex-shrink:0;margin:0;font-weight:normal;text-align:center;cursor:pointer;" title="勾選＝電子發票收件人（Email 可填多個）；對帳頁會自動提示"><div style="font-size:10px;color:#aaa;">發票</div><input type="checkbox" class="ct-inv" ' + (c.is_invoice_recv==1 ? 'checked' : '') + ' onchange="syncContactsHidden()"></label>'
         + '<button type="button" class="btn btn-xs btn-default" style="flex-shrink:0;" onclick="this.closest(\'.contact-row\').remove();syncContactsHidden();"><i class="fa fa-times"></i></button>';
     wrap.appendChild(row);
-    row.querySelectorAll('input[type=text]').forEach(function(i){ i.oninput = syncContactsHidden; });
+    row.querySelectorAll('input[type=text],textarea').forEach(function(i){
+        i.oninput = function(){ _ctAutoH(i); syncContactsHidden(); };
+    });
+    row.querySelectorAll('textarea').forEach(_ctAutoH);
+    // 跳窗尚未顯示時量不到高度，顯示後再量一次
+    setTimeout(function(){ row.querySelectorAll('textarea').forEach(_ctAutoH); }, 300);
 }
+/** 聯絡人文字欄：內容多時自動長高、完整顯示（不橫向截斷） */
+function _ctAutoH(t) { if (!t) return; t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
+function _ctVal(row, sel) { var e = row.querySelector(sel); return e ? e.value.replace(/\s*[\r\n]+\s*/g, ' ').trim() : ''; }
 
 function syncContactsHidden() {
     var rows = document.querySelectorAll('#cf-contacts-wrap .contact-row');
@@ -19591,18 +19604,19 @@ function syncContactsHidden() {
     var primaryIdx = primaryEl ? parseInt(primaryEl.value) : 0;
     var contacts = [];
     rows.forEach(function(row, i) {
-        var name = row.querySelector('.ct-name').value.trim();
+        var name = _ctVal(row, '.ct-name');
         if (!name) return;
         contacts.push({
             name:       name,
-            department: (row.querySelector('.ct-dept')||{value:''}).value.trim(),
-            title:      row.querySelector('.ct-title').value.trim(),
+            department: _ctVal(row, '.ct-dept'),
+            title:      _ctVal(row, '.ct-title'),
             phone_ext:  row.querySelector('.ct-ext').value.trim(),
             mobile:     row.querySelector('.ct-mobile').value.trim(),
-            email:      row.querySelector('.ct-email').value.trim(),
-            note:       (row.querySelector('.ct-note')||{value:''}).value.trim(),
+            email:      _ctVal(row, '.ct-email'),
+            note:       _ctVal(row, '.ct-note'),
             is_primary: (i===primaryIdx) ? 1 : 0,
-            is_accounting: (row.querySelector('.ct-acct')||{checked:false}).checked ? 1 : 0
+            is_accounting: (row.querySelector('.ct-acct')||{checked:false}).checked ? 1 : 0,
+            is_invoice_recv: (row.querySelector('.ct-inv')||{checked:false}).checked ? 1 : 0
         });
     });
     var el = document.getElementById('cf-contacts');
@@ -19913,7 +19927,7 @@ function openCustomerModal(customer_id, readonly) {
             // Basic fields
             ['customer','customer_full','customer_full_en','customer_tel','customer_fax','customer_fax2','customer_zip','customer_address','tax_id',
              'quote_method','payment_method','net_days','bank_name','bank_branch','bank_account',
-             'billing_contact','invoice_email','invoice_recipient','invoice_dept'].forEach(function(f){
+             'billing_contact','invoice_email','invoice_recipient','invoice_dept','customer_email'].forEach(function(f){
                 var el = document.getElementById('cf-'+f);
                 if (el) el.value = d[f]||'';
             });
@@ -20059,6 +20073,7 @@ function submitCustomerForm() {
         net_days:         gv('cf-net_days'),
         net_unit:         gv('cf-net_unit'),
         net_months:       gv('cf-net_months'),
+        customer_email:   gv('cf-customer_email'),
         invoice_recipient: gv('cf-invoice_recipient'),
         invoice_dept:     gv('cf-invoice_dept'),
         shipping_req_none: gc('cf-shipping_req_none'),
