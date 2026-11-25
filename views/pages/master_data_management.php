@@ -283,6 +283,9 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
         <div class="cv-row">
             <?php cv_field('結帳模式', $cvSettleMap[$cv['settlement_mode']] ?? $cv['settlement_mode']);
                   cv_field('固定結帳日', $cv['settlement_day']);
+                  if (($cv['settlement_mode'] ?? '') === 'VARIABLE' && !empty($cv['settle_cycle_n'])) {
+                      cv_field('結帳週期', '每 ' . (int)$cv['settle_cycle_n'] . ($cv['settle_cycle_unit'] === 'day' ? ' 天' : ' 週') . '結一次');
+                  }
                   $cvNu = $cv['net_unit'] ?? '';
                   cv_field($cvNu === 'month' || $cvNu === 'next' ? '月結方式' : '月結天數',
                            $cvNu === 'month' ? ('月結 ' . (int)$cv['net_days'] . ' 天')
@@ -4264,6 +4267,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $ex_sets = []; $ex_args = [];
             if ($payment_methods !== null) { $ex_sets[] = 'payment_methods=?'; $ex_args[] = implode(',', $payment_methods); }
             if ($net_unit !== null)        { $ex_sets[] = 'net_unit=?'; $ex_args[] = $net_unit; $ex_sets[] = 'net_months=?'; $ex_args[] = $net_months; }
+            // 不固定結帳：每 N 週／N 天結一次（沒送這兩欄＝保留原值；非「不固定」模式一律清空）
+            if ($canSettle && array_key_exists('settle_cycle_n', $_POST)) {
+                $scu = (string)($_POST['settle_cycle_unit'] ?? '');
+                $scn = max(0, min(365, intval($_POST['settle_cycle_n'] ?? 0)));
+                if ($settlement_mode !== 'VARIABLE' || !in_array($scu, ['week','day'], true) || $scn < 1) { $scu = null; $scn = null; }
+                $ex_sets[] = 'settle_cycle_n=?';    $ex_args[] = $scn;
+                $ex_sets[] = 'settle_cycle_unit=?'; $ex_args[] = $scu;
+            }
             if ($shipping_req_none !== null) { $ex_sets[] = 'shipping_req_none=?'; $ex_args[] = $shipping_req_none; }
             foreach (['invoice_recipient' => 100, 'invoice_dept' => 100, 'customer_email' => 255] as $exf => $exmax) {
                 if (array_key_exists($exf, $_POST)) { $ex_sets[] = "$exf=?"; $ex_args[] = mb_substr(trim((string)$_POST[$exf]), 0, $exmax); }
@@ -10905,27 +10916,18 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
             <div class="id-hint" id="cf-day-hint"></div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-4" id="cf-cycle-group" style="display:none;">
         <div class="form-group">
-            <label>月結天數／次月結</label>
+            <label>結帳週期（不固定）</label>
             <div style="display:flex;gap:4px;align-items:center;">
-                <select class="form-control" id="cf-net_unit" name="net_unit" style="width:96px;flex:none;padding-left:6px;padding-right:2px;" onchange="onNetUnitChange()" <?= $mdSettleEdit?'':'disabled' ?>>
-                    <option value="days">依天數</option>
-                    <option value="month">月結</option>
-                    <option value="next">次月結</option>
+                <span style="white-space:nowrap;">每</span>
+                <input type="number" class="form-control" id="cf-settle_cycle_n" name="settle_cycle_n" placeholder="例：2" min="1" max="365" style="width:80px;flex:none;" <?= $mdSettleEdit?'':'disabled' ?>>
+                <select class="form-control" id="cf-settle_cycle_unit" name="settle_cycle_unit" style="width:80px;flex:none;padding-left:6px;padding-right:2px;" <?= $mdSettleEdit?'':'disabled' ?>>
+                    <option value="week">週</option>
+                    <option value="day">天</option>
                 </select>
-                <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdSettleEdit?'':'disabled' ?>>
+                <span style="white-space:nowrap;">結一次</span>
             </div>
-            <div class="id-hint" id="cf-net-hint" style="display:none;"></div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="form-group">
-            <label style="display:block;">接受扣%</label>
-            <label style="font-weight:normal;cursor:pointer;padding-top:5px;">
-                <input type="checkbox" id="cf-allow_deduct" name="allow_deduct" value="1" style="margin-right:6px;" <?= $mdSettleEdit?'':'disabled' ?>>
-                同意扣款百分比
-            </label>
         </div>
     </div>
 </div>
@@ -10977,9 +10979,34 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div>
 <?php endif; ?>
 
-<?php if ($mdQuoteMView || $mdPaytermView): ?>
+<?php if ($mdQuoteMView || $mdPaytermView || $mdSettleView): ?>
 <div class="form-section-title"><i class="fa fa-money"></i> 報價 / 收款方式</div>
 <div class="row">
+    <?php if ($mdSettleView): ?>
+    <div class="col-md-4">
+        <div class="form-group">
+            <label>月結天數／次月結<?= $mdSettleEdit ? '' : '（唯讀）' ?></label>
+            <div style="display:flex;gap:4px;align-items:center;">
+                <select class="form-control" id="cf-net_unit" name="net_unit" style="width:96px;flex:none;padding-left:6px;padding-right:2px;" onchange="onNetUnitChange()" <?= $mdSettleEdit?'':'disabled' ?>>
+                    <option value="days">依天數</option>
+                    <option value="month">月結</option>
+                    <option value="next">次月結</option>
+                </select>
+                <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdSettleEdit?'':'disabled' ?>>
+            </div>
+            <div class="id-hint" id="cf-net-hint" style="display:none;"></div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="form-group">
+            <label style="display:block;">接受扣%</label>
+            <label style="font-weight:normal;cursor:pointer;padding-top:5px;">
+                <input type="checkbox" id="cf-allow_deduct" name="allow_deduct" value="1" style="margin-right:6px;" <?= $mdSettleEdit?'':'disabled' ?>>
+                同意扣款百分比
+            </label>
+        </div>
+    </div>
+    <?php endif; ?>
     <?php if ($mdQuoteMView): ?>
     <div class="col-md-3">
         <div class="form-group">
@@ -19807,6 +19834,8 @@ function onSettlementModeChange(val) {
     var dg = document.getElementById('cf-day-group');
     var exBtn = document.getElementById('cf-exception-btn');
     dg.style.display = (val==='FIXED') ? '' : 'none';
+    var cg = document.getElementById('cf-cycle-group');
+    if (cg) cg.style.display = (val==='VARIABLE') ? '' : 'none';
     if (exBtn) exBtn.style.display = (val!=='VARIABLE') ? '' : 'none';
     updateSettlementDayHint();
 }
@@ -20008,6 +20037,9 @@ function openCustomerModal(customer_id, readonly) {
             var mode = d.settlement_mode||'FIXED';
             document.getElementById('cf-settlement_mode').value = mode;
             document.getElementById('cf-settlement_day').value  = d.settlement_day||'25';
+            var scn = document.getElementById('cf-settle_cycle_n'), scu = document.getElementById('cf-settle_cycle_unit');
+            if (scn) scn.value = d.settle_cycle_n || '';
+            if (scu) scu.value = (d.settle_cycle_unit === 'day') ? 'day' : 'week';
             onSettlementModeChange(mode);
             updateSettlementDayHint();
             var slEl = document.getElementById('cf-settle-last');
@@ -20113,6 +20145,8 @@ function submitCustomerForm() {
         is_inactive:      gc('cf-is_inactive'),
         settlement_mode:  gv('cf-settlement_mode'),
         settlement_day:   gv('cf-settlement_day'),
+        settle_cycle_n:   gv('cf-settle_cycle_n'),
+        settle_cycle_unit: gv('cf-settle_cycle_unit'),
         industries:       gv('cf-industries'),
         industry_subs:    gv('cf-industry-subs'),
         // Extended

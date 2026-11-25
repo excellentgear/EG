@@ -62,6 +62,8 @@ function eg_party_ensure_schema(PDO $db): void
                             'payment_methods'   => "VARCHAR(100) NULL COMMENT '收款方式（多選，逗號分隔，含附回郵）；payment_method 仍存第一個實際收款方式供舊程式使用'",
                             'net_unit'          => "VARCHAR(10) NULL COMMENT '月結方式 days=依天數 months=次月結N個月'",
                             'net_months'        => "SMALLINT NULL COMMENT '次月結幾個月（net_unit=months 時有值，net_days 同步存 月數*30）'",
+                            'settle_cycle_n'    => "SMALLINT NULL COMMENT '不固定結帳：每幾週／幾天結一次'",
+                            'settle_cycle_unit' => "VARCHAR(5) NULL COMMENT '不固定結帳週期單位 week／day'",
                             'customer_email'    => "VARCHAR(255) NULL COMMENT '公司電子信箱（可多個，分號或空白分隔）'",
                             'invoice_recipient' => "VARCHAR(100) NULL COMMENT '發票收件人'",
                             'invoice_dept'      => "VARCHAR(100) NULL COMMENT '發票收件部門'",
