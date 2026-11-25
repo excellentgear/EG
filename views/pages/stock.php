@@ -666,6 +666,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 客戶：即時查料號目前綁定的客戶（覆蓋 si.* 帶出的舊快照 client_name/client_id），放在 si.* 之後讓同名欄位以此為準
             $clpJoin = $hasDsid ? "LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id" : "";
             $liveClientSel = $hasDsid ? "clp.customer AS client_name, dsp.Customer_Id AS client_id," : "";
+            // 料號名稱：有綁料號ID者一律顯示料號主檔目前的名稱（庫存上的 d_id 只是建立當時的文字快照）；原文字另存 stock_d_id
+            $livePartSel = $hasDsid ? "COALESCE(dsp.D_Setting_Id, si.d_id) AS d_id, si.d_id AS stock_d_id," : "";
             $labelsSubSql = <<<'LBLSQL'
 (SELECT GROUP_CONCAT(
      CONCAT(l.label_id,'|',l.label_name,'|',l.input_type,'|',COALESCE(m.input_value,''),'|',l.has_draw_lathe,'|',COALESCE(CAST(m.draw_dim AS CHAR),''),'|',COALESCE(CAST(m.lathe_dim AS CHAR),''),'|',COALESCE((SELECT GROUP_CONCAT(CONCAT(ds.sub_name,'§',COALESCE(slm.input_value,''),'§',COALESCE(CAST(slm.value_min AS CHAR),''),'§',COALESCE(CAST(slm.value_max AS CHAR),''),'§',COALESCE(ds.is_range,0),'§',COALESCE(ds.has_tolerance,0),'§',COALESCE(CAST(slm.tol_upper AS CHAR),''),'§',COALESCE(CAST(slm.tol_lower AS CHAR),''),'§',COALESCE(ds.is_dimension,0),'§',COALESCE(ds.is_qty_dim,0),'§',COALESCE(ds.prefix_char,''),'§',COALESCE(ds.suffix_char,''),'§',COALESCE(CAST(slm.qty AS CHAR),''),'§',COALESCE(ds.is_imperial_dim,0),'§',COALESCE(ds.is_enum,0),'§',COALESCE(ds.hide_name_in_display,0),'§',COALESCE(ds.is_countersink,0),'§',COALESCE(ds.has_draw_lathe_depth,0),'§',COALESCE(CAST(slm.draw_dim AS CHAR),''),'§',COALESCE(CAST(slm.lathe_dim AS CHAR),''),'§',COALESCE(ds.is_triple_dim,0),'§',COALESCE(ds.is_qty_triple_dim,0)) ORDER BY ds.sort_order SEPARATOR '~') FROM item_sub_label_map slm JOIN dict_label_sub ds ON ds.sub_id=slm.sub_id WHERE slm.parent_map_id=m.map_id AND ds.is_active=1),''),'|',COALESCE(l.is_range,0),'|',COALESCE(CAST(m.value_min AS CHAR),''),'|',COALESCE(CAST(m.value_max AS CHAR),''),'|',COALESCE(l.has_tolerance,0),'|',COALESCE(CAST(m.tol_upper AS CHAR),''),'|',COALESCE(CAST(m.tol_lower AS CHAR),''),'|',COALESCE(l.is_calc_diff,0),'|',COALESCE(l.calc_base_name,''),'|',COALESCE(l.calc_sub_name,''),'|',COALESCE(CAST(m.calc_value AS CHAR),''),'|',COALESCE(CAST(m.calc_value_min AS CHAR),''),'|',COALESCE(CAST(m.calc_value_max AS CHAR),''),'|',COALESCE(l.is_dimension,0),'|',COALESCE(l.is_qty_dim,0),'|',COALESCE(l.prefix_char,''),'|',COALESCE(l.suffix_char,''),'|',COALESCE(l.is_hidden_frontend,0),'|',COALESCE(CAST(m.qty AS CHAR),''),'|',COALESCE(l.lathe_optional,0),'|',COALESCE(l.has_draw_lathe_depth,0),'|',COALESCE(l.is_triple_dim,0))
@@ -717,6 +719,7 @@ LBLSQL;
                     $catSel $locSel $unitSel $groupSel
                     $specSel $labelsSel $gearSpecSel $drawSel $attachSel $partIdSel
                     $liveClientSel
+                    $livePartSel
                     ot.Order_oo AS order_no,
                     $calcPriceSel
                     ss2.safety_qty,
@@ -2435,6 +2438,63 @@ LBLSQL;
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
+    // ── 料號主檔補客戶：用庫存上「原記載客戶」找名稱完全相同的客戶（唯一一筆才綁） ──
+    if (!function_exists('stk_exact_customers')) {
+        function stk_exact_customers($pdo, $name) {
+            $name = trim((string)$name); if ($name === '') return [];
+            $q = $pdo->prepare("SELECT customer_id, customer FROM customer_list WHERE customer=? AND IFNULL(is_inactive,0)=0");
+            $q->execute([$name]);
+            return array_values(array_filter($q->fetchAll(PDO::FETCH_ASSOC), function($c) use ($name){ return (string)$c['customer'] === $name; }));
+        }
+        function stk_cust_do($pdo, $dsid, $custId, $dname, $userId) {
+            $pdo->prepare("UPDATE d_setting SET Customer_Id=?, Modified_By=?, Modified_At=NOW() WHERE d_id=? AND (Customer_Id IS NULL OR TRIM(Customer_Id)='')")->execute([$custId, $userId, $dsid]);
+            try {
+                $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator,created_at) VALUES ('update','stock_part_cust_bind',?,?,?,?,?,NOW())")
+                    ->execute([$dsid, $dname, json_encode(['Customer_Id'=>['from'=>null,'to'=>$custId]], JSON_UNESCAPED_UNICODE), $userId, $_SESSION['userName'] ?? '']);
+            } catch(Exception $e2){}
+        }
+    }
+    if ($_POST['action'] === 'bind_part_customer') {
+        try {
+            stk_need('stock_unbound_check');
+            $sid = intval($_POST['stock_item_id'] ?? 0); $pickC = trim((string)($_POST['customer_id'] ?? ''));
+            $st = $pdo->prepare("SELECT si.stock_item_id, si.client_name, si.d_setting_id, ds.d_id AS ds_pk, ds.D_Setting_Id AS ds_name, ds.Customer_Id AS ds_cust
+                                 FROM stock_items si LEFT JOIN d_setting ds ON ds.d_id=si.d_setting_id WHERE si.stock_item_id=? AND si.is_active=1");
+            $st->execute([$sid]); $r = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$r || $r['ds_pk'] === null) throw new Exception('這筆沒有綁定有效的料號ID，請先綁定料號');
+            if (trim((string)$r['ds_cust']) !== '') throw new Exception('這個料號已經有客戶，請重新整理');
+            $cands = stk_exact_customers($pdo, $r['client_name']);
+            if ($pickC !== '') { $ok = false; foreach ($cands as $c) if ((string)$c['customer_id'] === $pickC) $ok = true; if (!$ok) throw new Exception('客戶名稱與庫存原記載的客戶不完全相同'); }
+            elseif (count($cands) === 1) $pickC = (string)$cands[0]['customer_id'];
+            else throw new Exception(count($cands) === 0 ? '客戶資料表中找不到名稱與「'.$r['client_name'].'」完全相同的客戶' : '名稱相同的客戶有多筆，請到主檔管理處理');
+            $pdo->beginTransaction(); stk_cust_do($pdo, intval($r['ds_pk']), $pickC, $r['ds_name'], $userId); $pdo->commit();
+            echo json_encode(['success'=>true]);
+        } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+    // ── 一鍵補客戶：以庫存原記載客戶名稱完全相同的客戶，補到「已綁料號但料號主檔沒客戶」者；
+    //    同一個料號的庫存若記載了不同客戶（互相衝突）一律不動 ──
+    if ($_POST['action'] === 'auto_bind_customer') {
+        try {
+            stk_need('stock_unbound_check');
+            $rows = $pdo->query("SELECT si.client_name, ds.d_id AS ds_pk, ds.D_Setting_Id AS ds_name FROM stock_items si JOIN d_setting ds ON ds.d_id=si.d_setting_id
+                                 WHERE si.is_active=1 AND (ds.Customer_Id IS NULL OR TRIM(ds.Customer_Id)='')")->fetchAll(PDO::FETCH_ASSOC);
+            $byPart = [];
+            foreach ($rows as $r) { $byPart[$r['ds_pk']]['name'] = $r['ds_name']; $byPart[$r['ds_pk']]['cl'][trim((string)$r['client_name'])] = true; }
+            $bound = 0; $conflict = 0; $none = 0;
+            $pdo->beginTransaction();
+            foreach ($byPart as $pk => $info) {
+                $names = array_keys($info['cl']);
+                if (count($names) !== 1) { $conflict++; continue; }
+                $cands = stk_exact_customers($pdo, $names[0]);
+                if (count($cands) !== 1) { $none++; continue; }
+                stk_cust_do($pdo, intval($pk), (string)$cands[0]['customer_id'], $info['name'], $userId); $bound++;
+            }
+            $pdo->commit();
+            echo json_encode(['success'=>true,'bound'=>$bound,'conflict'=>$conflict,'none'=>$none]);
+        } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
     // ── 一鍵綁定：所有「需要綁定」的庫存中，完全同名唯一一筆者自動綁定（其餘不動） ──
     if ($_POST['action'] === 'auto_bind_unique') {
         try {
@@ -2495,6 +2555,7 @@ LBLSQL;
                     foreach ($cands as $c) { if ($r['old_client'] !== null && $r['old_client'] !== '' && (string)$c['client_name'] === (string)$r['old_client']) $match[] = $c['d_id']; }
                     $r['suggest'] = count($match) === 1 ? $match[0] : null;
                     $r['candidates'] = $cands;
+                    $r['cust_cands'] = $r['kind'] === 'nocust' ? stk_exact_customers($pdo, $r['old_client']) : [];
                     unset($r['ds_pk']);
                     $out[] = $r;
                 }
@@ -5008,6 +5069,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
        <button class="btn btn-xs" style="background:#16a085;color:#fff;" onclick="bindSelectAllSuggested()"><i class="fa fa-check-square-o"></i> 全選有建議的</button>
        <button class="btn btn-xs" style="background:#95a5a6;color:#fff;" onclick="bindClearSel()"><i class="fa fa-square-o"></i> 全部取消</button>
        <button class="btn btn-xs" style="background:#F39C12;color:#fff;" onclick="autoBindUnique()" title="完全同名且唯一一筆者直接綁定"><i class="fa fa-magic"></i> 一鍵綁定唯一同名者</button>
+       <button class="btn btn-xs" style="background:#F39C12;color:#fff;" onclick="autoBindCustomer()" title="料號已綁定但主檔沒有客戶：依原記載客戶名稱完全相同者補客戶"><i class="fa fa-user-plus"></i> 一鍵補客戶（名稱完全相同）</button>
        <span id="bind-count" style="font-size:12px;color:#666;"></span>
        <button class="btn btn-sm" style="background:var(--accent);color:#fff;margin-left:auto;" onclick="submitBind()"><i class="fa fa-link"></i> 綁定選取的品項</button>
      </div>
@@ -8732,6 +8794,21 @@ function quickBindStock(sid, pick){
         }
     });
 }
+function bindPartCustomer(sid){
+    ajx({action:'bind_part_customer', stock_item_id:sid}, function(r){
+        if(!r.success){ toast(r.message||'綁定失敗','error'); return; }
+        toast('已把客戶補到料號主檔','success');
+        openBindModal(); loadBindSummary(); loadList(G.page);
+    });
+}
+function autoBindCustomer(){
+    if(!confirm('將依庫存「原記載客戶」，把名稱完全相同且唯一一筆的客戶，補到「已綁料號但料號主檔沒有客戶」的料號主檔上。\n同一料號的庫存若記載了不同客戶（衝突）、或找不到完全相同客戶者不動。\n這會修改料號主檔的客戶欄位，確定？')) return;
+    ajx({action:'auto_bind_customer'}, function(r){
+        if(!r.success){ toast(r.message||'失敗','error'); return; }
+        toast('已補客戶 '+r.bound+' 個料號；衝突略過 '+r.conflict+'、找不到完全相同客戶 '+r.none, 'success');
+        openBindModal(); loadBindSummary(); loadList(G.page);
+    });
+}
 function autoBindUnique(){
     if(!confirm('將自動綁定所有「完全同名且唯一一筆」的庫存品項（同名多筆、查無者不動）。\n只會補上／更換料號ID，不會更動數量與儲位。確定？')) return;
     ajx({action:'auto_bind_unique'}, function(r){
@@ -8759,7 +8836,7 @@ function renderBindTable(){
         var sel='';
         var kindTxt={unbound:'<span class="label label-default">未綁定</span>',dangling:'<span class="label label-danger">料號已不存在</span>',nocust:'<span class="label label-warning">主檔無客戶</span>'}[x.kind]||'';
         if(!cands.length){
-            sel='<span style="color:#DD5138;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> '+(x.kind==='unbound'?'查無此料號，請至基本設定內新增料號':'沒有「同名且有客戶」的其他料號可綁；請到主檔管理替該料號補客戶，或新增正確料號')+'</span>';
+            sel='<span style="color:#DD5138;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> '+(x.kind==='unbound'?'查無此料號，請至基本設定內新增料號':'沒有「同名且有客戶」的其他料號可綁；可用下方「綁定客戶」直接替該料號補客戶，或到主檔管理處理')+'</span>';
         }else{
             // 本頁不在 eg_input_rules.js 覆蓋範圍（列於 input_rules_baseline.txt），
             // 掛 data-eg-filter 會是死屬性；同名料號候選一般只有 2~3 筆，不需要篩選框。
@@ -8771,6 +8848,13 @@ function renderBindTable(){
             });
             sel+='</select>';
             if(cands.length>1) sel+='<div style="font-size:11px;color:#8a6d3b;margin-top:3px;">同名料號有 '+cands.length+' 筆，'+(x.suggest?'已依庫存原記載的客戶預選，請確認':'請確認要綁哪一筆')+'</div>';
+        }
+        // 已綁料號但料號主檔沒客戶：庫存原記載客戶若有名稱完全相同的客戶，可直接補到料號主檔
+        if(x.kind==='nocust'){
+            var cc=x.cust_cands||[];
+            if(cc.length===1) sel+='<div style="margin-top:6px;"><button class="btn btn-xs" style="background:#F39C12;color:#fff;" onclick="bindPartCustomer('+x.stock_item_id+')" title="把客戶補到這個料號主檔（所有用到此料號的地方都會帶出）"><i class="fa fa-link"></i> 綁定客戶：'+esc(cc[0].customer)+'</button></div>';
+            else if(cc.length>1) sel+='<div style="margin-top:6px;font-size:11px;color:#8a6d3b;">客戶資料表有 '+cc.length+' 筆同名客戶「'+esc(x.old_client||'')+'」，請到主檔管理處理</div>';
+            else if(x.old_client) sel+='<div style="margin-top:6px;font-size:11px;color:#DD5138;">客戶資料表找不到與「'+esc(x.old_client)+'」完全相同的客戶</div>';
         }
         var canChk=cands.length>0;
         h+='<tr>'
