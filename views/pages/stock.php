@@ -2383,6 +2383,78 @@ LBLSQL;
         exit;
     }
 
+    // ── 快速綁定（庫存列表／管理員）共用函式 ───────────────────────────────
+    // 「完全同名」的料號主檔候選（排除目前綁的那一筆）。SQL 比對不分大小寫，所以 PHP 再嚴格比一次。
+    if (!function_exists('stk_exact_cands')) {
+        function stk_exact_cands($pdo, $name, $curId) {
+            $q = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Revision, d.Remark, d.Customer_Id, c.customer AS client_name
+                                FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                                WHERE d.D_Setting_Id=? ORDER BY d.d_id");
+            $q->execute([$name]);
+            return array_values(array_filter($q->fetchAll(PDO::FETCH_ASSOC), function($c) use ($name, $curId){
+                return (string)$c['D_Setting_Id'] === (string)$name && intval($c['d_id']) !== intval($curId);
+            }));
+        }
+        // 這筆庫存目前是否「需要綁定」：沒綁／綁的主檔不存在／主檔沒有客戶
+        function stk_bind_state($pdo, $srow) {
+            $cur = intval($srow['d_setting_id']);
+            if ($cur <= 0) return 'unbound';
+            $q = $pdo->prepare("SELECT d_id, Customer_Id FROM d_setting WHERE d_id=?"); $q->execute([$cur]); $r = $q->fetch(PDO::FETCH_ASSOC);
+            if (!$r) return 'dangling';
+            return trim((string)$r['Customer_Id']) === '' ? 'nocust' : 'ok';
+        }
+        function stk_bind_do($pdo, $srow, $sid, $dsid, $userId) {
+            $pdo->prepare("UPDATE stock_items SET d_setting_id=?, Modified_By=?, Modified_At=NOW() WHERE stock_item_id=?")->execute([$dsid, $userId, $sid]);
+            try {
+                $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator,created_at) VALUES ('update','stock_part_bind',?,?,?,?,?,NOW())")
+                    ->execute([$sid, $srow['d_id'], json_encode(['d_setting_id'=>['from'=>($srow['d_setting_id'] ?: null),'to'=>$dsid]], JSON_UNESCAPED_UNICODE), $userId, $_SESSION['userName'] ?? '']);
+            } catch(Exception $e2){}
+        }
+    }
+    // ── 庫存列表快速綁定：只有「完全同名」唯一一筆時自動綁定；多筆回傳候選讓人挑 ──
+    if ($_POST['action'] === 'quick_bind_part') {
+        try {
+            stk_need('stock_unbound_check');
+            $sid = intval($_POST['stock_item_id'] ?? 0); $pick = intval($_POST['d_setting_id'] ?? 0);
+            $st = $pdo->prepare("SELECT stock_item_id, d_id, d_setting_id FROM stock_items WHERE stock_item_id=? AND is_active=1");
+            $st->execute([$sid]); $srow = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$srow) throw new Exception('查無此品項');
+            if (stk_bind_state($pdo, $srow) === 'ok') throw new Exception('這筆已正確綁定料號與客戶，請重新整理');
+            $cands = stk_exact_cands($pdo, $srow['d_id'], $srow['d_setting_id']);
+            if ($pick) {
+                $hit = null; foreach ($cands as $c) if (intval($c['d_id']) === $pick) $hit = $c;
+                if (!$hit) throw new Exception('目標料號不是與「'.$srow['d_id'].'」完全同名的料號');
+                $pdo->beginTransaction(); stk_bind_do($pdo, $srow, $sid, $pick, $userId); $pdo->commit();
+                echo json_encode(['success'=>true,'status'=>'bound','client_name'=>$hit['client_name']]); exit;
+            }
+            if (count($cands) === 0) { echo json_encode(['success'=>true,'status'=>'none']); exit; }
+            if (count($cands) === 1) {
+                $pdo->beginTransaction(); stk_bind_do($pdo, $srow, $sid, intval($cands[0]['d_id']), $userId); $pdo->commit();
+                echo json_encode(['success'=>true,'status'=>'bound','client_name'=>$cands[0]['client_name']]); exit;
+            }
+            echo json_encode(['success'=>true,'status'=>'choose','d_id'=>$srow['d_id'],'candidates'=>$cands]);
+        } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+    // ── 一鍵綁定：所有「需要綁定」的庫存中，完全同名唯一一筆者自動綁定（其餘不動） ──
+    if ($_POST['action'] === 'auto_bind_unique') {
+        try {
+            stk_need('stock_unbound_check');
+            $all = $pdo->query("SELECT si.stock_item_id, si.d_id, si.d_setting_id FROM stock_items si LEFT JOIN d_setting ds ON ds.d_id=si.d_setting_id
+                                WHERE si.is_active=1 AND (si.d_setting_id IS NULL OR si.d_setting_id=0 OR ds.d_id IS NULL OR ds.Customer_Id IS NULL OR TRIM(ds.Customer_Id)='')")->fetchAll(PDO::FETCH_ASSOC);
+            $bound = 0; $multi = 0; $none = 0;
+            $pdo->beginTransaction();
+            foreach ($all as $srow) {
+                $cands = stk_exact_cands($pdo, $srow['d_id'], $srow['d_setting_id']);
+                if (count($cands) === 1) { stk_bind_do($pdo, $srow, intval($srow['stock_item_id']), intval($cands[0]['d_id']), $userId); $bound++; }
+                elseif (count($cands) > 1) $multi++; else $none++;
+            }
+            $pdo->commit();
+            echo json_encode(['success'=>true,'bound'=>$bound,'multi'=>$multi,'none'=>$none]);
+        } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     // ── 料號綁定檢查（管理員）：列出未綁定料號ID的庫存品項＋完全同名的候選料號 ──────────
     if ($_POST['action'] === 'unbound_parts_list') {
         try {
@@ -4900,6 +4972,17 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
   </div>
 </div>
 
+<!-- ══ Modal: 庫存列表快速綁定（同名多筆時挑選） ══ -->
+<div class="modal fade" id="qbpModal" tabindex="-1" role="dialog">
+ <div class="modal-dialog" role="document" style="width:520px;max-width:96vw;">
+  <div class="modal-content">
+   <div class="modal-header"><button class="close" data-dismiss="modal"><span>&times;</span></button><h4 class="modal-title"><i class="fa fa-link"></i> 快速綁定料號</h4></div>
+   <div class="modal-body" id="qbp-body"></div>
+   <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>
+  </div>
+ </div>
+</div>
+
 <!-- ══ Modal: 料號綁定檢查 ══ -->
 <div class="modal fade" id="bindModal" tabindex="-1" role="dialog">
  <div class="modal-dialog" role="document" style="width:1000px;max-width:96vw;">
@@ -4914,6 +4997,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
        <button class="btn btn-xs" style="background:#16a085;color:#fff;" onclick="bindSelectAllSuggested()"><i class="fa fa-check-square-o"></i> 全選有建議的</button>
        <button class="btn btn-xs" style="background:#95a5a6;color:#fff;" onclick="bindClearSel()"><i class="fa fa-square-o"></i> 全部取消</button>
+       <button class="btn btn-xs" style="background:#F39C12;color:#fff;" onclick="autoBindUnique()" title="完全同名且唯一一筆者直接綁定"><i class="fa fa-magic"></i> 一鍵綁定唯一同名者</button>
        <span id="bind-count" style="font-size:12px;color:#666;"></span>
        <button class="btn btn-sm" style="background:var(--accent);color:#fff;margin-left:auto;" onclick="submitBind()"><i class="fa fa-link"></i> 綁定選取的品項</button>
      </div>
@@ -7466,7 +7550,9 @@ function renderTable(rows, page, ps){
         h+='<tr'+trClass+'>'
           +(G._canBatch?'<td style="text-align:center;"><input type="checkbox" class="list-item-chk" data-id="'+r.stock_item_id+'" data-did="'+esc(r.d_id)+'" data-client="'+esc(r.client_name||'')+'" onchange="updateListSelection()"></td>':'')
           +'<td>'+didCell+remarkStr+safeBadge+groupBadge+specLine+labelLine+'</td>'
-          +'<td style="font-size:12px;">'+esc(r.client_name||'—')+clientExtra+'</td>'
+          +'<td style="font-size:12px;">'+esc(r.client_name||'—')
+            +((!r.client_name&&hasF('stock_unbound_check'))?' <i class="fa fa-link" title="料號尚未綁定客戶，點此快速綁定（完全同名唯一一筆會自動綁定）" style="color:#F39C12;cursor:pointer;" onclick="quickBindStock('+r.stock_item_id+')"></i>':'')
+            +clientExtra+'</td>'
           +'<td>'+catBadge+'</td>'
           +'<td>'+locDisp+'</td>'
           +'<td style="text-align:center;"><span class="'+qc+'">'+qty+(unitStr?' '+unitStr:'')+'</span></td>'
@@ -8615,6 +8701,31 @@ function loadBindSummary(){
         BIND_ROWS.forEach(function(x){ var n=(x.candidates||[]).length; kc[x.kind]=(kc[x.kind]||0)+1; if(n===1||x.suggest)one++; else if(n>1)multi++; else none++; });
         if(!BIND_ROWS.length){ $('#bind-summary').html('<i class="fa fa-check-circle"></i> 全部品項都已綁定料號ID且有客戶').css('color','#16a085'); }
         else $('#bind-summary').html('需處理共 <b>'+BIND_ROWS.length+'</b> 筆（未綁定 '+kc.unbound+'、綁的料號已不存在 '+kc.dangling+'、料號主檔沒填客戶 '+kc.nocust+'）<br>可直接補綁 '+one+' 筆、同名多筆需自選 '+multi+' 筆、無可綁的料號 '+none+' 筆').css('color','var(--primary)');
+    });
+}
+// 庫存列表快速綁定（管理員）
+function quickBindStock(sid, pick){
+    var p={action:'quick_bind_part', stock_item_id:sid}; if(pick) p.d_setting_id=pick;
+    ajx(p, function(r){
+        if(!r.success){ toast(r.message||'綁定失敗','error'); loadList(G.page); return; }
+        if(r.status==='bound'){ $('#qbpModal').modal('hide'); toast('已綁定'+(r.client_name?'：'+r.client_name:'（該料號主檔沒有客戶）'),'success'); loadList(G.page); }
+        else if(r.status==='none'){ toast('料號資料表中找不到與此料號完全同名的料號，請先到基本設定新增','error'); }
+        else if(r.status==='choose'){
+            var h='<div style="font-size:12px;color:#8a6d3b;margin-bottom:8px;">「'+esc(r.d_id)+'」在料號資料表中有 '+r.candidates.length+' 筆完全同名，請挑一筆：</div>';
+            r.candidates.forEach(function(c){
+                var lbl=(c.client_name||'（無客戶）')+(c.Revision?'　版次'+c.Revision:'')+(c.Remark?'　'+c.Remark:'')+(c.Spec_No?'　'+c.Spec_No:'');
+                h+='<div style="margin-bottom:6px;"><button class="btn btn-sm btn-default" style="width:100%;text-align:left;" onclick="quickBindStock('+sid+','+c.d_id+')">'+esc(lbl)+'</button></div>';
+            });
+            $('#qbp-body').html(h); $('#qbpModal').modal('show');
+        }
+    });
+}
+function autoBindUnique(){
+    if(!confirm('將自動綁定所有「完全同名且唯一一筆」的庫存品項（同名多筆、查無者不動）。\n只會補上／更換料號ID，不會更動數量與儲位。確定？')) return;
+    ajx({action:'auto_bind_unique'}, function(r){
+        if(!r.success){ toast(r.message||'失敗','error'); return; }
+        toast('已綁定 '+r.bound+' 筆；同名多筆需自選 '+r.multi+' 筆、查無同名 '+r.none+' 筆', 'success');
+        openBindModal(); loadBindSummary(); loadList(G.page);
     });
 }
 function openBindModal(){
