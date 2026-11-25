@@ -2599,39 +2599,68 @@ function ia_case_calendar_sync(PDO $db, array $c, array $slots): int
     return count($made);
 }
 
-/** 通知單完成後：站內通知＋推播給每一位稽核員／陪檢員（內容只列他自己的場次） */
-function ia_case_notify_people(PDO $db, array $c, array $slots, int $fromUid): int
+/** 通知內容（每位收件人一份）：回傳 [uid => [lines...]], 表頭, 結尾 */
+function ia_case_notice_build(array $c, array $slots): array
 {
     $per = [];
     foreach ($slots as $s) {
         foreach (['aud' => '稽核員', 'esc' => '陪檢員'] as $k => $role) {
             foreach ($s[$k] as $u => $nm) {
-                $per[$u][] = eg_fmt_date($s['date']) . ' ' . $s['time'] . ($s['end'] !== '' ? '~' . $s['end'] : '') . "
-"
-                    . '　您的身分：' . $role . "
-"
-                    . '　受稽單位：' . implode('、', $s['units']) . ($s['sp'] !== '' ? '（' . $s['sp'] . '）' : '') . "
-"
-                    . '　稽核員：' . (implode('、', $s['aud']) ?: '（未指定）') . "
-"
+                $per[$u][] = eg_fmt_date($s['date']) . ' ' . $s['time'] . ($s['end'] !== '' ? '~' . $s['end'] : '') . "\n"
+                    . '　您的身分：' . $role . "\n"
+                    . '　受稽單位：' . implode('、', $s['units']) . ($s['sp'] !== '' ? '（' . $s['sp'] . '）' : '') . "\n"
+                    . '　稽核員：' . (implode('、', $s['aud']) ?: '（未指定）') . "\n"
                     . '　陪檢員：' . (implode('、', $s['esc']) ?: '（未指定）');
             }
         }
     }
     if (!empty($c['leader_id'])) $per[(int)$c['leader_id']][] = '您是本次稽核的稽核組長';
+    $hdr = '稽核期間：' . eg_fmt_date((string)$c['audit_from']) . ' ~ ' . eg_fmt_date((string)($c['audit_to'] ?: $c['audit_from']))
+         . ((string)($c['leader_name'] ?? '') !== '' ? "\n稽核組長：" . $c['leader_name'] : '') . "\n\n您的稽核時段：";
+    $tail = !empty($c['end_meet_date'])
+        ? ("\n結束會議：" . eg_fmt_date((string)$c['end_meet_date']) . ' ' . substr((string)$c['end_meet_start'], 0, 5)
+           . ((string)($c['end_meet_place'] ?? '') !== '' ? '　地點：' . $c['end_meet_place'] : ''))
+        : '';
+    return [$per, $hdr, $tail];
+}
+
+/** 把已發出的舊通知內容改成新格式（只改內容，不重發、不動已讀狀態）；回傳更新則數 */
+function ia_case_notice_refresh(PDO $db): int
+{
+    $n = 0;
+    $cs = $db->query("SELECT DISTINCT ref_id FROM live_event WHERE ref_type='IA_CASE_NOTICE'")->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($cs as $cid) {
+        $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([(int)$cid]);
+        $c = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$c) continue;
+        if (empty($c['leader_name']) && !empty($c['leader_id'])) {
+            $q = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $q->execute([(int)$c['leader_id']]);
+            $c['leader_name'] = (string)$q->fetchColumn();
+        }
+        [$per, $hdr, $tail] = ia_case_notice_build($c, ia_case_slots($db, $c));
+        $ev = $db->prepare("SELECT e.id, t.target_id FROM live_event e JOIN live_event_target t ON t.live_event_id=e.id
+                             WHERE e.ref_type='IA_CASE_NOTICE' AND e.ref_id=? AND t.target_type='user'");
+        $ev->execute([(int)$cid]);
+        foreach ($ev->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $lines = $per[(int)$r['target_id']] ?? null;
+            if (!$lines) continue;
+            $db->prepare("UPDATE live_event SET content=? WHERE id=?")
+               ->execute([$hdr . "\n" . implode("\n", $lines) . $tail, (int)$r['id']]);
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** 通知單完成後：站內通知＋推播給每一位稽核員／陪檢員（內容只列他自己的場次） */
+function ia_case_notify_people(PDO $db, array $c, array $slots, int $fromUid): int
+{
+    [$per, $hdr, $tail] = ia_case_notice_build($c, $slots);
     $n = 0;
     try {
         $no = (string)($c['case_no'] ?? '');
         $title = '稽核通知單 ' . $no . ' 已發出，請確認您的稽核時間';
-        $hdr = '稽核期間：' . eg_fmt_date((string)$c['audit_from']) . ' ~ ' . eg_fmt_date((string)($c['audit_to'] ?: $c['audit_from']))
-             . ((string)($c['leader_name'] ?? '') !== '' ? "
-稽核組長：" . $c['leader_name'] : '') . "
-
-您的稽核時段：";
-        $tail = !empty($c['end_meet_date'])
-            ? ("\n結束會議：" . eg_fmt_date((string)$c['end_meet_date']) . ' ' . substr((string)$c['end_meet_start'], 0, 5)
-               . ((string)($c['end_meet_place'] ?? '') !== '' ? '　地點：' . $c['end_meet_place'] : ''))
-            : '';
         $insE = $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
                               VALUES (CURDATE(), DATE_ADD(CURDATE(), INTERVAL 30 DAY), ?, ?, 0, ?, '內部稽核通知單', 1, 'IA_CASE_NOTICE', ?)");
         $insT = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')");
