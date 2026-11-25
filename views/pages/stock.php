@@ -4823,7 +4823,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
   <div style="display:flex;gap:12px;align-items:flex-start;">
     <div style="width:300px;flex-shrink:0;">
       <div class="setting-card">
-        <h5><i class="fa fa-list"></i> 盤點批次 <button class="btn btn-xs" style="background:var(--accent);color:#fff;" onclick="openCountModal()"><i class="fa fa-plus"></i> 建立</button></h5>
+        <h5><span id="count-sess-pager" style="margin-right:6px;white-space:nowrap;"></span><i class="fa fa-list"></i> 盤點批次 <button class="btn btn-xs" style="background:var(--accent);color:#fff;" onclick="openCountModal()"><i class="fa fa-plus"></i> 建立</button></h5>
         <div id="count-sessions"></div>
       </div>
     </div>
@@ -9572,7 +9572,13 @@ function loadCountSessions(){
         if(!r.data.length){$('#count-sessions').html('<div class="empty" style="padding:20px;"><i class="fa fa-inbox"></i><div style="font-size:12px;">尚無批次</div></div>');return;}
         var smap={draft:'草稿',in_progress:'進行中',completed:'已完成',closed:'已結案'};
         var scol={draft:'#888',in_progress:'#F39C12',completed:'#1ABB9C',closed:'#3498DB'};
-        var h=''; r.data.forEach(function(s){
+        // 每頁 5 筆，翻頁鈕在「盤點批次」標題左側
+        G._cntSess=r.data; var CNT_PS=5; var tp=Math.max(1,Math.ceil(r.data.length/CNT_PS));
+        G._cntPage=Math.min(Math.max(1,G._cntPage||1),tp);
+        $('#count-sess-pager').html(tp>1?'<button class="btn btn-xs btn-default" onclick="countSessPage(-1)"'+(G._cntPage<=1?' disabled':'')+'><i class="fa fa-chevron-left"></i></button>'
+            +'<span style="font-size:11px;color:#888;margin:0 4px;">'+G._cntPage+'/'+tp+'</span>'
+            +'<button class="btn btn-xs btn-default" onclick="countSessPage(1)"'+(G._cntPage>=tp?' disabled':'')+'><i class="fa fa-chevron-right"></i></button>':'');
+        var h=''; r.data.slice((G._cntPage-1)*CNT_PS,G._cntPage*CNT_PS).forEach(function(s){
             var pct=s.total_items>0?Math.round(s.counted_items/s.total_items*100):0;
             h+='<div class="sess-card'+(G.currentCountSession==s.session_id?' active':'')+'" id="sess-'+s.session_id+'">'
               +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">'
@@ -9591,6 +9597,7 @@ function loadCountSessions(){
         $('#count-sessions').html(h);
     });
 }
+function countSessPage(d){ G._cntPage=(G._cntPage||1)+d; loadCountSessions(); }
 function deleteCountSession(sid,name){
     if(!confirm('確定刪除盤點批次「'+name+'」？此操作不可復原，盤點明細也會一併刪除。')) return;
     ajx({action:'delete_count_session',session_id:sid},function(r){
