@@ -1514,6 +1514,12 @@ function _gear_da_expr($g, $dt) {
          . "     THEN $g.spec_spline_nominal_dia - 2 * $m"
          . " WHEN $g.spec_spline_std='DIN5480' AND ($g.spec_spline_nominal_dia IS NULL OR $g.spec_spline_nominal_dia<=0) AND $dt.spec_category='spline' AND $dt.type_name LIKE '%內%'"
          . "     THEN $m * $g.Teeth - 2 * $m * (1 + COALESCE($g.Profile_Shift_X,0))"
+         // ANSI B92.1 英制花鍵（Module 已由徑節換成 M＝25.4/P）：外花鍵 da＝大徑 (N+1)/P；
+         // 內花鍵 da＝小徑 (N-1)/P（B92.1 內花鍵小徑，30° 各配合型式皆同）。P/Ps（如 20/40）的 Ps 固定＝2P，不影響外徑。
+         . " WHEN $g.spec_spline_std='ANSI B92.1' AND $dt.spec_category='spline' AND $dt.type_name NOT LIKE '%內%'"
+         . "     THEN $m * ($g.Teeth + 1)"
+         . " WHEN $g.spec_spline_std='ANSI B92.1' AND $dt.spec_category='spline' AND $dt.type_name LIKE '%內%'"
+         . "     THEN $m * ($g.Teeth - 1)"
          . " ELSE $m * $g.Teeth / COS(RADIANS(COALESCE($g.Helix_Angle,0))) + 2 * $m * (1 + COALESCE($g.Profile_Shift_X,0))"
          . " END";
 }
@@ -2690,7 +2696,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '{spec_starts}'       => "COALESCE(CAST(NULLIF(g.spec_starts,0) AS CHAR),'')",
                 '{X_PART}'            => "IF(g.Profile_Shift_X IS NOT NULL AND g.Profile_Shift_X<>0, CONCAT('X',TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Profile_Shift_X AS CHAR)))), '')",
                 '{GRADE}'             => "IF(g.gear_quality_std IS NOT NULL AND g.gear_quality_std<>'', CONCAT(g.gear_quality_std,COALESCE(CAST(g.gear_quality_grade AS CHAR),'')), '')",
-                '{spec_chain_size}'   => "COALESCE(g.spec_chain_size,'')",
+                '{spec_chain_size}'   => "COALESCE(NULLIF(g.spec_chain_size,'custom'),'')",
                 '{spec_pitch}'        => "IF(g.spec_pitch IS NOT NULL AND g.spec_pitch>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_pitch AS CHAR))), '')",
                 '{spec_roller_dia}'   => "IF(g.spec_roller_dia IS NOT NULL AND g.spec_roller_dia>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_roller_dia AS CHAR))), '')",
                 '{spec_spline_type}'  => "COALESCE(g.spec_spline_type,'')",
@@ -3325,6 +3331,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
                 $pdo->prepare("UPDATE d_setting SET D_Setting_Id=?,Spec_No=?,Revision=?,Issue_Date=?,Type=?,Is_Assembly=?,workpiece_sub_type_id=?,Customer_Id=?,Remark=?,Weight_Kg=?,weight_source=?,weight_calc_json=?,Modified_By=?,Modified_At=NOW() WHERE d_id=?")
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid,$d_id]);
+                // 只是「大小寫」修正時，把報價單項目存的料號文字一起改成同樣寫法。
+                // quotation_item.product_id 是文字快照，不同步就會在報價單上繼續顯示舊大小寫。
+                // 刻意只處理純大小寫差異：真正改名的話 product_id 也被附件 linked_parts 等
+                // 以文字引用，連動範圍要另外評估，這裡不動。
+                $__oldPn = (string)($old_part_row['D_Setting_Id'] ?? '');
+                if ($__oldPn !== '' && $__oldPn !== (string)$D_Setting_Id && strcasecmp($__oldPn, (string)$D_Setting_Id) === 0) {
+                    $pdo->prepare("UPDATE quotation_item SET product_id=? WHERE d_setting_d_id=? AND product_id=?")
+                        ->execute([$D_Setting_Id, $d_id, $__oldPn]);
+                }
                 // 版次異動要留紀錄（使用者要求：主檔「版次」旁邊的紀錄清單要看得到誰改的）。
                 // 這裡只記旗標，實際寫入放到 commit() 之後——dwg_log_revision() 內部會跑
                 // dwg_ensure_schema() 的 ALTER TABLE，DDL 在 transaction 中會造成**隱式 commit**，
