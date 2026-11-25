@@ -4501,11 +4501,22 @@ LBLSQL;
             $typesIn=array_values(array_intersect(['in','out','count'],array_filter(explode(',',(string)($_POST['types']??'in,out,count')))));
             if(!$typesIn) $typesIn=['in','out','count'];
             $typeSql="'".implode("','",$typesIn)."'";
-            $cst=$pdo->prepare("SELECT COUNT(*) FROM stock_transactions st WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ($typeSql)");
-            $cst->execute([$dateFrom,$dateTo]); $total=intval($cst->fetchColumn());
+            // 料號關鍵字（模糊比對異動的料號文字；空白＝不篩）
+            $kw=trim((string)($_POST['keyword']??''));
+            $kwSt=$kw!==''?" AND st.d_id LIKE ?":""; $kwSt2=$kw!==''?" AND d_id LIKE ?":"";
+            $kwP=$kw!==''?['%'.addcslashes($kw,'%_\\').'%']:[];
+            // 客戶名稱（即時查料號目前綁定的客戶）
+            $cl=trim((string)($_POST['client']??''));
+            if($cl!==''){
+                $clEx=" AND EXISTS(SELECT 1 FROM stock_items sx JOIN d_setting dx ON dx.d_id=sx.d_setting_id JOIN customer_list cx ON cx.customer_id=dx.Customer_Id WHERE sx.stock_item_id=%T%.stock_item_id AND cx.customer LIKE ?)";
+                $kwSt.=str_replace('%T%','st',$clEx); $kwSt2.=str_replace('%T%','stock_transactions',$clEx);
+                $kwP[]='%'.addcslashes($cl,'%_\\').'%';
+            }
+            $cst=$pdo->prepare("SELECT COUNT(*) FROM stock_transactions st WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ($typeSql)$kwSt");
+            $cst->execute(array_merge([$dateFrom,$dateTo],$kwP)); $total=intval($cst->fetchColumn());
             // 客戶：即時查料號綁定客戶，不用 si.client_name 舊快照
-            $sql="SELECT st.txn_id,st.txn_type,st.txn_qty,st.txn_date,st.qty_before,st.qty_after,st.stock_item_id,st.d_id,st.remark,clp.customer AS client_name,si.storage_location,sl.location_code,cr_u.user_cname AS creator_name,COALESCE(sic.category_name,'') AS category_name,$deptSelR $userSelR (SELECT SUM(si2.qty) FROM stock_items si2 WHERE si2.d_id=st.d_id AND si2.is_active=1) AS total_d_id_qty FROM stock_transactions st LEFT JOIN stock_items si ON si.stock_item_id=st.stock_item_id LEFT JOIN stock_item_categories sic ON sic.category_id=si.item_type LEFT JOIN stock_locations sl ON sl.location_id=si.location_id LEFT JOIN user cr_u ON cr_u.id=st.Created_By LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id $deptJoinR $userJoinR WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ($typeSql) ORDER BY st.txn_date DESC,st.txn_id DESC LIMIT $ps OFFSET $offset";
-            $st2=$pdo->prepare($sql); $st2->execute([$dateFrom,$dateTo]); $rows=$st2->fetchAll(PDO::FETCH_ASSOC);
+            $sql="SELECT st.txn_id,st.txn_type,st.txn_qty,st.txn_date,st.qty_before,st.qty_after,st.stock_item_id,st.d_id,st.remark,clp.customer AS client_name,si.storage_location,sl.location_code,cr_u.user_cname AS creator_name,COALESCE(sic.category_name,'') AS category_name,$deptSelR $userSelR (SELECT SUM(si2.qty) FROM stock_items si2 WHERE si2.d_id=st.d_id AND si2.is_active=1) AS total_d_id_qty FROM stock_transactions st LEFT JOIN stock_items si ON si.stock_item_id=st.stock_item_id LEFT JOIN stock_item_categories sic ON sic.category_id=si.item_type LEFT JOIN stock_locations sl ON sl.location_id=si.location_id LEFT JOIN user cr_u ON cr_u.id=st.Created_By LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id $deptJoinR $userJoinR WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ($typeSql)$kwSt ORDER BY st.txn_date DESC,st.txn_id DESC LIMIT $ps OFFSET $offset";
+            $st2=$pdo->prepare($sql); $st2->execute(array_merge([$dateFrom,$dateTo],$kwP)); $rows=$st2->fetchAll(PDO::FETCH_ASSOC);
             // 盤點異動：備註「盤點調整(session:N)」改顯示盤點批次名稱
             $cntSids=[];
             foreach($rows as $i=>$row){
@@ -4536,8 +4547,8 @@ LBLSQL;
                     if(array_key_exists($key,$remarkMap)) $rows[$i]['remark']=$remarkMap[$key]; // 對應到需求單品項才覆蓋，否則保留原交易備註
                 }
             }
-            $ss=$pdo->prepare("SELECT txn_type,COUNT(*) AS cnt,SUM(ABS(txn_qty)) AS qty_sum FROM stock_transactions WHERE txn_date BETWEEN ? AND ? AND txn_type IN ('in','out','count') GROUP BY txn_type");
-            $ss->execute([$dateFrom,$dateTo]); $stats=['in_cnt'=>0,'in_qty'=>0,'out_cnt'=>0,'out_qty'=>0,'cnt_cnt'=>0,'cnt_diff'=>0];
+            $ss=$pdo->prepare("SELECT txn_type,COUNT(*) AS cnt,SUM(ABS(txn_qty)) AS qty_sum FROM stock_transactions WHERE txn_date BETWEEN ? AND ? AND txn_type IN ('in','out','count')$kwSt2 GROUP BY txn_type");
+            $ss->execute(array_merge([$dateFrom,$dateTo],$kwP)); $stats=['in_cnt'=>0,'in_qty'=>0,'out_cnt'=>0,'out_qty'=>0,'cnt_cnt'=>0,'cnt_diff'=>0];
             foreach($ss->fetchAll(PDO::FETCH_ASSOC) as $s){ if($s['txn_type']==='in'){$stats['in_cnt']=$s['cnt'];$stats['in_qty']=$s['qty_sum'];} if($s['txn_type']==='out'){$stats['out_cnt']=$s['cnt'];$stats['out_qty']=$s['qty_sum'];} if($s['txn_type']==='count'){$stats['cnt_cnt']=$s['cnt'];$stats['cnt_diff']=$s['qty_sum'];} }
             echo json_encode(['success'=>true,'rows'=>$rows,'total'=>$total,'pages'=>(int)ceil($total/$ps),'page'=>$page,'stats'=>$stats]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -5133,6 +5144,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
   </div>
   <!-- 類型篩選（預設全部顯示，可個別關閉） -->
   <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+    <input type="text" id="rpt-keyword" class="form-control input-sm" style="width:200px;margin-right:6px;" placeholder="料號搜尋（單一料號異動）" autocomplete="off" oninput="rptKeywordInput()">
+    <input type="text" id="rpt-client" class="form-control input-sm" style="width:160px;margin-right:6px;" placeholder="客戶名稱篩選" autocomplete="off" oninput="rptKeywordInput()">
     <span style="font-size:12px;color:#888;font-weight:600;">顯示：</span>
     <button type="button" class="btn btn-sm rpt-type-btn" data-type="count" onclick="toggleRptType(this)" style="border-radius:14px;">盤點</button>
     <button type="button" class="btn btn-sm rpt-type-btn" data-type="in" onclick="toggleRptType(this)" style="border-radius:14px;">入庫</button>
@@ -13102,6 +13115,8 @@ function rptTypeBtnPaint(){
         $(this).css(on?{background:col,color:'#fff',borderColor:col}:{background:'#fff',color:'#888',borderColor:'#ccc'});
     });
 }
+var _rptKwTimer=null;
+function rptKeywordInput(){ clearTimeout(_rptKwTimer); _rptKwTimer=setTimeout(function(){ loadDailyReport(1); },350); }
 function toggleRptType(btn){
     var t=$(btn).data('type');
     RPT_TYPES[t]=!RPT_TYPES[t];
@@ -13180,7 +13195,7 @@ function loadDailyReport(p){
     G.rpt.dateFrom=dates.from; G.rpt.dateTo=dates.to;
     if(!dates.from||!dates.to){ toast('請選擇日期範圍','error'); return; }
     $('#rpt-tbody').html('<tr><td colspan="14" class="text-center text-muted">載入中...</td></tr>');
-    ajx({action:'get_daily_report', date_from:dates.from, date_to:dates.to, page:G.rpt.page, page_size:G.rpt.pageSize||20, types:['count','in','out'].filter(function(k){return RPT_TYPES[k];}).join(',')}, function(r){
+    ajx({action:'get_daily_report', date_from:dates.from, date_to:dates.to, page:G.rpt.page, page_size:G.rpt.pageSize||20, types:['count','in','out'].filter(function(k){return RPT_TYPES[k];}).join(','), keyword:($('#rpt-keyword').val()||'').trim(), client:($('#rpt-client').val()||'').trim()}, function(r){
         if(!r.success){ toast(r.message||'載入失敗','error'); $('#rpt-tbody').html('<tr><td colspan="14" class="text-center text-danger">載入失敗</td></tr>'); return; }
         var s=r.stats||{};
         $('#rpt-in-cnt').text(fmt(s.in_cnt||0));
@@ -13189,7 +13204,7 @@ function loadDailyReport(p){
         $('#rpt-out-qty').text(fmt(s.out_qty||0));
         $('#rpt-cnt-cnt').text(fmt(s.cnt_cnt||0));
         var tb=$('#rpt-tbody'); tb.empty();
-        if(!r.rows||!r.rows.length){ tb.html('<tr><td colspan="14" class="text-center text-muted" style="padding:20px;">此期間無異動記錄</td></tr>'); $('#rpt-pager').html(''); return; }
+        if(!r.rows||!r.rows.length){ tb.html('<tr><td colspan="14" class="text-center text-muted" style="padding:20px;">此期間無異動記錄'+(($('#rpt-keyword').val()||'').trim()?'（料號：'+esc($('#rpt-keyword').val().trim())+'）':'')+'</td></tr>'); $('#rpt-pager').html(''); return; }
         r.rows.forEach(function(row){
             var isIn=row.txn_type==='in'; var isCnt=row.txn_type==='count'; var qty=parseFloat(row.txn_qty||0);
             var catBadge=row.category_name?'<small class="label label-default" style="font-size:10px;margin-left:3px;">'+esc(row.category_name)+'</small>':'';
@@ -13226,7 +13241,7 @@ function setRptPageSize(ps){
 function printDailyReport(){
     var dates=rptGetDates();
     var label=$('#rpt-period-label').text()||dates.from;
-    var title='庫存異動紀錄 '+label;
+    var title='庫存異動紀錄 '+label+(($('#rpt-keyword').val()||'').trim()?'　料號：'+$('#rpt-keyword').val().trim():'');
     // 重新建立列印表格（含重命名欄位）
     var thead='<tr><th>異動日期</th><th>類型</th><th>料號</th><th>種類</th><th>客戶</th><th>儲位</th>'
         +'<th>數量</th><th>異動前</th><th>異動後</th><th>料號總庫存</th>'
