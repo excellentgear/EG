@@ -2606,17 +2606,14 @@ function ia_case_notice_build(array $c, array $slots): array
     foreach ($slots as $s) {
         foreach (['aud' => '稽核員', 'esc' => '陪檢員'] as $k => $role) {
             foreach ($s[$k] as $u => $nm) {
-                $per[$u][] = eg_fmt_date($s['date']) . ' ' . $s['time'] . ($s['end'] !== '' ? '~' . $s['end'] : '') . "\n"
-                    . '　您的身分：' . $role . "\n"
-                    . '　受稽單位：' . implode('、', $s['units']) . ($s['sp'] !== '' ? '（' . $s['sp'] . '）' : '') . "\n"
-                    . '　稽核員：' . (implode('、', $s['aud']) ?: '（未指定）') . "\n"
-                    . '　陪檢員：' . (implode('、', $s['esc']) ?: '（未指定）');
+                // 時段明細不放在通知文字裡（通知頁下方有稽核時程表，被通知者的列標色）
+                if (!isset($per[$u])) $per[$u] = [];
             }
         }
     }
     if (!empty($c['leader_id'])) $per[(int)$c['leader_id']][] = '您是本次稽核的稽核組長';
     $hdr = '稽核期間：' . eg_fmt_date((string)$c['audit_from']) . ' ~ ' . eg_fmt_date((string)($c['audit_to'] ?: $c['audit_from']))
-         . ((string)($c['leader_name'] ?? '') !== '' ? "\n稽核組長：" . $c['leader_name'] : '') . "\n\n您的稽核時段：";
+         . ((string)($c['leader_name'] ?? '') !== '' ? "\n稽核組長：" . $c['leader_name'] : '');
     $tail = !empty($c['end_meet_date'])
         ? ("\n結束會議：" . eg_fmt_date((string)$c['end_meet_date']) . ' ' . substr((string)$c['end_meet_start'], 0, 5)
            . ((string)($c['end_meet_place'] ?? '') !== '' ? '　地點：' . $c['end_meet_place'] : ''))
@@ -2643,8 +2640,8 @@ function ia_case_notice_refresh(PDO $db): int
                              WHERE e.ref_type='IA_CASE_NOTICE' AND e.ref_id=? AND t.target_type='user'");
         $ev->execute([(int)$cid]);
         foreach ($ev->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $lines = $per[(int)$r['target_id']] ?? null;
-            if (!$lines) continue;
+            if (!isset($per[(int)$r['target_id']])) continue;
+            $lines = $per[(int)$r['target_id']];
             $db->prepare("UPDATE live_event SET content=? WHERE id=?")
                ->execute([$hdr . "\n" . implode("\n", $lines) . $tail, (int)$r['id']]);
             $n++;
