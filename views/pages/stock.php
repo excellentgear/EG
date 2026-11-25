@@ -2607,6 +2607,21 @@ LBLSQL;
         exit;
     }
 
+    // ── 完成盤點：刪除本批次中「未盤點」的明細（不動已盤點資料與庫存） ──
+    if ($_POST['action'] === 'finish_count_session') {
+        try {
+            stk_need('stock_count');
+            $sid=intval($_POST['session_id']??0); if(!$sid) throw new Exception('未指定');
+            $c=$pdo->prepare("SELECT COUNT(*) FROM stock_count_details WHERE session_id=? AND counted_qty IS NOT NULL");
+            $c->execute([$sid]);
+            if(intval($c->fetchColumn())===0) throw new Exception('此批次尚無任何盤點資料，不能完成（避免整批被清空）');
+            $d=$pdo->prepare("DELETE FROM stock_count_details WHERE session_id=? AND counted_qty IS NULL");
+            $d->execute([$sid]);
+            echo json_encode(['success'=>true,'deleted'=>$d->rowCount()]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     // ── 隨機盤點抽樣 ──────────────────────────────
     if ($_POST['action'] === 'random_count_sample') {
         try {
@@ -9687,6 +9702,7 @@ function renderCountDetail(sid,rows){
      +'<span style="font-size:12px;background:#fef3e2;color:#a06000;padding:2px 8px;border-radius:20px;">未盤：'+uncounted+'</span>'
      +'<span style="font-size:12px;background:#fde8e8;color:#a52020;padding:2px 8px;border-radius:20px;">差異：'+hasDiff+'</span>'
      +(notAdj>0?'<button class="btn btn-sm" style="background:var(--primary);color:#fff;font-size:12px;height:28px;" onclick="applyAdj('+sid+')"><i class="fa fa-check"></i> 套用調整</button>':'')
+     +((G._canCount&&uncounted>0&&uncounted<rows.length)?'<button class="btn btn-sm" style="background:var(--accent);color:#fff;font-size:12px;height:28px;" onclick="finishCount('+sid+','+uncounted+')" title="刪除本批次中未盤點的明細，只保留已盤點的資料"><i class="fa fa-flag-checkered"></i> 完成</button>':'')
      // A 或 CRUD：拆分工具列
      +((G._canCount&&G._canSplit)
          ? '<span id="count-split-toolbar" style="display:none;align-items:center;gap:4px;">'
@@ -9905,6 +9921,14 @@ function inputCount(did, sysQty){
         if(rem) $('#rem-'+did).text(rem);
         $('#cr-'+did).removeClass('cnt-row-ok cnt-row-diff').addClass(parseFloat(diff)===0?'cnt-row-ok':'cnt-row-diff');
         toast('已記錄','success');
+    });
+}
+function finishCount(sid,uncounted){
+    if(!confirm('確定完成本次盤點？\n將永久刪除本批次中「未盤點」的 '+uncounted+' 筆明細，只保留已盤點的資料。\n（不會更動庫存數量；尚未套用的調整仍需按「套用調整」）')) return;
+    ajx({action:'finish_count_session',session_id:sid},function(r){
+        if(!r.success){toast(r.message||'失敗','error');return;}
+        toast('已完成，刪除 '+r.deleted+' 筆未盤點明細','success');
+        loadCountDetails(sid);
     });
 }
 function applyAdj(sid){
