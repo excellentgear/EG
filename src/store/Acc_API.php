@@ -748,10 +748,14 @@ case 'vch_create': {
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $sel = json_decode($_POST['sel'] ?? '[]', true);
     if (!is_array($sel)) acc_err('資料格式錯誤');
+    $extra = json_decode((string)($_POST['extra'] ?? '[]'), true);
+    if (!is_array($extra)) $extra = [];
+    foreach ($extra as &$ex) { if (isset($ex['name'])) $ex['name'] = acc_u8((string)$ex['name']); if (isset($ex['memo'])) $ex['memo'] = acc_u8((string)$ex['memo']); }
+    unset($ex);
     $r = acc_voucher_create($db, (string)($_POST['side'] ?? 'ar'), acc_u8(trim((string)($_POST['party_id'] ?? ''))),
         trim((string)($_POST['bm'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
         acc_u8((string)($_POST['voucher_no'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), $sel,
-        (string)($_SESSION['userName'] ?? $uid));
+        (string)($_SESSION['userName'] ?? $uid), $extra);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }
@@ -778,6 +782,40 @@ case 'vch_update': {
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $r = acc_voucher_update($db, (int)($_POST['voucher_id'] ?? 0), acc_u8((string)($_POST['voucher_no'] ?? '')),
         trim((string)($_POST['voucher_date'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_accounts': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    acc_voucher_ensure($db);
+    acc_out(['accounts' => acc_vch_accounts($db), 'cfg' => acc_vch_acct_cfg($db), 'labels' => acc_vch_acct_labels(),
+             'slots' => acc_vch_sign_slots(), 'tax_rate' => acc_tax_rate($db), 'me' => (string)($_SESSION['userName'] ?? ''),
+             'company' => (string)$db->query("SELECT COALESCE(NULLIF(customer_full,''),customer) FROM customer_list WHERE is_own_company=1 ORDER BY customer_id LIMIT 1")->fetchColumn()]);
+}
+
+case 'vch_acct_cfg_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改科目設定', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $in = json_decode((string)($_POST['cfg'] ?? '{}'), true);
+    if (!is_array($in)) acc_err('資料格式錯誤');
+    foreach ($in as &$x) if (isset($x['name'])) $x['name'] = acc_u8((string)$x['name']);
+    unset($x);
+    $r = acc_vch_acct_cfg_save($db, $in, (string)$uid, (string)($_SESSION['userName'] ?? ''));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_sign': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $mode = ($_POST['mode'] ?? 'sign') === 'clear' ? 'clear' : 'sign';
+    if ($mode === 'clear' && !$perms['canAdmin']) acc_err('只有會計管理員可以取消簽章', 403);
+    $r = acc_voucher_sign($db, (int)($_POST['voucher_id'] ?? 0), (string)($_POST['slot'] ?? ''), $mode, (string)($_SESSION['userName'] ?? $uid));
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }
