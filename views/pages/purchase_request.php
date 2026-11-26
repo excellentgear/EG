@@ -677,12 +677,13 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div class="m-head"><span>發票與付款</span><span class="m-close" onclick="closeMask('mAcct')">✕</span></div>
     <div class="m-body">
         <div class="pq-grid">
-            <div class="pq-fld"><label>發票號碼</label><input type="text" id="aInvNo" maxlength="10" autocomplete="off" style="text-transform:uppercase;">
+            <div class="pq-fld"><label>發票號碼</label><input type="text" id="aInvNo" maxlength="11" autocomplete="off" style="text-transform:uppercase;">
                 <span class="hint" id="aInvErr"></span></div>
             <div class="pq-fld"><label>發票日期</label><input type="date" id="aInvDate"></div>
-            <div class="pq-fld"><label>付款狀態</label><select id="aPayStatus"><option value="unpaid">未付</option><option value="paid">已付</option></select></div>
+            <div class="pq-fld"><label>付款狀態</label><div id="aPayInfo" style="height:30px;line-height:30px;font-weight:bold;"></div>
+                <span class="hint">付款由會計「付款沖帳」決定，這裡只顯示結果</span></div>
         </div>
-        <p class="hint">發票與付款可以事後補；未付款的單會集中在「未付款」分頁。</p>
+        <p class="hint">存了發票之後，系統會自動建立該廠商當月的應付對帳並鎖帳、登錄廠商發票，會計可以直接開傳票。發票可以事後補。</p>
     </div>
     <div class="m-foot">
         <button class="pq-btn" onclick="closeMask('mAcct')">取消</button>

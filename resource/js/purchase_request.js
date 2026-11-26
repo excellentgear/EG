@@ -1128,7 +1128,13 @@ function renderDetail(q) {
     if (q.can.sign)    f += '<button class="pq-btn warm" id="dtSign"><i class="fa fa-pencil-square-o"></i> 簽核</button> ';
     if (q.can.order)   f += '<button class="pq-btn warm" id="dtOrder"><i class="fa fa-shopping-cart"></i> 已下單（有向廠商訂貨才需要）</button> ';
     if (q.can.receive) f += '<button class="pq-btn warm" id="dtRecv"><i class="fa fa-truck"></i> ' + (q.status === 'approved' ? '直接登錄到貨（沒有訂貨）' : '登錄到貨') + '</button> ';
-    if (q.can.account) f += '<button class="pq-btn" id="dtAcct"><i class="fa fa-file-text"></i> 發票／付款</button> ';
+    if (q.can.account) f += '<button class="pq-btn" id="dtAcct"><i class="fa fa-file-text"></i> 發票</button> ';
+    // 已有發票與廠商：給會計一個直接開傳票的入口（開到傳票頁，條件已帶好；權限由傳票頁自己把關）
+    if (q.invoice_no && q.invoice_date && q.vendor_id && !q.masked_vendor && META.perms && (META.perms.canBuy || META.perms.canAdmin)) {
+        f += '<a class="pq-btn warm" target="_blank" rel="noopener" href="../ACC/voucher.php?side=ap&bm=' + encodeURIComponent(String(q.invoice_date).substr(0, 7)) +
+             '&party=' + encodeURIComponent(q.vendor_id) + '&inv=' + encodeURIComponent(q.invoice_no) + '&idate=' + encodeURIComponent(q.invoice_date) +
+             '"><i class="fa fa-file-text-o"></i> 開傳票（會計）</a> ';
+    }
     if (q.can.close)   f += '<button class="pq-btn" id="dtClose">結案</button> ';
     $('#dtFoot').html(f);
 }
@@ -1713,15 +1719,18 @@ function saveRecv() {
 /* ── 記帳 / 簽核 ──────────────────────────── */
 function openAcct() {
     $('#aInvNo').val(CUR.invoice_no || ''); $('#aInvDate').val(CUR.invoice_date || '');
-    $('#aPayStatus').val(CUR.pay_status || 'unpaid'); checkInvNo();
+    $('#aPayInfo').text(CUR.masked_vendor ? '＊＊＊' : (CUR.pay_status === 'paid' ? '已付（會計已沖帳）' : '未付')); checkInvNo();
     openMask('mAcct');
 }
 /** 發票號碼：輸入當下轉大寫、去空白並即時檢查格式（2 碼英文＋8 碼數字） */
-function normInvNo() { return String($('#aInvNo').val() || '').toUpperCase().replace(/\s+/g, ''); }
+function normInvNo() {
+    var v = String($('#aInvNo').val() || '').toUpperCase().replace(/[\s-]+/g, '');
+    return v.length > 2 && /^[A-Z]{2}/.test(v) ? v.substr(0, 2) + '-' + v.substr(2) : v;   // 輸入到第 3 碼自動補連字號：AB-12345678
+}
 function checkInvNo() {
     var v = normInvNo(); $('#aInvNo').val(v);
-    var bad = v !== '' && !/^[A-Z]{2}\d{8}$/.test(v);
-    $('#aInvErr').text(bad ? '格式不正確：要是 2 碼英文加 8 碼數字，例如 AB12345678' : '').css('color', '#DD5138');
+    var bad = v !== '' && !/^[A-Z]{2}-\d{8}$/.test(v);
+    $('#aInvErr').text(bad ? '格式不正確：要是 2 碼英文加 8 碼數字，例如 AB-12345678' : '').css('color', '#DD5138');
     $('#aInvNo').css('border-color', bad ? '#DD5138' : '');
     return !bad;
 }
@@ -1730,8 +1739,12 @@ function saveAcct() {
     if (!checkInvNo()) { $('#aInvNo').focus(); return; }
     if (normInvNo() !== '' && !$('#aInvDate').val()) { alert('有發票號碼時請一併填發票日期（帳款月份要依發票日期判定）'); $('#aInvDate').focus(); return; }
     api('save_account', { req_id: CUR.req_id, invoice_no: normInvNo(), invoice_date: $('#aInvDate').val(),
-        pay_status: $('#aPayStatus').val() }, 'POST')
-    .done(function () { closeMask('mAcct'); reload(); loadBadges(); }).fail(fail);
+        }, 'POST')
+    .done(function (r) {
+        closeMask('mAcct'); reload(); loadBadges();
+        // 自動建立應付對帳的結果一定要講清楚（成功、或為什麼沒建），不然會計不知道要不要手動補
+        if (r.acc && r.acc.message) alert((r.acc.warn ? '發票已儲存。\n注意：' : '發票已儲存。\n') + r.acc.message);
+    }).fail(fail);
 }
 function openSign() {
     var q = CUR;

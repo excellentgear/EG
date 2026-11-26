@@ -1340,21 +1340,28 @@ case 'save_account': {
     if (!$perms['canBuy']) jerr('無採購作業權限', 403);
     $reqId = pint('req_id');
     $req = purchase_load_req($db, $reqId);
-    $payStatus = in_array(pv('pay_status', 'unpaid'), ['unpaid', 'paid'], true) ? pv('pay_status', 'unpaid') : 'unpaid';
-    // 發票號碼：一律轉大寫、去空白；格式＝2 碼英文＋8 碼數字（例 AB12345678），空白代表還沒有發票
-    $inv = strtoupper(preg_replace('/\s+/u', '', pv('invoice_no')));
-    if ($inv !== '' && !preg_match('/^[A-Z]{2}\d{8}$/', $inv)) jerr('發票號碼格式不正確：要是 2 碼英文加 8 碼數字，例如 AB12345678');
+    require_once __DIR__ . '/../common/acc_purc_invoice_lib.php';
+    // 發票號碼：大寫、2 碼英文＋8 碼數字，存成 AB-12345678（與會計應付對帳的廠商發票同一格式）；空白＝還沒有發票
+    $inv = acc_purc_invoice_norm(pv('invoice_no'));
+    if ($inv === null) jerr('發票號碼格式不正確：要是 2 碼英文加 8 碼數字，例如 AB-12345678');
     $invDate = pdate('invoice_date');
     if ($inv !== '' && !$invDate) jerr('有發票號碼時請一併填發票日期（帳款月份要依發票日期判定）');
     $db->beginTransaction();
-    // 付款日／付款方式不在這一頁維護：沒送就保留原值；改成已付而還沒有付款日時才補今天（資料庫日期）
-    $db->prepare("UPDATE purchase_request SET invoice_no=?, invoice_date=?, pay_status=?,
-                  pay_date=CASE WHEN ?='paid' THEN COALESCE(pay_date, CURDATE()) ELSE NULL END,
-                  pay_method=" . (isset($_POST['pay_method']) ? '?' : 'pay_method') . ", Modified_By=? WHERE req_id=?")
-       ->execute(array_merge([$inv ?: null, $invDate, $payStatus, $payStatus],
-                             isset($_POST['pay_method']) ? [pv('pay_method') ?: null] : [], [$uid, $reqId]));
+    // 付款狀態、付款日、付款方式都不在這裡改：付款以會計的付款沖帳為唯一真相（acc_purc_sync_pay_status 回寫）
+    $db->prepare("UPDATE purchase_request SET invoice_no=?, invoice_date=?, Modified_By=? WHERE req_id=?")
+       ->execute([$inv ?: null, $invDate, $uid, $reqId]);
     $db->commit();
-    jout([]);
+    // 有發票就自動接進會計的應付對帳（鎖帳＋登錄廠商發票）；失敗不影響發票已存
+    $acc = null;
+    if ($inv !== '') {
+        try { $acc = acc_purc_invoice_post($db, $reqId, ['id' => $uid, 'user_cname' => $uname]); }
+        catch (Throwable $e) {
+            error_log('acc_purc_invoice_post ' . $reqId . ': ' . $e->getMessage());
+            $acc = ['posted' => false, 'warn' => true, 'voucher_url' => null,
+                    'message' => '發票已儲存，但自動建立應付對帳時發生錯誤，請通知會計手動處理：' . $e->getMessage()];
+        }
+    }
+    jout(['acc' => $acc]);
 }
 
 case 'close_req': {
