@@ -1499,10 +1499,19 @@ case 'sheet_load': {
                 if (($l['src_type'] ?? '') !== 'SPLIT') $have[$l['src_type'] . '-' . (int)$l['src_id']] = true;
             }
             $srcKeys = [];
+            $zeroAdd = [];
             foreach ($src['lines'] as $l) {
                 $k = $l['src_type'] . '-' . (int)$l['src_id'];
                 $srcKeys[$k] = true;
-                if (!isset($have[$k])) $missing[] = $l;
+                if (isset($have[$k])) continue;
+                // 0 元明細：金額為 0 不影響任何合計，直接併進底稿（才看得到漏填單價的列）；其餘仍走「來源有、底稿沒有」提醒
+                if (abs((float)$l['orig_amount']) < 0.0001 && $sheet['status'] !== 'confirmed') $zeroAdd[] = $l; else $missing[] = $l;
+            }
+            foreach ($zeroAdd as $zl) {
+                $maxSo = null;
+                foreach ($sheet['lines'] as $sl) if ((string)$sl['doc_no'] === (string)$zl['doc_no']) $maxSo = max((float)$maxSo, (float)$sl['sort_order']);
+                $zl['sort_order'] = $maxSo !== null ? $maxSo + 1 : (float)$zl['sort_order'];
+                $sheet['lines'][] = $zl;
             }
             foreach ($sheet['lines'] as $l) {
                 if (($l['src_type'] ?? '') === 'SPLIT' || (int)$l['src_id'] <= 0) continue;
