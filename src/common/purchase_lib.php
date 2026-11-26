@@ -274,6 +274,13 @@ function purchase_ensure_schema(PDO $db): void
             $db->exec("UPDATE purchase_maint_type SET simple_form=1 WHERE maint_name='定期保養'");
         } catch (Throwable $e) { error_log('purchase ALTER maint simple_form: ' . $e->getMessage()); }
     }
+    // 申請日期（可補填過去日期＝補單）。舊單一次性以建立日回填
+    if (!$db->query("SHOW COLUMNS FROM purchase_request LIKE 'apply_date'")->fetch()) {
+        try {
+            $db->exec("ALTER TABLE purchase_request ADD COLUMN apply_date DATE NULL COMMENT '申請日期（早於建立日＝補單）'");
+            $db->exec("UPDATE purchase_request SET apply_date=DATE(Created_At) WHERE apply_date IS NULL");
+        } catch (Throwable $e) { error_log('purchase ALTER apply_date: ' . $e->getMessage()); }
+    }
     foreach ([
         'purchase_request'      => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
                                     'purpose_maint_id INT NULL', 'vehicle_mileage INT NULL', 'vehicle_mileage_date DATE NULL'],

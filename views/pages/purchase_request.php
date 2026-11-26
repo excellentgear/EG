@@ -158,7 +158,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 .sug{border:1px solid var(--pq-line);border-radius:4px;background:#FFFBF3;padding:6px 8px;font-size:12px;color:#8a5a1e;margin-top:4px;}
 .print-only{display:none;}
 @media print{
-  .pq-tabs,.pq-toolbar,.nav_menu,.left_col,footer,.pq-pager,.pq-role,.no-print{display:none !important;}
+  .pq-tabs,.pq-toolbar,.nav_menu,.left_col,footer,.pq-pager,.pq-role,.no-print,.pq-mask{display:none !important;}
   .right_col{margin-left:0 !important;padding:0 !important;}
   .print-only{display:block;}
   table.pq-table{font-size:11px;} .pq-wrap{border:none;}
@@ -298,6 +298,14 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                    第二層＝具「高階核准」角色者。門檻改動只影響之後才送簽的單。</p>
             </div>
             <div class="pq-sec" style="max-width:760px;">
+                <h5>列印表單綁定的 AS 文件</h5>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <span id="cfgAsLabel" class="hint">尚未綁定</span>
+                    <button class="pq-btn" id="btnCfgAs" type="button"><i class="fa fa-link"></i> 選擇 AS 文件</button>
+                </div>
+                <p class="hint">列印的表單名稱取自這份文件，頁尾右下角印文件編號（版次依申請日期回推）。</p>
+            </div>
+            <div class="pq-sec" style="max-width:760px;">
                 <h5>自動簽核的用途類別</h5>
                 <div id="cfgAutoTypes"></div>
                 <p class="hint">勾選的用途，採購詢完價後<b>不論金額都直接視為核准、不通知簽核者，也不通知送單人</b>。
@@ -392,6 +400,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <p class="hint" style="margin:4px 0 0;">選了訂單／BOM／料號，這筆花費才算得進該筆的成本；耗材、辦公用品請選「常備品補貨」。</p>
         </div>
         <div class="pq-grid">
+            <div class="pq-fld"><label>申請日期 <span id="rBackTag" style="display:none;background:#F0A24B;color:#fff;border-radius:8px;padding:0 8px;font-size:11px;">補單</span></label>
+                <input type="date" id="rApply"><span class="hint" id="rApplyHint">補過去的單可改日期，早於今天會標示為補單</span></div>
             <div class="pq-fld pq-req-detail"><label>希望到貨日</label><input type="date" id="rNeed"></div>
             <div class="pq-fld"><label>申請人／部門</label><input type="text" id="rWho" readonly style="background:#F5EEE2;"></div>
             <div class="pq-fld pq-req-detail"><label>急件</label>
@@ -861,6 +871,8 @@ $(document).ready(function () {
     $('#sidebar-menu').css('visibility', 'visible');
 });
 </script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_asdoc_picker.js') ?: time() ?>"></script>
 <script src="../../resource/js/purchase_request.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/purchase_request.js') ?: time() ?>"></script>
 </body>
 </html>

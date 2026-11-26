@@ -13,6 +13,7 @@ header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/purchase_lib.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';   // 列印綁定 AS 文件編號（ai-rules/16）
 
 function jout($a) { echo json_encode(array_merge(['ok' => true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = 400) { http_response_code($code); echo json_encode(['ok' => false, 'error' => $msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -82,7 +83,7 @@ case 'meta': {
         'perms' => $perms, 'role_label' => purchase_role_names($db, $uid, $perms),
         'features' => PURCHASE_FEATURES,
         'me' => ['id' => $uid, 'name' => $uname, 'dept_id' => $u['dept_id'], 'dept_name' => $u['dept_name']],
-        'today' => date('Y-m-d'),
+        'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn(),   // 用資料庫時間：PHP 是 UTC，凌晨會差一天
         'categories' => $cats, 'units' => $units, 'locations' => $locs, 'tags' => $tags,
         'thresholds' => ['l1' => $l1, 'l2' => $l2],
         'tax_types' => PURCHASE_TAX_TYPES, 'receive_modes' => PURCHASE_RECEIVE_MODES,
@@ -98,6 +99,9 @@ case 'meta': {
         $resp['attach_nas_writable'] = is_dir($nas) ? (bool)is_writable($nas) : false;
         $resp['attach_nas_exists']   = is_dir($nas);
         $resp['auto_approve_types']  = purchase_auto_approve_types($db);
+        $resp['as_docs']   = eg_asdoc_list($db);
+        $resp['as_doc_id'] = eg_asdoc_id($db, 'purchase_req');
+        $resp['as_doc']    = eg_asdoc_get($db, 'purchase_req');
     }
     jout($resp);
 }
@@ -114,6 +118,7 @@ case 'save_settings': {
         if (preg_match('#^https?://#i', $nasIn)) jerr('「實體存放路徑」要填磁碟或網路資料夾路徑（例 \\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購 或 \\\\server\\share\\採購），不是網址');
         purchase_set_setting($db, 'purchase_attach_nas_dir', $nasIn);
     }
+    if (isset($_POST['as_doc_id'])) eg_asdoc_save($db, 'purchase_req', (int)$_POST['as_doc_id'], $uname);
     // 自動簽核的用途類別：沒送這個欄位＝不動；送空陣列＝全部取消。代碼一律對照 PURCHASE_PURPOSE_TYPES 過濾
     if (isset($_POST['auto_approve_types'])) {
         $arr = json_decode((string)$_POST['auto_approve_types'], true);
@@ -899,8 +904,9 @@ case 'req_detail': {
         'quote'   => $perms['canBuy'] && in_array($req['status'], ['submitted', 'rejected'], true),
         'sign'    => purchase_can_sign($db, $req, $uid, $perms),
         'order'   => $perms['canBuy'] && $req['status'] === 'approved',
-        'receive' => $perms['canReceive'] && in_array($req['status'], ['ordered', 'partial'], true),
-        'account' => $perms['canBuy'] && in_array($req['status'], ['ordered', 'partial', 'received', 'closed'], true),
+        // 核准後可直接到貨：有些是直接去購買、並沒有向廠商訂貨，所以不強制先按「已下單」
+        'receive' => $perms['canReceive'] && in_array($req['status'], ['approved', 'ordered', 'partial'], true),
+        'account' => $perms['canBuy'] && in_array($req['status'], ['approved', 'ordered', 'partial', 'received', 'closed'], true),
         'close'   => $perms['canBuy'] && in_array($req['status'], ['received', 'partial'], true),
         'delete'  => $perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'),
     ];
@@ -920,6 +926,15 @@ case 'req_detail': {
     }
     // 可視內容遮蔽：沒勾「看得到金額／廠商」就挖掉（自己的單、輪到自己簽的單例外）
     $req = purchase_mask_row($req, $perms, $uid, (bool)$req['can']['sign']);
+    // 列印用：公司全名動態取（禁寫死）、表頭取綁定的 AS 文件名稱、編號版次依申請日期回推（ai-rules/16）
+    $own = $db->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetchColumn();
+    $asDoc = eg_asdoc_get($db, 'purchase_req');
+    $biz = (string)($req['apply_date'] ?: substr((string)$req['Created_At'], 0, 10));
+    $req['print_meta'] = [
+        'company'  => (string)($own ?: ''),
+        'doc_name' => $asDoc ? (string)$asDoc['doc_name'] : '',
+        'doc_no'   => $asDoc ? eg_asdoc_no_asof_id($db, (int)$asDoc['id'], $biz) : '',
+    ];
     jout(['req' => $req]);
 }
 
@@ -969,6 +984,11 @@ case 'req_save': {
         $title = mb_substr($title, 0, 120);
     }
 
+    // 申請日期：可補填過去的日期（早於今天＝補單），不可晚於今天；舊畫面沒送就維持原值／今天
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $applyDate = pdate('apply_date') ?: ($reqId > 0 ? (string)(purchase_load_req($db, $reqId)['apply_date'] ?: $today) : $today);
+    if ($applyDate > $today) jerr('申請日期不可晚於今天');
+
     $db->beginTransaction();
     if ($reqId > 0) {
         $req = purchase_load_req($db, $reqId);
@@ -979,10 +999,10 @@ case 'req_save': {
             jerr($isOwner ? '此單已進入採購流程，不可再修改申請內容'
                           : '只有申請人本人可以修改申請內容；採購請在「詢價／填入實際金額」頁登錄實際採購內容', 403);
         }
-        $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?,
+        $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?, apply_date=?,
                       " . implode('=?, ', purchase_purpose_cols()) . "=?,
                       is_urgent=?, Modified_By=? WHERE req_id=?")
-           ->execute([$title, pdate('need_date'), pv('reason') ?: null,
+           ->execute([$title, pdate('need_date'), pv('reason') ?: null, $applyDate,
                       ...purchase_purpose_vals($pp),
                       $urgent, $uid, $reqId]);
         $db->prepare("DELETE FROM purchase_request_item WHERE req_id=? AND qty_received=0")->execute([$reqId]);
@@ -990,11 +1010,11 @@ case 'req_save': {
     } else {
         $reqNo = purchase_next_req_no($db);
         $db->prepare("INSERT INTO purchase_request (req_no, title, dept_id, dept_name, requester_id, requester_name,
-                      need_date, reason, " . implode(', ', purchase_purpose_cols()) . ",
+                      need_date, reason, apply_date, " . implode(', ', purchase_purpose_cols()) . ",
                       is_urgent, status, Created_By)
-                      VALUES (?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?, 'submitted', ?)")
+                      VALUES (?,?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?, 'submitted', ?)")
            ->execute([$reqNo, $title, $u['dept_id'], $u['dept_name'], $uid, $uname,
-                      pdate('need_date'), pv('reason') ?: null,
+                      pdate('need_date'), pv('reason') ?: null, $applyDate,
                       ...purchase_purpose_vals($pp),
                       $urgent, $uid]);
         $reqId = (int)$db->lastInsertId();
@@ -1212,7 +1232,7 @@ case 'receive': {
     if (!$perms['canReceive']) jerr('無到貨入庫權限', 403);
     $reqId = pint('req_id');
     $req = purchase_load_req($db, $reqId);
-    if (!in_array($req['status'], ['ordered', 'partial'], true)) jerr('此單目前狀態不可收貨');
+    if (!in_array($req['status'], ['approved', 'ordered', 'partial'], true)) jerr('此單尚未核准，不可收貨');
     $lines = pjson('lines');   // [{pr_item_id, qty, receive_mode, location_id, receiver_id, remark}]
     if (!$lines) jerr('請至少填一筆到貨數量');
     $rcptDate = pdate('rcpt_date') ?: date('Y-m-d');

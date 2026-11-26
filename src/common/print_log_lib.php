@@ -225,6 +225,7 @@ if (!function_exists('eg_print_sources')) {
             'comm_mgmt'      => ['label' => '溝通管理－三份表單',   'page' => 'views/GM/communication_mgmt.php',      'kind' => 'form'],
             'risk_mgmt'      => ['label' => '風險與機會管理－各式表單', 'page' => 'views/GM/risk_mgmt.php',            'kind' => 'form'],
             'shipping_note'  => ['label' => '快速出貨－出貨單',     'page' => 'views/Sales/Shipping_Quick.php',       'kind' => 'form'],
+            'purchase_req'   => ['label' => '申請採購－採購單',     'page' => 'views/pages/purchase_request.php',     'kind' => 'form'],
             'od_slip'        => ['label' => '批次發單－外發加工單', 'page' => 'views/pm/od_dispatch.php',            'kind' => 'form'],
             'memo_request'   => ['label' => '簽呈',                  'page' => 'views/ADM/memo_request.php',          'kind' => 'form'],
             'interview_record' => ['label' => '訪談記錄（人事）',    'page' => 'views/ADM/interview_record.php',      'kind' => 'form'],
