@@ -394,6 +394,22 @@ case 'inv_export_mark': {
 }
 
 /* 回填發票號碼（手動逐張或 CSV 批次共用） */
+/* 設定（草稿／已轉出）發票的開立日期：預覽電子發票匯入檔與列表都用這個日期；不填發票號碼也可以先存日期 */
+case 'inv_set_date': {
+    require_once $document_root . '/EGsystem/src/common/acc_einvoice_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? '')))));
+    $d = trim((string)($_POST['inv_date'] ?? ''));
+    if (!$ids) acc_err('沒有選取發票');
+    if ($e = acc_einv_date_check($db, $d)) acc_err($e);
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("UPDATE acc_invoice SET invoice_date=?, Modified_By=?, Modified_At=NOW() WHERE invoice_id IN ($ph) AND status IN ('draft','exported')");
+    $st->execute(array_merge([$d, (string)$uid], $ids));
+    acc_out(['updated' => $st->rowCount()]);
+}
+
 case 'inv_backfill': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);

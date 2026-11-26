@@ -789,7 +789,9 @@ $('#einvDate').on('change',function(){
   einvLoad();
 });
 $('#btnEinvDl').on('click',function(){
+  if(!einvIds.length || !$('#mkEinv').hasClass('show')) return;     // 預覽視窗沒開（例如在別的欄位按 Enter 誤觸）時不處理
   var d=$('#einvDate').val();
+  $.post(API+'?action=inv_set_date',{csrf:CSRF,ids:einvIds.join(','),inv_date:d});   // 轉出用的開立日期一併記回發票
   window.location=API+'?action=inv_einv_xlsx&ids='+einvIds.join(',')+'&inv_date='+encodeURIComponent(d)+'&inv_time='+encodeURIComponent($.trim($('#einvTime').val()));
   setTimeout(function(){
     $.post(API+'?action=inv_export_mark',{csrf:CSRF, ids:JSON.stringify(einvIds)},function(r){
@@ -967,6 +969,12 @@ $('#btnInvMark').on('click',function(){
   },'json').fail(function(){ $b.prop('disabled',false); toast('標記失敗', true); });
 });
 
+/* 列表上的發票號碼／開立日期欄位按 Enter 不做任何事（共用規則會把 Enter 當成觸發主要按鈕，誤跳到下載） */
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Enter') return;
+  var t=e.target; if(t && t.classList && (t.classList.contains('no-in')||t.classList.contains('dt-in'))){ e.preventDefault(); e.stopPropagation(); }
+},true);
+
 /* 就地回填發票號碼：號碼與日期都填好且格式正確才送出 */
 $(document).on('input','.no-in',function(){
   var v=this.value.toUpperCase(); this.value=v;
@@ -979,7 +987,18 @@ $(document).on('blur','.no-in, .dt-in', function(){
   var $tr=$('#ivBody tr[data-id="'+id+'"]');
   var no=$.trim($tr.find('.no-in').val()||'').toUpperCase();
   var dt=$.trim($tr.find('.dt-in').val()||'');
-  if(no==='') return;
+  if(no===''){                                  // 沒填發票號碼：只先存開立日期（預覽電子發票匯入檔會用它）
+    if($(this).hasClass('dt-in') && dt!==''){
+      var i0=parseInt($tr.data('i'),10), v0=invRows[i0];
+      if(v0 && (v0.status==='draft'||v0.status==='exported') && v0.invoice_date!==dt){
+        $.post(API+'?action=inv_set_date',{csrf:CSRF,ids:id,inv_date:dt},function(r){
+          if(!r.ok){ toast(esc(r.error||'日期儲存失敗'), true); $tr.find('.dt-in').val(v0.invoice_date||''); return; }
+          v0.invoice_date=dt; toast('已儲存開立日期 '+esc(dt));
+        },'json').fail(function(x){ var m='日期儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+      }
+    }
+    return;
+  }
   if(!validInvNo(no)){ if($(this).hasClass('no-in')) toast('發票號碼格式不正確：須為英文 2 碼＋數字 8 碼（例 AB12345678）', true); return; }   // 格式不對不送出
   if(dt===''){ toast('請一併填寫開立日期', true); $tr.find('.dt-in').focus(); return; }
   var i=parseInt($tr.data('i'),10), v=invRows[i];
