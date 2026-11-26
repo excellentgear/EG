@@ -1476,11 +1476,32 @@ function addExtraRow() {
     $('#rcExtraBody').append('<tr><td><input type="text" class="x-name" list="rcExtraNames" placeholder="點選或輸入關鍵字篩選" style="width:100%;" autocomplete="off"></td>' +
         '<td><input type="text" class="x-spec" style="width:100%;" autocomplete="off"></td>' +
         '<td><input type="number" class="x-qty" step="0.01" value="1" style="width:100%;text-align:right;"></td>' +
-        '<td><input type="number" class="x-price" step="0.01" style="width:100%;text-align:right;"></td>' +
+        '<td><div style="position:relative;"><input type="text" class="x-price" inputmode="decimal" autocomplete="off" data-eg-skip title="可輸入算式，例如 1200-200+50" style="width:100%;text-align:right;padding-right:24px;">' +
+        '<i class="fa fa-calculator x-calc" title="計算算式（也可按 Enter）" style="position:absolute;right:7px;top:50%;margin-top:-7px;cursor:pointer;color:#B8741A;"></i></div></td>' +
         '<td><input type="text" class="x-remark" style="width:100%;" autocomplete="off"></td>' +
         '<td><button class="pq-btn danger x-del" type="button" title="移除">✕</button></td></tr>');
     $('#rcExtraBody tr:last .x-name').focus();
 }
+/* 單價可輸入算式（+ - * / 與括號）；離開欄位、按 Enter 或點計算機圖示即換成結果。算不出來就紅框 */
+function evalPriceExpr(s) {
+    s = String(s == null ? '' : s).replace(/[，,\s]/g, '').replace(/×/g, '*').replace(/÷/g, '/').replace(/[（]/g, '(').replace(/[）]/g, ')');
+    if (s === '') return '';
+    if (!/^[0-9+\-*/().]+$/.test(s)) return null;
+    try {
+        var v = Function('"use strict";return (' + s + ')')();
+        if (typeof v !== 'number' || !isFinite(v)) return null;
+        return Math.round(v * 100) / 100;
+    } catch (e) { return null; }
+}
+function calcPriceInput($in) {
+    var v = evalPriceExpr($in.val());
+    if (v === null) { $in.css('border-color', '#DD5138'); return false; }
+    $in.css('border-color', '').val(v);
+    return true;
+}
+$(document).on('change blur', '#rcExtraBody .x-price', function () { calcPriceInput($(this)); });
+$(document).on('keydown', '#rcExtraBody .x-price', function (e) { if (e.which === 13) { calcPriceInput($(this)); } });
+$(document).on('click', '#rcExtraBody .x-calc', function () { calcPriceInput($(this).siblings('.x-price')); });
 $(document).on('click', '#rcExtraAdd', addExtraRow);
 $(document).on('click', '.x-del', function () { $(this).closest('tr').remove(); });
 /* 登錄到貨時上傳進貨單（送貨單）：直接存成這張單的附件，類別＝進貨單，與申請時的附件放在一起 */
@@ -1798,6 +1819,7 @@ function saveRecv() {
         if (!nm) return;
         var q = parseFloat($t.find('.x-qty').val() || 0);
         if (!(q > 0)) { bad = '細項「' + nm + '」的數量要大於 0'; return; }
+        if (!calcPriceInput($t.find('.x-price'))) { bad = '細項「' + nm + '」的單價算式有誤'; return; }
         extras.push({ item_name: nm, spec_text: $t.find('.x-spec').val() || '', qty: q,
                       unit_price: $t.find('.x-price').val() || '', remark: $t.find('.x-remark').val() || '' });
     });
