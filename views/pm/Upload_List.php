@@ -24,6 +24,11 @@ $canClearIsList = rf_has_feature($__features, 'all') || rf_has_feature($__featur
 $isPageAdmin = rf_has_feature($__features, 'all');
 // 各身分可用的分頁／匯入功能（2026-11-26：全站管理員／本站管理員／生管／業務／品管，管理員可在「權限設定」調整）
 require_once '../../src/common/upload_list_perm_lib.php';
+if (!ulp_can_enter($db, (int)$id, $__features)) {
+    http_response_code(403);
+    echo '<!DOCTYPE html><meta charset="utf-8"><p style="font:16px sans-serif;padding:30px">沒有「上傳 List」的使用權限。請洽管理員，在「使用者權限設定 → 上傳 List」指派生管／業務／品管角色。</p>';
+    exit;
+}
 $ulp = ulp_can_map($db, (int)$id);
 $canBackfill = !empty($ulp['tab_backfill']);
 $canIsDiff   = !empty($ulp['tab_isdiff']);
@@ -2144,7 +2149,7 @@ $(document).ready(function() {
             <h4 class="modal-title"><strong>上傳 List 權限設定</strong></h4>
         </div>
         <div class="modal-body" style="padding:15px">
-            <p class="text-muted" style="font-size:12px">全站管理員、本站管理員（角色「上傳List本站管理員」）一律全開。勾選的身分才能看到該分頁／使用該匯入功能；身分依「組織角色綁定」的生管／業務／品管部門判定（含下轄與兼任）。改完按「儲存」立即生效。</p>
+            <p class="text-muted" style="font-size:12px">全站管理員、本站管理員（角色「上傳List本站管理員」）一律全開。勾選的身分才能看到該分頁／使用該匯入功能；身分＝在「使用者權限設定 → 上傳 List」指派的生管／業務／品管角色（不看部門）。改完按「儲存」立即生效。</p>
             <div id="ulpPermBody">載入中…</div>
             <div id="ulpPermMsg" style="font-size:12px;margin-top:6px"></div>
         </div>

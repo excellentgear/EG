@@ -1698,8 +1698,9 @@ $_quotDepts = array_keys($_deptSet);
 
                     eg_render_role_section('ul', 'upload_list', '上傳 List', 'fa-upload', '#b06f27',
                         '為每位使用者指派「<a href="../pm/Upload_List.php" target="_blank" style="color:#b5762a;">上傳 List</a>」頁（ERP 匯入）的角色。
-                         <strong>上傳List本站管理員</strong>＝全部分頁與匯入功能，並可在該頁按「權限設定」決定生管／業務／品管各能用哪些分頁與匯入功能。
-                         生管／業務／品管身分不必在這裡指派，由組織角色綁定的部門自動判定。管理者固定擁有全部權限。',
+                         <strong>進入頁面與左側選單是否出現，由這裡的角色決定</strong>（不必再到人員權限設定勾頁面）。
+                         <strong>生管／業務／品管</strong>＝該身分的人（不看所屬部門，跨部門需要用的人直接指派即可），能用哪些分頁與匯入功能，
+                         由管理員在上傳 List 頁按「權限設定」逐項勾選；<strong>上傳List本站管理員</strong>＝全部分頁與功能並可改權限設定。管理者固定擁有全部權限。',
                         rs_of('upload_list'), rsu_of('upload_list'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('od', 'od_dispatch', '批次發單', 'fa-truck', '#b06f27',

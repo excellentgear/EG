@@ -3,19 +3,19 @@
 //
 // 使用者身分分五種（2026-11-26 使用者指定）：
 //   全站管理員（功能碼 all）／本站管理員（角色 upload_list_admin）＝一律全開，不受設定影響
-//   生管／業務／品管＝依「全站組織角色綁定」的部門判定（含下轄、含兼任），可由管理員逐項勾選
+//   生管／業務／品管＝角色（upload_list_pm／_sales／_qc，在使用者權限設定頁指派；因為常需要非本身部門的人使用，
+//   所以不看部門），可由管理員逐項勾選
 // 設定存 system_parameters(UPLOAD_LIST / access)，內容 {功能碼:[pm,sales,qc]}。
 // 沒設定過的功能一律用 ulp_defaults()：原本就開放給非管理員的 → 生管＋業務（使用者拍板）。
 
 require_once __DIR__ . '/role_features_helper.php';
-require_once __DIR__ . '/org_role_lib.php';
 
 const ULP_GROUP = 'UPLOAD_LIST';
 const ULP_ROLE_ADMIN = 'upload_list_admin';
 
-/** 可勾選的身分（鍵 → [顯示名稱, 組織角色綁定鍵]） */
+/** 可勾選的身分（鍵 → [顯示名稱, 角色功能碼]） */
 function ulp_groups(): array {
-    return ['pm' => ['生管', 'pm_dept'], 'sales' => ['業務', 'sales_dept'], 'qc' => ['品管', 'qc_dept']];
+    return ['pm' => ['生管', 'ul_pm'], 'sales' => ['業務', 'ul_sales'], 'qc' => ['品管', 'ul_qc']];
 }
 
 /**
@@ -82,20 +82,20 @@ function ulp_settings_save(PDO $db, array $in, string $by): array {
     return $cur;
 }
 
-/** 這個人屬於哪些身分（pm/sales/qc），含兼任部門 */
-function ulp_user_groups(PDO $db, int $uid): array {
+/** 這個人被指派了哪些身分角色（pm/sales/qc） */
+function ulp_user_groups(PDO $db, int $uid, ?array $features = null): array {
+    $features = $features ?? rf_load_user_features($db, $uid);
     $out = [];
-    try {
-        $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id=?");
-        $st->execute([$uid]);
-        $depts = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
-        foreach (ulp_groups() as $g => $info) {
-            foreach ($depts as $d) {
-                if ($d > 0 && eg_org_in_dept($db, $info[1], $d)) { $out[] = $g; break; }
-            }
-        }
-    } catch (Throwable $e) {}
+    foreach (ulp_groups() as $g => $info) {
+        if (rf_has_feature($features, $info[1])) $out[] = $g;
+    }
     return $out;
+}
+
+/** 能進這個頁面：管理員，或至少被指派了生管／業務／品管其中一個角色 */
+function ulp_can_enter(PDO $db, int $uid, ?array $features = null): bool {
+    $features = $features ?? rf_load_user_features($db, $uid);
+    return ulp_is_admin($features) || (bool)ulp_user_groups($db, $uid, $features);
 }
 
 /** 管理員（全站管理員或本站管理員）一律全開 */
@@ -108,7 +108,7 @@ function ulp_can(PDO $db, int $uid, string $feature, ?array $features = null): b
     $features = $features ?? rf_load_user_features($db, $uid);
     if (ulp_is_admin($features)) return true;
     $allowed = ulp_settings($db)[$feature] ?? [];
-    return (bool)array_intersect($allowed, ulp_user_groups($db, $uid));
+    return (bool)array_intersect($allowed, ulp_user_groups($db, $uid, $features));
 }
 
 /** ?but= 值屬於哪個功能；登錄表沒有的（舊的隱藏匯入）回 null＝只有管理員 */

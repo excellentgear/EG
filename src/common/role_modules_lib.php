@@ -48,6 +48,7 @@ if (!function_exists('eg_role_modules')) {
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
+    'upload_list'         => ['prefix'=>'ul',      'label'=>'上傳 List',           'page'=>'Upload_List.php'],
     'od_dispatch'         => ['prefix'=>'od',      'label'=>'批次發單',            'page'=>'od_dispatch.php'],
     'risk_mgmt'           => ['prefix'=>'rm',      'label'=>'風險與機會管理',      'page'=>'risk_mgmt.php'],
     'as_schedule'         => ['prefix'=>'asched',  'label'=>'AS文件排程',          'page'=>'as_schedule.php'],

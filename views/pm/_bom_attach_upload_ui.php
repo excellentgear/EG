@@ -29,6 +29,29 @@
     </div>
   </div>
   </div>
+  <?php
+  // 檔名後綴對照（資料取自圖面查閱「設定 ERP/資材報告 檔名標籤」＝BOM_FILE_TAGS/tags_config，唯一來源），給使用者命名檔案時參考
+  $__bauTags = [];
+  try {
+      $__st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='BOM_FILE_TAGS' AND param_key='tags_config'");
+      $__st->execute();
+      $__j = json_decode((string)$__st->fetchColumn(), true);
+      if (is_array($__j)) $__bauTags = $__j;
+  } catch (Throwable $e) {}
+  if ($__bauTags): ?>
+  <div style="margin-top:8px;font-size:12px">
+    <b>可用的檔名後綴（標籤）</b> <span class="text-muted">檔名＝BOM號碼＋後綴，例：B-1150915010<b>-T</b>.pdf；同標籤有多份時加數字（-H2）</span>
+    <div style="margin-top:4px">
+    <?php foreach ($__bauTags as $__t): if (empty($__t['suffix'])) continue; ?>
+      <span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;border:1px solid #E4C293;border-radius:10px;background:#fff">
+        <code style="color:#8a5a2b"><?= htmlspecialchars((string)$__t['suffix']) ?></code>
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:<?= htmlspecialchars((string)($__t['color'] ?? '#777')) ?>"></span>
+        <?= htmlspecialchars((string)($__t['label'] ?? '')) ?>
+      </span>
+    <?php endforeach; ?>
+    </div>
+  </div>
+  <?php endif; ?>
   <div id="bauList" style="display:none;margin-top:10px">
     <table class="table table-condensed bau-tbl">
       <thead><tr><th style="width:120px">BOM 號碼</th><th style="width:110px">料號</th><th style="width:110px">標籤</th><th>檔案名稱</th><th style="width:150px">狀態</th></tr></thead>
