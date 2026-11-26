@@ -126,6 +126,10 @@ table.a-t tbody tr:nth-child(even){background:#FFFCF6;}
 table.a-t tbody tr:hover{background:#FBF0DE;}
 
 /* 側別徽章：色＋文字雙重標示（顏色不是唯一資訊） */
+.pg{display:inline-block;padding:0 7px;margin:1px 2px 1px 0;border-radius:9px;font-size:11.5px;line-height:18px;white-space:nowrap;}
+.pg-w{background:#F7E0BD;color:#7a4a12;}
+.pg-m{background:#F0A24B;color:#4a2a08;}
+.pg-o{background:#5C7A2E;color:#fff;}
 .pill{display:inline-block;padding:1px 9px;border-radius:9px;font-size:11.5px;line-height:18px;}
 .sd-ar{background:var(--a-ar);color:#fff;}
 .sd-ap{background:var(--a-ap);color:#fff;}
@@ -272,6 +276,7 @@ table.a-t tbody tr:hover{background:#FBF0DE;}
           <th class="sortable" data-sort="billing_month" style="width:100px;">帳款月份<i class="sa"></i></th>
           <th class="sortable" data-sort="status" style="width:110px;">狀態<i class="sa"></i></th>
           <th style="width:96px;">已勾選／列數</th>
+          <th style="width:150px;">後續進度</th>
           <th class="sortable" data-sort="adj_cnt" style="width:80px;">調整列數<i class="sa"></i></th>
           <th class="sortable" data-sort="our_total">我方未稅<i class="sa"></i></th>
           <th>對方紙本</th>
@@ -280,7 +285,7 @@ table.a-t tbody tr:hover{background:#FBF0DE;}
           <th class="sortable" data-sort="confirmed_at">確認<i class="sa"></i></th>
           <th style="width:220px;">操作</th>
         </tr></thead>
-        <tbody id="tbody"><tr><td colspan="12" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
+        <tbody id="tbody"><tr><td colspan="13" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
       </table>
     </div>
     <div class="a-hint">
@@ -398,7 +403,7 @@ function filters(){
 }
 
 function load(){
-  $('#tbody').html('<tr><td colspan="12" style="padding:22px;color:#8a6d45;">查詢中…</td></tr>');
+  $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">查詢中…</td></tr>');
   $.post(API+'?action=sheet_list', filters(), function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     rows=r.rows||[]; total=r.total||0;
@@ -412,9 +417,19 @@ function load(){
   },'json').fail(function(){ toast('查詢失敗，請稍後再試', true); });
 }
 
+function progChips(r){
+  if(r.side!=='ar') return '';
+  var c=[], chip=function(t,k){ return '<span class="pg pg-'+k+'">'+t+'</span>'; };
+  var IV={draft:['發票草稿','w'],exported:['發票已轉出','m'],issued:['已開立發票','o']};
+  if(IV[r.inv_state]) c.push(chip(IV[r.inv_state][0]+(r.inv_partial?'（部分）':''),IV[r.inv_state][1]));
+  if(r.vch_state==='done') c.push(chip('已開傳票'+(r.vch_partial?'（部分）':''),'o'));
+  var PY={wait:['待入帳','w'],part:['部分入帳','m'],paid:['已入帳','o']};
+  if(PY[r.pay_state]) c.push(chip(PY[r.pay_state][0],PY[r.pay_state][1]));
+  return c.length?c.join(' '):'<span style="color:#b9a888;font-size:12px;">尚未開票</span>';
+}
 function render(){
   if(!rows.length){
-    $('#tbody').html('<tr><td colspan="12" style="padding:22px;color:#8a6d45;">'
+    $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">'
       + ((onlyDiff||onlyOpen)
           ? '這個條件下沒有符合「只看…」篩選的對帳底稿。'
           : '這個條件下還沒有任何對帳底稿。到「對帳作業」開始對帳後，這裡就會出現。')
@@ -455,6 +470,7 @@ function render(){
       +'<td>'+esc(r.billing_month)+'</td>'
       +'<td><span class="pill st-'+esc(r.status)+'">'+esc(ST_LABEL[r.status]||r.status)+'</span></td>'
       +'<td class="r">'+nf(r.checked_cnt)+' / '+nf(r.line_cnt)+'</td>'
+      +'<td class="l">'+progChips(r)+'</td>'
       +'<td class="r">'+(r.adj_cnt?'<b style="color:#B9793C;">'+nf(r.adj_cnt)+'</b>':'')+'</td>'
       +'<td class="r"><b>'+nf(r.our_total)+'</b></td>'
       +'<td class="r">'+(r.their_total===null?'<span class="d-none">—</span>':nf(r.their_total))+'</td>'

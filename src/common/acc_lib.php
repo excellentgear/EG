@@ -855,6 +855,65 @@ function acc_sheet_reopen(PDO $db, int $sheetId, string $reason, ?array $user): 
  * 只用當頁資料排會排錯）。per_page=0 或未給＝不分頁全部回傳，
  * recon_parties 等既有呼叫端靠這個預設值維持原行為。
  */
+/**
+ * 對帳底稿的後續進度（應收）：發票／傳票／收款，依底稿明細在各單據上的實際狀態推導，不另存。
+ * 加進每列：inv_state(none|draft|exported|issued)、inv_partial、vch_state(none|done)、vch_partial、
+ *          pay_state(none|wait|part|paid)。
+ */
+function acc_sheet_progress(PDO $db, array &$rows): void
+{
+    foreach ($rows as &$r) { $r['inv_state'] = 'none'; $r['inv_partial'] = false; $r['vch_state'] = 'none'; $r['vch_partial'] = false; $r['pay_state'] = 'none'; }
+    unset($r);
+    $ids = [];
+    foreach ($rows as $r) if (($r['side'] ?? '') === 'ar') $ids[] = (int)$r['sheet_id'];
+    if (!$ids) return;
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $tot = []; $invBy = []; $vchBy = []; $invs = [];
+    try {
+        $q = $db->prepare("SELECT sheet_id, COUNT(DISTINCT CONCAT(src_type,'-',src_id)) c FROM acc_recon_line WHERE sheet_id IN ($ph) AND src_id>0 AND ABS(COALESCE(orig_amount,0))>=0.0001 GROUP BY sheet_id");
+        $q->execute($ids);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $tot[(int)$x['sheet_id']] = (int)$x['c'];
+
+        $q = $db->prepare("SELECT l.sheet_id, CONCAT(l.src_type,'-',l.src_id) k, i.invoice_id, i.status, i.doc_type, i.total_amount,
+                                  COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a WHERE a.invoice_id=i.invoice_id),0) paid
+                           FROM acc_recon_line l
+                           JOIN acc_invoice_item ii ON ii.src_type=l.src_type AND ii.src_id=l.src_id
+                           JOIN acc_invoice i ON i.invoice_id=ii.invoice_id AND i.status<>'void'
+                           WHERE l.sheet_id IN ($ph) AND l.src_id>0");
+        $q->execute($ids);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) {
+            $sid = (int)$x['sheet_id'];
+            $invBy[$sid]['keys'][$x['k']] = 1;
+            $invs[$sid][(int)$x['invoice_id']] = $x;
+        }
+        $q = $db->prepare("SELECT l.sheet_id, CONCAT(l.src_type,'-',l.src_id) k
+                           FROM acc_recon_line l
+                           JOIN acc_voucher_item vi ON vi.src_type=l.src_type AND vi.src_id=l.src_id
+                           JOIN acc_voucher v ON v.voucher_id=vi.voucher_id AND v.status='open'
+                           WHERE l.sheet_id IN ($ph) AND l.src_id>0");
+        $q->execute($ids);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $vchBy[(int)$x['sheet_id']][$x['k']] = 1;
+    } catch (Throwable $e) { return; }
+
+    foreach ($rows as &$r) {
+        $sid = (int)$r['sheet_id']; $n = $tot[$sid] ?? 0;
+        if (!empty($invBy[$sid]['keys'])) {
+            $r['inv_partial'] = count($invBy[$sid]['keys']) < $n;
+            $st = array_column($invs[$sid], 'status');
+            $r['inv_state'] = in_array('draft', $st, true) ? 'draft' : (in_array('exported', $st, true) ? 'exported' : 'issued');
+            $sumT = 0.0; $sumP = 0.0; $anyPaid = false;
+            foreach ($invs[$sid] as $iv) {
+                if ($iv['status'] === 'draft' || $iv['doc_type'] !== 'INVOICE') continue;
+                $sumT += (float)$iv['total_amount']; $sumP += (float)$iv['paid'];
+                if ((float)$iv['paid'] > 0.005) $anyPaid = true;
+            }
+            if ($sumT > 0.005) $r['pay_state'] = $sumP >= $sumT - 0.5 ? 'paid' : ($anyPaid ? 'part' : 'wait');
+        }
+        if (!empty($vchBy[$sid])) { $r['vch_state'] = 'done'; $r['vch_partial'] = count($vchBy[$sid]) < $n; }
+    }
+    unset($r);
+}
+
 function acc_sheet_list(PDO $db, array $f): array
 {
     acc_ensure_schema($db);
@@ -890,6 +949,7 @@ function acc_sheet_list(PDO $db, array $f): array
         $r['adj_cnt']      = (int)$r['adj_cnt'];
     }
     unset($r);
+    acc_sheet_progress($db, $rows);
 
     /* only_diff／only_open 是後端篩選（不是前端只挑當頁），
        否則「有差額的共幾份」會隨當頁載到什麼而變動。 */
