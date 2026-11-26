@@ -115,7 +115,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <div class="a-pager"><span id="lInfo" style="margin-right:auto;color:#8a6d45;"></span>
         每頁 <select id="lPer"><option>5</option><option>10</option><option selected>20</option><option>50</option></select> 筆 <span id="lPg"></span></div>
       <div class="a-wrap"><table class="a-t"><thead><tr><th>傳票號碼</th><th>傳票日期</th><th>類別</th><th>對象</th><th>帳款月份</th>
-        <th>金額</th><th>狀態</th><th>備註</th><th>操作</th></tr></thead><tbody id="lBody"></tbody></table></div>
+        <th>金額</th><th>發票號碼</th><th>狀態</th><th>備註</th><th>操作</th></tr></thead><tbody id="lBody"></tbody></table></div>
     </div>
 <?php endif; ?>
   </div>
@@ -442,16 +442,17 @@ $('#btnJConfirm').on('click',function(){
 });
 /* ── 查詢 ── */
 function loadList(){
-  $('#lBody').html('<tr><td colspan="9" style="padding:18px;color:#8a6d45;">查詢中…</td></tr>');
+  $('#lBody').html('<tr><td colspan="10" style="padding:18px;color:#8a6d45;">查詢中…</td></tr>');
   $.post(API+'?action=vch_list',{bm_from:$('#lFrom').val(),bm_to:$('#lTo').val(),side:$('#lSide').val(),status:$('#lStatus').val(),
     no_number:$('#lNoNo').is(':checked')?'1':'',kw:$('#lKw').val(),page:lPage,per_page:$('#lPer').val()},function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     var h='';
-    if(!r.rows.length) h='<tr><td colspan="9" style="padding:18px;color:#8a6d45;">沒有符合的傳票</td></tr>';
+    if(!r.rows.length) h='<tr><td colspan="10" style="padding:18px;color:#8a6d45;">沒有符合的傳票</td></tr>';
     r.rows.forEach(function(v){
       h+='<tr class="'+(v.status==='void'?'voided':'')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
         +'<td>'+dd(v.voucher_date)+'</td><td>'+(v.side==='ap'?'應付':'應收')+'</td><td class="l">'+esc(v.party_name)+'</td>'
         +'<td>'+esc(v.billing_month||'')+'</td><td class="r">'+nf(v.total_amount)+'</td>'
+        +'<td>'+esc(v.invoice_nos||'')+'</td>'
         +'<td><span class="pill st-'+v.status+'">'+(v.status==='void'?'已作廢':'有效')+'</span></td><td class="l">'+esc(v.note||'')+'</td>'
         +'<td><button class="btn-mini v-open" data-id="'+v.voucher_id+'">明細</button> <button class="btn-mini v-print" data-id="'+v.voucher_id+'"><i class="fa fa-print"></i> 列印</button></td></tr>';
     });
