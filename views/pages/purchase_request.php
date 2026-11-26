@@ -609,6 +609,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <input type="text" id="amGrand" inputmode="decimal" autocomplete="off" data-eg-skip style="text-align:right;font-weight:bold;">
                 <span class="hint" id="amHint"></span></div>
         </div>
+        <div style="margin-top:10px;"><b>進貨單</b>（對帳鎖帳前都可更正）<table class="pq-table" style="margin-top:4px;"><thead><tr><th style="width:28%;">到貨日期</th><th>ERP 進貨單號</th></tr></thead><tbody id="amErpBody"></tbody></table><div style="margin-top:6px;"><span id="amAttList"></span></div><div style="margin-top:4px;"><input type="file" id="amAttFile" multiple> <button type="button" class="pq-btn" id="amAttGo"><i class="fa fa-upload"></i> 上傳進貨單</button> <span class="hint" id="amAttHint"></span></div></div>
         <p class="hint">對帳鎖帳前都可修改；鎖帳後要改請會計先解鎖該月對帳。含稅總額與系統算出的差額限 ±50 元（廠商四捨五入／捨去用）。</p>
     </div>
     <div class="m-foot">

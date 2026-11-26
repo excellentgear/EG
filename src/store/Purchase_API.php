@@ -1507,6 +1507,12 @@ case 'adjust_amounts': {
         $np = (float)$p['unit_price'];
         $upd->execute([$np, $np, (int)($p['pr_item_id'] ?? 0), $reqId]);
     }
+    $updErp = $db->prepare("UPDATE purchase_receipt SET erp_rcpt_no=? WHERE rcpt_id=? AND req_id=?");
+    foreach (pjson('erp') as $e) {   // ERP 進貨單號可更正（對帳鎖帳前）；只存大寫、去空白
+        $no = strtoupper(preg_replace('/\s+/', '', (string)($e['erp_rcpt_no'] ?? '')));
+        if (mb_strlen($no) > 20) { $db->rollBack(); jerr('ERP 進貨單號太長（最多 20 字）'); }
+        $updErp->execute([$no !== '' ? $no : null, (int)($e['rcpt_id'] ?? 0), $reqId]);
+    }
     $taxT = (string)($req['tax_type'] ?: 'taxable');
     $db->prepare("UPDATE purchase_request SET total_adjust=0 WHERE req_id=?")->execute([$reqId]);
     $finalIn = pv('grand_total_final');

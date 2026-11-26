@@ -1386,7 +1386,40 @@ $(document).on('click', '#dtAmend', function () {
     });
     $('#amBody').html(h);
     $('#amGrand').removeData('touched').val('');
+    var eh = '';
+    (CUR.receipts || []).forEach(function (rc) { eh += '<tr data-rc="' + rc.rcpt_id + '"><td>' + esc(rc.rcpt_date) + '</td><td><input type="text" class="am-erp" data-eg-skip autocomplete="off" style="width:100%;" value="' + esc(rc.erp_rcpt_no || '') + '"></td></tr>'; });
+    $('#amErpBody').html(eh || '<tr><td colspan="2" class="hint">尚無到貨紀錄</td></tr>'); $('#amAttFile').val(''); $('#amAttHint').text(''); renderAmAtts();
     updateAmTotals(); openMask('mAmend');
+});
+function renderAmAtts() {
+    var h = '';
+    (CUR.attachments || []).filter(function (a) { return a.att_type === 'delivery'; }).forEach(function (a) {
+        h += '<span class="tag-chip">進貨單｜<a href="' + esc(a.url) + '" target="_blank">' + esc(a.original_name || a.file_name) + '</a> <a href="javascript:;" class="am-att-del" data-id="' + a.att_id + '" style="color:#DD5138;">✕</a></span> ';
+    });
+    $('#amAttList').html(h || '<span class="hint">尚未上傳進貨單</span>');
+}
+$(document).on('click', '.am-att-del', function () {
+    var id = $(this).data('id');
+    if (!confirm('確定刪除這個進貨單附件？')) return;
+    api('att_delete', { att_id: id }, 'POST').done(function () {
+        CUR.attachments = (CUR.attachments || []).filter(function (a) { return String(a.att_id) !== String(id); }); renderAmAtts();
+    }).fail(fail);
+});
+$(document).on('click', '#amAttGo', function () {
+    var el = document.getElementById('amAttFile'), files = el && el.files ? Array.prototype.slice.call(el.files) : [];
+    if (!files.length) { $('#amAttHint').text('請先選擇檔案').css('color', '#DD5138'); return; }
+    var done = 0, bad = [];
+    files.forEach(function (file) {
+        var fd = new FormData();
+        fd.append('action', 'att_upload'); fd.append('req_id', CUR.req_id); fd.append('att_type', 'delivery'); fd.append('file', file);
+        $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' }).done(function (r) {
+            if (!r.ok) bad.push(file.name + '（' + r.error + '）');
+            else (CUR.attachments = CUR.attachments || []).push({ att_id: r.att_id, att_type: 'delivery', original_name: r.original_name, url: r.url });
+        }).fail(function () { bad.push(file.name); }).always(function () {
+            if (++done < files.length) return;
+            el.value = ''; renderAmAtts(); $('#amAttHint').text(bad.length ? '失敗：' + bad.join('、') : '已上傳').css('color', bad.length ? '#DD5138' : '');
+        });
+    });
 });
 function updateAmTotals() {
     var sub = 0;
@@ -1419,7 +1452,8 @@ $(document).on('click', '#btnAmendGo', function () {
     if ($('#amGrand').data('touched')) { if (!calcPriceInput($('#amGrand'))) bad = '含稅總額的算式有誤'; gf = $('#amGrand').val(); }
     if (bad) { alert(bad); return; }
     $('#btnAmendGo').prop('disabled', true);
-    api('adjust_amounts', { req_id: CUR.req_id, prices: JSON.stringify(prices), grand_total_final: gf }, 'POST').done(function () {
+    var erps = []; $('#amErpBody tr[data-rc]').each(function () { erps.push({ rcpt_id: $(this).data('rc'), erp_rcpt_no: $.trim($(this).find('.am-erp').val()) }); });
+    api('adjust_amounts', { req_id: CUR.req_id, prices: JSON.stringify(prices), erp: JSON.stringify(erps), grand_total_final: gf }, 'POST').done(function () {
         closeMask('mAmend'); openDetail(CUR.req_id); reload(); loadBadges();
     }).fail(fail).always(function () { $('#btnAmendGo').prop('disabled', false); });
 });
