@@ -1386,13 +1386,15 @@ function totals(){
   });
   lines.forEach(function(l){ if(l.checked) ck++; });
   var tax=Math.round(net*TAX_RATE);
-  return {net:net, tax:tax, total:net+tax, checked:ck, count:lines.length};
+  var cnet=0; lines.forEach(function(l){ if(l.checked && !pk[l.client_key]) cnet+=amtOf(l); });
+  return {net:net, tax:tax, total:net+tax, checked:ck, count:lines.length, cnet:cnet};
 }
 function updateStat(){
   var t=totals();
   var noStmt = !!(OPT && OPT.no_statement);
   var their = (noStmt || $('#theirTotal').val()==='') ? null : Number($('#theirTotal').val());
-  var diff  = (their===null) ? null : Math.round((their - t.net)*100)/100;
+  // 與對方紙本比對的基準＝「已勾選（已對到）」的合計（鎖帳也只鎖已勾選的）；一列都沒勾時才退回全部合計
+  var diff  = (their===null) ? null : Math.round((their - (t.checked?t.cnet:t.net))*100)/100;
   // 不提供對帳單的對象：沒有「對方紙本」這回事，欄位收起來免得看的人以為漏填
   $('#theirTotal').closest('div').toggle(!noStmt);
   $('#stDiff').closest('div').toggle(!noStmt);
@@ -1660,13 +1662,14 @@ $('#btnSave').on('click',function(){
 $('#btnConfirm').on('click',function(){
   var t=totals();
   var their=((OPT&&OPT.no_statement)||$('#theirTotal').val()==='')?null:Number($('#theirTotal').val());
-  var diff = their===null?null:Math.round((their-t.net)*100)/100;
+  var diff = their===null?null:Math.round((their-(t.checked?t.cnet:t.net))*100)/100;
   var warn='';
+  if(!t.checked){ toast('請先勾選已對到的明細，鎖帳只會鎖定已勾選的列', true); return; }
   var noStmt = !!(OPT && OPT.no_statement);
-  if(t.checked<t.count) warn+='\n・還有 '+(t.count-t.checked)+' 列沒有標記「已對到」';
+  if(t.checked<t.count) warn+='\n・有 '+(t.count-t.checked)+' 列沒有勾選，不會鎖定，會從這份對帳單移出（之後仍可對帳）';
   if(!noStmt && diff!==null && Math.abs(diff)>=0.01) warn+='\n・與對方紙本仍有差額 '+nf(diff)+' 元';
   if(!noStmt && their===null) warn+='\n・尚未輸入對方紙本合計（無法比對）';
-  if(!confirm('確認這份對帳單正確並鎖帳？'+(warn?'\n\n請注意：'+warn:'')
+  if(!confirm('確認已勾選的 '+t.checked+' 列（未稅 '+nf(t.cnet)+'）正確並鎖帳？'+(warn?'\n\n請注意：'+warn:'')
     +'\n\n鎖帳後不可再修改，僅會計管理員可退回重對。')) return;
 
   // 先把目前畫面存起來再確認，避免鎖到舊版本

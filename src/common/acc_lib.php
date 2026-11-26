@@ -695,16 +695,42 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
         return ['success' => false, 'message' => '此對帳單已經確認鎖帳（' . $s['confirmed_at'] . '）'];
     }
 
-    $sl = $db->prepare("SELECT line_id, src_type, src_id, checked FROM acc_recon_line WHERE sheet_id=?");
+    $sl = $db->prepare("SELECT line_id, src_type, src_id, checked, split_parent FROM acc_recon_line WHERE sheet_id=?");
     $sl->execute([$sheetId]);
-    $lines = $sl->fetchAll(PDO::FETCH_ASSOC);
-    if (!$lines) return ['success' => false, 'message' => '此對帳單沒有明細，不能確認'];
+    $all = $sl->fetchAll(PDO::FETCH_ASSOC);
+    if (!$all) return ['success' => false, 'message' => '此對帳單沒有明細，不能確認'];
 
-    $unchecked = 0;
-    foreach ($lines as $l) if (empty($l['checked'])) $unchecked++;
+    /* 只鎖「已勾選（已對到）」的明細：沒勾的代表這次沒對到，不鎖、從這份底稿移出，
+       之後仍屬於可對帳的憑證，下個月（或重新開啟）會依「往前未對完」自動再帶入。
+       拆分的父子要一起留（父列只是容器，金額在子列）。 */
+    $keep = [];
+    foreach ($all as $l) if (!empty($l['checked'])) $keep[(int)$l['line_id']] = true;
+    foreach ($all as $l) {            // 有留下的子列→父列也留；有留下的父列→它的子列也留
+        if (empty($keep[(int)$l['line_id']])) continue;
+        if (!empty($l['split_parent'])) $keep[(int)$l['split_parent']] = true;
+    }
+    foreach ($all as $l) if (!empty($l['split_parent']) && !empty($keep[(int)$l['split_parent']])) $keep[(int)$l['line_id']] = true;
+    if (!$keep) return ['success' => false, 'message' => '沒有任何已勾選（已對到）的明細，不能確認鎖帳'];
+    $lines = []; $drop = [];
+    foreach ($all as $l) { if (!empty($keep[(int)$l['line_id']])) $lines[] = $l; else $drop[] = (int)$l['line_id']; }
+    $unchecked = count($drop);
 
     try {
         $db->beginTransaction();
+        if ($drop) {
+            $ph = implode(',', array_fill(0, count($drop), '?'));
+            $db->prepare("DELETE FROM acc_recon_line WHERE sheet_id=? AND line_id IN ($ph)")->execute(array_merge([$sheetId], $drop));
+            // 合計改以留下的明細重算（拆分父列不計入）
+            $rl = $db->prepare("SELECT line_id, split_parent, orig_amount, adj_amount FROM acc_recon_line WHERE sheet_id=?");
+            $rl->execute([$sheetId]);
+            $rows = $rl->fetchAll(PDO::FETCH_ASSOC);
+            $par = []; foreach ($rows as $r) if (!empty($r['split_parent'])) $par[(int)$r['split_parent']] = true;
+            $net = 0.0;
+            foreach ($rows as $r) { if (isset($par[(int)$r['line_id']])) continue; $net += ($r['adj_amount'] !== null) ? (float)$r['adj_amount'] : (float)$r['orig_amount']; }
+            $tax = round($net * acc_tax_rate($db));
+            $db->prepare("UPDATE acc_recon_sheet SET our_total=?, tax_amount=?, total_amount=? WHERE sheet_id=?")->execute([$net, $tax, $net + $tax, $sheetId]);
+            $s['our_total'] = $net; $s['tax_amount'] = $tax; $s['total_amount'] = $net + $tax;
+        }
         $db->prepare("UPDATE acc_recon_sheet SET status='confirmed', confirmed_by=?, confirmed_by_name=?,
                       confirmed_at=NOW() WHERE sheet_id=?")
            ->execute([$user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null, $sheetId]);
@@ -739,7 +765,7 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
 
     return ['success' => true, 'locked' => count($lines), 'unchecked' => $unchecked,
             'message' => '已確認鎖帳，' . count($lines) . ' 筆憑證標記為已對完'
-                       . ($unchecked ? "（其中 {$unchecked} 筆未勾選，仍一併鎖定）" : '')];
+                       . ($unchecked ? "；未勾選的 {$unchecked} 筆沒有鎖定，已移出這份對帳單，之後仍可對帳" : '')];
 }
 
 /** 退回重對（僅會計管理員；權限在 API 層檢查） */
