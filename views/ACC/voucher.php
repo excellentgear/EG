@@ -387,6 +387,8 @@ $(document).on('change','.j-acode',function(){
   if(!a) delete AOVR[ai]; else AOVR[ai]={code:a.code,name:a.name};
   journalRender();
 });
+/* 點到會計科目欄自動全選，方便直接覆寫（mouseup 會取消選取，故延後到下一個 tick） */
+$(document).on('focus click','.j-acode',function(){ var el=this; setTimeout(function(){ if(document.activeElement===el) el.select(); },0); });
 function signBoxes(signs, maker, canClear, canSign, id){
   var sg='', ks=Object.keys(SLOTS);
   ks.forEach(function(k){ var g=(signs||{})[k];
