@@ -188,6 +188,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
       <div class="a-bar">
         <label>帳款月份</label>
         <input type="month" id="candBm">
+        <button id="btnCandThis">本月</button>
         <button id="btnCandPrev">上月</button>
         <button id="btnCandLoad" class="btn-warm"><i class="fa fa-refresh"></i> 重新計算</button>
         <label style="margin-left:8px;"><input type="checkbox" id="candOnlyOk" checked> 只顯示可開立的</label>
@@ -510,6 +511,11 @@ $('.tab-btn').on('click',function(){
   var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
   $('#candBm').val(m); $('#invBmFrom').val(m); $('#invBmTo').val(m);
 })();
+$('#btnCandThis').on('click',function(){
+  var d=new Date();
+  $('#candBm').val(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2));
+  loadCand();
+});
 $('#btnCandPrev').on('click',function(){
   var v=$('#candBm').val(); if(!v) return;
   var p=v.split('-'), d=new Date(+p[0], +p[1]-2, 1);
