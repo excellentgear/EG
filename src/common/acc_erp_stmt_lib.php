@@ -55,7 +55,7 @@ function acc_erp_stmt_parse(string $path): array
             }
             if (mb_strpos((string)($r[0] ?? ''), '日期區間') === 0) $res['range'] = trim((string)$r[0]);
         }
-        $cur = '';
+        $cur = ''; $curDate = '';
         for ($i = $hdr + 1; $i < count($rows); $i++) {
             $r = $rows[$i];
             $c0 = trim((string)($r[0] ?? ''));
@@ -66,6 +66,8 @@ function acc_erp_stmt_parse(string $path): array
             }
             $date = acc_erp_date($c0);
             $spec = trim((string)($r[2] ?? ''));
+            // 日期與單號都只出現在每張出貨單的第一列，後續明細列兩欄都是空白 → 沿用上一列
+            if ($date !== '') $curDate = $date; else $date = $curDate;
             if ($date === '' || $spec === '') continue;
             $no = trim((string)($r[1] ?? ''));
             if ($no !== '') $cur = $no;
