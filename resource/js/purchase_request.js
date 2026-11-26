@@ -425,6 +425,12 @@ function openReq(id) {
                           d_id: q.purpose_d_id || 0, vehicle_id: q.purpose_vehicle_id || 0, equip_kind: q.purpose_equip_kind || '', equip_id: q.purpose_equip_id || 0, maint_id: q.purpose_maint_id || 0, note: q.purpose_note || '', label: q.purpose_label || '' };
             }
             renderReqPurpose();
+            if (REQPP && REQPP.maint_id) {
+                api('maint_list', { scope: 'all' }).done(function (mr) {
+                    REQPP.maint_simple = mr.rows.some(function (m) { return m.maint_id == REQPP.maint_id && parseInt(m.simple_form, 10) === 1; }) ? 1 : 0;
+                    applyReqMode();
+                });
+            }
             q.items.forEach(function (it) {
                 addItemRow(it.spec_id ? { spec_id: it.spec_id, item_name: it.item_name, spec_text: it.spec_text,
                     category_id: it.category_id, unit_id: it.unit_id } : null, it);
@@ -542,10 +548,10 @@ function collectItems() {
 
 function saveReq() {
     if (!REQPP || !REQPP.type) { alert('請先選擇這筆採購的用途'); openPurpose('req'); return; }
-    var items = collectItems(); if (!items) return;
+    var items = reqIsSimple() ? [] : collectItems(); if (!items) return;
     // 精簡版不顯示標題，一律留白交給後端自動組（用途＋品名）
     var d = { req_id: EDIT.id, is_new: EDIT.id ? '0' : '1', title: FULL ? $('#rTitle').val() : '',
-              need_date: $('#rNeed').val(), reason: $('#rReason').val(),
+              need_date: reqIsSimple() ? '' : $('#rNeed').val(), reason: $('#rReason').val(),
               // 單頭急件＝任一項急件（列表與通知看單頭這個旗標）
               is_urgent: ($('#rUrgent').prop('checked') || $('#reqItemBody .i-urg:checked').length) ? 1 : 0,
               purpose_type: REQPP.type, purpose_order_id: REQPP.order_id || '',
@@ -698,6 +704,7 @@ function ppText(pp) {
 
 /** 單頭用途的顯示 */
 function renderReqPurpose() {
+    applyReqMode();
     if (REQPP && REQPP.type) {
         $('#rPurposeShow').replaceWith('<span id="rPurposeShow" class="pq-purpose-tag">' +
             '<span class="k">' + esc(ppTypeName(REQPP.type)) + '</span>' +
@@ -708,6 +715,14 @@ function renderReqPurpose() {
         $('#btnPickPurpose').html('<i class="fa fa-crosshairs"></i> 選擇用途');
     }
 }
+
+/** 簡易申請（例：定期保養）：品項、希望到貨日、急件、標題都不用填，只留用途、補充說明與附件 */
+function applyReqMode() {
+    var simple = !!(REQPP && parseInt(REQPP.maint_simple, 10) === 1);
+    $('.pq-req-detail').toggle(!simple);
+    $('#reqSimpleNote').toggle(simple);
+}
+function reqIsSimple() { return !!(REQPP && parseInt(REQPP.maint_simple, 10) === 1); }
 
 /** 品項列用途的顯示（留白＝沿用單頭） */
 function renderPpCell($tr) {
@@ -755,7 +770,7 @@ function ppSyncType() {
         $('#ppKwLabel').text(PP_PICK_CFG[t].label);
         $('#ppPickHint').text(PP_PICK_CFG[t].hint);
     }
-    $('#ppVehAdd').toggle(t === 'VEHICLE' && !!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin)));
+    $('#ppVehAdd').toggle(t === 'VEHICLE' && !!(META && META.perms && META.perms.canVehicle));
     // 只有「其他」需要文字說明，其餘類別的說明是選填備註
     $('#ppNoteWrap').toggle(t === 'OTHER' || t === 'TOOLING' || t === 'STOCK');
     ppMaintSync(t);
@@ -845,11 +860,11 @@ function ppMaintSync(t) {
     var scope = PP_MAINT[t];
     $('#ppMaintWrap').toggle(!!scope);
     if (!scope) return;
-    $('#ppMaintAdd').toggle(!!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin)));
+    $('#ppMaintAdd').toggle(!!(META && META.perms && META.perms.canMaint));
     api('maint_list', { scope: scope }).done(function (r) { PP_MAINT_ROWS = r.rows; ppMaintRender(); });
 }
 function ppMaintRender() {
-    var canEdit = !!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin));
+    var canEdit = !!(META && META.perms && META.perms.canMaint);
     var h = '';
     PP_MAINT_ROWS.forEach(function (m) {
         var on = String(m.maint_id) === String(PP.cur.maint_id);
@@ -861,6 +876,7 @@ function ppMaintRender() {
 }
 $(document).on('click', '.pp-maint', function () {
     PP.cur.maint_id = parseInt($(this).data('id'), 10); PP.cur.maint_name = String($(this).data('name'));
+    PP.cur.maint_simple = PP_MAINT_ROWS.some(function (m) { return m.maint_id == PP.cur.maint_id && parseInt(m.simple_form, 10) === 1; }) ? 1 : 0;
     ppMaintRender(); ppRelabel();
 });
 $(document).on('click', '.pp-maint-off', function (e) {
@@ -875,10 +891,14 @@ $(document).on('click', '.pp-maint-off', function (e) {
 $(document).on('click', '#ppMaintNewBtn', function () {
     var nm = $.trim($('#ppMaintNew').val() || '');
     if (!nm) { $('#ppMaintMsg').text('請填類別名稱').css('color', '#DD5138'); return; }
-    api('maint_save', { maint_name: nm, scope: PP_MAINT[$('#ppType').val()] || 'both' }, 'POST').done(function (r) {
-        $('#ppMaintNew').val(''); $('#ppMaintMsg').text('');
+    api('maint_save', { maint_name: nm, scope: PP_MAINT[$('#ppType').val()] || 'both', simple_form: $('#ppMaintSimple').prop('checked') ? 1 : 0 }, 'POST').done(function (r) {
+        $('#ppMaintNew').val(''); $('#ppMaintSimple').prop('checked', false); $('#ppMaintMsg').text('');
         PP.cur.maint_id = r.maint_id; PP.cur.maint_name = nm;
-        api('maint_list', { scope: PP_MAINT[$('#ppType').val()] }).done(function (rr) { PP_MAINT_ROWS = rr.rows; ppMaintRender(); ppRelabel(); });
+        api('maint_list', { scope: PP_MAINT[$('#ppType').val()] }).done(function (rr) {
+            PP_MAINT_ROWS = rr.rows;
+            PP.cur.maint_simple = PP_MAINT_ROWS.some(function (m) { return m.maint_id == PP.cur.maint_id && parseInt(m.simple_form, 10) === 1; }) ? 1 : 0;
+            ppMaintRender(); ppRelabel();
+        });
     }).fail(function (e) { $('#ppMaintMsg').text(e).css('color', '#DD5138'); });
 });
 $(document).on('input', '#ppNote', function () { PP.cur.note = $(this).val(); ppPreview(); });

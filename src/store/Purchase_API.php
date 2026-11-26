@@ -686,7 +686,7 @@ case 'purpose_search': {
  * ============================================================ */
 case 'vehicle_save': {
     // 車輛主檔：採購與管理員可新增／改／停用（保管人只是開去開回，不維護主檔）
-    if (!($perms['canBuy'] || $perms['canAdmin'])) jerr('無維護車輛的權限', 403);
+    if (!$perms['canVehicle']) jerr('無維護車輛清單的權限（請管理員在角色設定勾「維護公司車輛清單」）', 403);
     $vid   = pint('vehicle_id');
     $plate = strtoupper(preg_replace('/\s+/u', '', pv('plate_no')));
     if ($plate === '') jerr('請填車牌');
@@ -708,13 +708,13 @@ case 'vehicle_save': {
 }
 case 'maint_list': {
     $sc = (string)($_GET['scope'] ?? '');
-    $rows = $db->prepare("SELECT maint_id, maint_name, scope FROM purchase_maint_type
-                          WHERE is_active=1 AND scope IN ('both', ?) ORDER BY sort_order, maint_id");
-    $rows->execute([$sc]);
+    $rows = $db->prepare("SELECT maint_id, maint_name, scope, simple_form FROM purchase_maint_type
+                          WHERE is_active=1 AND (? = 'all' OR scope IN ('both', ?)) ORDER BY sort_order, maint_id");
+    $rows->execute([$sc, $sc]);
     jout(['rows' => $rows->fetchAll(PDO::FETCH_ASSOC)]);
 }
 case 'maint_save': {
-    if (!($perms['canBuy'] || $perms['canAdmin'])) jerr('無維護保養類別的權限', 403);
+    if (!$perms['canMaint']) jerr('無維護保養類別的權限（請管理員在角色設定勾「維護保養類別」）', 403);
     $mid = pint('maint_id');
     if ($mid > 0 && isset($_POST['is_active'])) {          // 停用／啟用（已用過的單據只存 id＋當時名稱，不受影響）
         $db->prepare("UPDATE purchase_maint_type SET is_active=? WHERE maint_id=?")->execute([pint('is_active') ? 1 : 0, $mid]);
@@ -730,7 +730,8 @@ case 'maint_save': {
         jout(['maint_id' => (int)$r['maint_id']]);
     }
     $mx = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM purchase_maint_type")->fetchColumn();
-    $db->prepare("INSERT INTO purchase_maint_type (maint_name, scope, sort_order) VALUES (?,?,?)")->execute([$nm, $sc, $mx + 1]);
+    $db->prepare("INSERT INTO purchase_maint_type (maint_name, scope, sort_order, simple_form) VALUES (?,?,?,?)")
+       ->execute([$nm, $sc, $mx + 1, pint('simple_form') ? 1 : 0]);
     jout(['maint_id' => (int)$db->lastInsertId()]);
 }
 case 'vehicle_list': {
@@ -918,13 +919,25 @@ case 'req_save': {
     if (!$perms['canApply']) jerr('無申請採購權限', 403);
     $reqId = pint('req_id');
     $items = pjson('items');
-    if (!$items) jerr('請至少填一筆品項');
     $tempAtts = array_map('intval', pjson('temp_att_ids'));
     $urgent   = pint('is_urgent') ? 1 : 0;
 
     // 用途歸屬：單頭必填；ID 與顯示名稱都在後端驗過／重建，不採信前端字串
     $pp = purchase_purpose_normalize($db, $_POST);
     if ($pp['type'] === null) jerr('請選擇這筆採購的用途（成本要靠它歸戶）');
+
+    // 簡易申請類別（例：定期保養）：不用填品項與希望到貨日，後端自動補一個品項讓詢價、到貨、付款照常走
+    if (!empty($pp['maint_id'])) {
+        $sq = $db->prepare("SELECT maint_name FROM purchase_maint_type WHERE maint_id=? AND simple_form=1");
+        $sq->execute([(int)$pp['maint_id']]);
+        $simpleName = $sq->fetchColumn();
+        if ($simpleName !== false) {
+            $items = [['item_name' => $simpleName . '費用', 'spec_text' => mb_substr((string)$pp['label'], 0, 150),
+                       'qty' => 1, 'receive_mode' => 'expense']];
+            $_POST['need_date'] = '';
+        }
+    }
+    if (!$items) jerr('請至少填一筆品項');
 
     // 品項的用途留白＝沿用單頭；有填才逐列驗
     $itemPurposes = [];

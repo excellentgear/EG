@@ -385,9 +385,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <p class="hint" style="margin:4px 0 0;">選了訂單／BOM／料號，這筆花費才算得進該筆的成本；耗材、辦公用品請選「常備品補貨」。</p>
         </div>
         <div class="pq-grid">
-            <div class="pq-fld"><label>希望到貨日</label><input type="date" id="rNeed"></div>
+            <div class="pq-fld pq-req-detail"><label>希望到貨日</label><input type="date" id="rNeed"></div>
             <div class="pq-fld"><label>申請人／部門</label><input type="text" id="rWho" readonly style="background:#F5EEE2;"></div>
-            <div class="pq-fld"><label>急件</label>
+            <div class="pq-fld pq-req-detail"><label>急件</label>
                 <label style="display:flex;align-items:center;gap:6px;height:30px;font-weight:normal;cursor:pointer;">
                     <input type="checkbox" id="rUrgent" style="width:auto;margin:0;"> 整張單都是急件
                 </label>
@@ -395,9 +395,10 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         </div>
         <div class="pq-fld" style="margin-bottom:10px;"><label>補充說明（選填）</label><textarea id="rReason" placeholder="有特別要求再寫，例：要同一廠牌、附發票"></textarea></div>
         <!-- 標題由後端自動組（用途＋品名），一般使用者看不到也不用填；採購版才開放手改 -->
-        <div class="pq-fld pq-full-only" style="margin-bottom:10px;"><label>標題（留白＝自動帶入用途＋品名）</label><input type="text" id="rTitle" placeholder="留白就好"></div>
+        <div class="pq-fld pq-full-only pq-req-detail" style="margin-bottom:10px;"><label>標題（留白＝自動帶入用途＋品名）</label><input type="text" id="rTitle" placeholder="留白就好"></div>
 
-        <div class="pq-sec">
+        <p id="reqSimpleNote" class="hint" style="display:none;margin:0 0 10px;">這類申請不用填品項和希望到貨日，採購收到後會在詢價時填實際金額；有估價單或照片可以在下面上傳。</p>
+        <div class="pq-sec pq-req-detail">
             <h5 id="reqItemSecTitle">要買什麼</h5>
             <!-- 找採購品：一般使用者不必先查主檔，直接打品名就好；採購版才需要綁採購料號 -->
             <div class="pq-full-only" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
@@ -480,6 +481,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             </div>
             <div id="ppMaintAdd" style="display:none;margin-top:4px;">
                 <input type="text" id="ppMaintNew" placeholder="沒有想要的類別？直接輸入新增" style="width:220px;" autocomplete="off">
+                <label style="font-weight:normal;margin:0 6px;cursor:pointer;"><input type="checkbox" id="ppMaintSimple" style="width:auto;margin:0 3px 0 0;">簡易申請（免填品項與到貨日）</label>
                 <button class="pq-btn warm" id="ppMaintNewBtn" type="button"><i class="fa fa-plus"></i> 新增類別</button>
                 <span id="ppMaintMsg" class="hint"></span>
             </div>

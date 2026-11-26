@@ -56,6 +56,8 @@ define('PURCHASE_FEATURES', [
     ['code' => 'purchase_receive',     'group' => 'op',   'label' => '登錄到貨（入庫待領／直接交付／不列管）'],
     ['code' => 'purchase_buy',         'group' => 'op',   'label' => '詢價填金額、下單、發票付款、結案、維護採購品主檔'],
     ['code' => 'purchase_approve_top', 'group' => 'op',   'label' => '高階核准（金額超過第二層門檻時的第二關簽核人）'],
+    ['code' => 'purchase_maint_manage',   'group' => 'op', 'label' => '維護保養類別（新增、停用：定期保養、維修…）'],
+    ['code' => 'purchase_vehicle_manage', 'group' => 'op', 'label' => '維護公司車輛清單（新增車牌、停用）'],
     ['code' => 'purchase_admin',       'group' => 'op',   'label' => '採購設定（標籤、規格屬性、簽核門檻、附件路徑）、刪除任何單據'],
 ]);
 
@@ -257,13 +259,20 @@ function purchase_ensure_schema(PDO $db): void
         scope VARCHAR(10) NOT NULL DEFAULT 'both' COMMENT 'both／equip(設備)／vehicle(車輛)',
         sort_order INT NOT NULL DEFAULT 0,
         is_active TINYINT NOT NULL DEFAULT 1,
+        simple_form TINYINT NOT NULL DEFAULT 0 COMMENT '1=簡易申請：選了就不用填品項與希望到貨日（例：定期保養）',
         UNIQUE KEY uk_name (maint_name)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='採購用：設備／車輛保養類別（管理員可增減）'");
     if ((int)$db->query("SELECT COUNT(*) FROM purchase_maint_type")->fetchColumn() === 0) {
-        $seed = $db->prepare("INSERT INTO purchase_maint_type (maint_name, scope, sort_order) VALUES (?,?,?)");
+        $seed = $db->prepare("INSERT INTO purchase_maint_type (maint_name, scope, sort_order, simple_form) VALUES (?,?,?,IF(?='定期保養',1,0))");
         foreach ([['定期保養', 'both'], ['維修', 'both'], ['零件更換', 'both'], ['校驗／檢測', 'equip'], ['加油', 'vehicle']] as $i => $sd) {
-            $seed->execute([$sd[0], $sd[1], $i + 1]);
+            $seed->execute([$sd[0], $sd[1], $i + 1, $sd[0]]);
         }
+    }
+    if (!$db->query("SHOW COLUMNS FROM purchase_maint_type LIKE 'simple_form'")->fetch()) {
+        try {
+            $db->exec("ALTER TABLE purchase_maint_type ADD COLUMN simple_form TINYINT NOT NULL DEFAULT 0 COMMENT '1=簡易申請：選了就不用填品項與希望到貨日'");
+            $db->exec("UPDATE purchase_maint_type SET simple_form=1 WHERE maint_name='定期保養'");
+        } catch (Throwable $e) { error_log('purchase ALTER maint simple_form: ' . $e->getMessage()); }
     }
     foreach ([
         'purchase_request'      => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
@@ -391,7 +400,8 @@ function purchase_perms(PDO $db, ?array $u): array
 {
     $none = ['isAdmin'=>false,'canAdmin'=>false,'canBuy'=>false,'canReceive'=>false,
              'canView'=>false,'canApply'=>false,'canApproveTop'=>false,'canEnter'=>false,
-             'canFormFull'=>false,'canViewAmount'=>false,'canViewVendor'=>false];
+             'canFormFull'=>false,'canViewAmount'=>false,'canViewVendor'=>false,
+             'canMaint'=>false,'canVehicle'=>false];
     if (!$u) return $none;
     $uid = (int)$u['id'];
     $isAdmin = in_array((int)$u['user_status'], [9, 90], true);
@@ -441,6 +451,9 @@ function purchase_perms(PDO $db, ?array $u): array
         'canView'=>$canView, 'canApply'=>$canApply, 'canApproveTop'=>$canApproveTop,
         'canEnter'=>$canEnter,
         'canFormFull'=>$canFormFull, 'canViewAmount'=>$canViewAmount, 'canViewVendor'=>$canViewVendor,
+        // 保養類別／車輛清單的維護權：採購作業不再自動擁有，要在角色設定裡另外勾（管理員固定有）
+        'canMaint'=>$canAdmin || $has('purchase_maint_manage'),
+        'canVehicle'=>$canAdmin || $has('purchase_vehicle_manage'),
     ];
 }
 
