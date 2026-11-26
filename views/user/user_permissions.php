@@ -1696,6 +1696,12 @@ $_quotDepts = array_keys($_deptSet);
                          <strong>最高核准人員</strong>。名單內的人請假並設有代理人時，代理人可代簽（圖章加「代」字）。管理者固定擁有全部權限。',
                         rs_of('comm_mgmt'), rsu_of('comm_mgmt'), $admins, $_quotDepts, $canEdit);
 
+                    eg_render_role_section('ul', 'upload_list', '上傳 List', 'fa-upload', '#b06f27',
+                        '為每位使用者指派「<a href="../pm/Upload_List.php" target="_blank" style="color:#b5762a;">上傳 List</a>」頁（ERP 匯入）的角色。
+                         <strong>上傳List本站管理員</strong>＝全部分頁與匯入功能，並可在該頁按「權限設定」決定生管／業務／品管各能用哪些分頁與匯入功能。
+                         生管／業務／品管身分不必在這裡指派，由組織角色綁定的部門自動判定。管理者固定擁有全部權限。',
+                        rs_of('upload_list'), rsu_of('upload_list'), $admins, $_quotDepts, $canEdit);
+
                     eg_render_role_section('od', 'od_dispatch', '批次發單', 'fa-truck', '#b06f27',
                         '為每位使用者指派「<a href="../pm/od_dispatch.php" target="_blank" style="color:#b5762a;">批次發單</a>」頁（外發加工單）的角色。
                          <strong>沒有指派角色就看不到也用不了本頁</strong>（與 BOM 總覽的「可移轉」權限分開管理）。<br>
