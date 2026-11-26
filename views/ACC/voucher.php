@@ -67,7 +67,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <div class="a-tabs">
       <button class="tab-btn on" data-tab="new"><i class="fa fa-plus-square-o"></i> 1. 開立傳票</button>
       <button class="tab-btn" data-tab="list"><i class="fa fa-search"></i> 2. 傳票查詢</button>
-      <?php if ($perms['canAdmin']): ?><button id="btnAcctCfg" style="align-self:center;"><i class="fa fa-cog"></i> 科目設定</button><?php endif; ?>
+      <?php if ($perms['canEdit']): ?><button id="btnAcctCfg" style="align-self:center;"><i class="fa fa-cog"></i> 科目設定</button><?php endif; ?>
       <span class="a-role" style="align-self:center;">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b></span>
     </div>
 
@@ -144,10 +144,10 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
   </div>
   <div class="m-foot"><button data-close="mkJ">取消</button><button class="go" id="btnJConfirm"><i class="fa fa-check"></i> 確定開立</button></div>
 </div></div>
-<div class="a-mask" id="mkAcct"><div class="a-modal narrow">
+<div class="a-mask" id="mkAcct"><div class="a-modal" style="width:760px;max-width:96vw;">
   <div class="m-head"><i class="fa fa-cog"></i>&nbsp;預設會計科目<span class="m-close" data-close="mkAcct">✕</span></div>
   <div class="m-body" id="acctBody"></div>
-  <div class="m-foot"><button data-close="mkAcct">取消</button><button class="go" id="btnAcctSave"><i class="fa fa-check"></i> 儲存</button></div>
+  <div class="m-foot"><button data-close="mkAcct">關閉</button><?php if ($perms['canAdmin']): ?><button class="go" id="btnAcctSave"><i class="fa fa-check"></i> 儲存預設科目</button><?php endif; ?><button class="go" id="btnAcctListSave"><i class="fa fa-check"></i> 儲存科目表</button></div>
 </div></div>
 <div class="a-mask" id="mkV"><div class="a-modal">
   <div class="m-head"><i class="fa fa-book"></i>&nbsp;<span id="mvTitle">傳票</span><span class="m-close" data-close="mkV">✕</span></div>
@@ -315,12 +315,12 @@ function autoLines(){
 }
 var jBalanced=false;
 function signBoxes(signs, maker, canClear, canSign, id){
-  var sg='<div style="flex:1;text-align:center;border-right:1px solid var(--a-line2);"><div style="background:var(--a-bg2);padding:3px;">製單</div><div style="min-height:44px;line-height:44px;">'+esc(maker||'')+'</div></div>';
-  var ks=Object.keys(SLOTS);
-  ks.forEach(function(k,i){ var g=(signs||{})[k];
-    sg+='<div style="flex:1;text-align:center;'+(i<ks.length-1?'border-right:1px solid var(--a-line2);':'')+'"><div style="background:var(--a-bg2);padding:3px;">'+esc(SLOTS[k])+'</div><div style="min-height:44px;padding:2px;">'
+  var sg='', ks=Object.keys(SLOTS);
+  ks.forEach(function(k){ var g=(signs||{})[k];
+    sg+='<div style="flex:1;text-align:center;border-right:1px solid var(--a-line2);"><div style="background:var(--a-bg2);padding:3px;">'+esc(SLOTS[k])+'</div><div style="min-height:44px;padding:2px;">'
       +(g?'<b>'+esc(g.name)+'</b><div style="font-size:11.5px;color:#8a6d45;">'+dd(g.date)+'</div>'+(canClear?'<button class="btn-mini v-sign" data-mode="clear" data-slot="'+k+'" data-id="'+id+'">取消</button>':'')
         :(canSign?'<button class="btn-mini v-sign" data-mode="sign" data-slot="'+k+'" data-id="'+id+'" style="margin-top:8px;">簽章</button>':''))+'</div></div>'; });
+  sg+='<div style="flex:1;text-align:center;"><div style="background:var(--a-bg2);padding:3px;">製單</div><div style="min-height:44px;line-height:44px;">'+esc(maker||'')+'</div></div>';
   return sg;
 }
 function journalRender(){
@@ -357,12 +357,35 @@ $('#btnJAdd').on('click',function(){
 $(document).on('click','.j-del',function(){ JX.splice(+$(this).data('i'),1); journalRender(); });
 $('#btnAcctCfg').on('click',function(){
   $.getJSON(API,{action:'vch_accounts'},function(r){
-    var h='<table class="a-t"><thead><tr><th>用途</th><th>科目代號</th><th>科目名稱</th></tr></thead><tbody>';
+    var dis=CAN_ADMIN?'':' disabled';
+    var h='<div style="font-weight:700;margin-bottom:4px;">① 預設會計科目（開傳票時自動帶出）'+(CAN_ADMIN?'':'<span style="font-weight:400;color:#8a6d45;font-size:12.5px;">　僅會計管理員可修改</span>')+'</div>'
+      +'<table class="a-t"><thead><tr><th>用途</th><th>科目代號</th><th>科目名稱</th></tr></thead><tbody>';
     var L=r.labels||{}; Object.keys(L).forEach(function(k){ var c=(r.cfg||{})[k]||{};
-      h+='<tr><td class="l">'+esc(L[k])+'</td><td><input type="text" class="ac-code" data-k="'+k+'" maxlength="10" value="'+esc(c.code||'')+'" style="width:100px;"></td><td><input type="text" class="ac-name" data-k="'+k+'" maxlength="40" value="'+esc(c.name||'')+'" style="width:150px;"></td></tr>'; });
-    $('#acctBody').html(h+'</tbody></table><div class="a-hint" style="margin-top:6px;">開傳票時自動帶出的科目。借貸方向固定：應收＝應收帳款借／銷項稅額、銷貨收入貸；應付＝進貨／加工費、進項稅額借／應付帳款貸。</div>');
-    openMask('mkAcct');
+      h+='<tr><td class="l">'+esc(L[k])+'</td><td><input type="text" class="ac-code" data-k="'+k+'" maxlength="10" value="'+esc(c.code||'')+'" style="width:100px;"'+dis+'></td><td><input type="text" class="ac-name" data-k="'+k+'" maxlength="40" value="'+esc(c.name||'')+'" style="width:150px;"'+dis+'></td></tr>'; });
+    h+='</tbody></table><div class="a-hint" style="margin:4px 0 12px;">借貸方向固定：應收＝應收帳款借／銷項稅額、銷貨收入貸；應付＝進貨／加工費、進項稅額借／應付帳款貸。</div>';
+    h+='<div style="font-weight:700;margin-bottom:4px;">② 科目表（追加科目時可選；新增科目代號＋名稱後按「儲存科目表」）</div>'
+      +'<table class="a-t"><thead><tr><th style="width:110px;">科目代號</th><th>科目名稱</th><th style="width:70px;">借貸</th><th style="width:60px;">啟用</th></tr></thead><tbody id="acListBody">';
+    (r.all_accounts||[]).forEach(function(a){
+      h+='<tr><td>'+esc(a.code)+'<input type="hidden" class="al-code" value="'+esc(a.code)+'"></td><td><input type="text" class="al-name" maxlength="60" value="'+esc(a.name)+'" style="width:240px;"></td><td>'+(a.side==='D'?'借':(a.side==='C'?'貸':'<span style="color:#8a6d45;">自選</span>'))+'</td><td><input type="checkbox" class="al-on"'+(Number(a.active)?' checked':'')+'></td></tr>'; });
+    h+='</tbody></table><div class="a-bar" style="margin-top:6px;"><input type="text" id="alNewCode" maxlength="10" placeholder="新科目代號" style="width:110px;" autocomplete="off"><input type="text" id="alNewName" maxlength="60" placeholder="新科目名稱" style="width:200px;" autocomplete="off"><button id="btnAlAdd"><i class="fa fa-plus"></i> 加入科目表</button><span id="alErr" style="color:#DD5138;font-size:12.5px;"></span></div>';
+    $('#acctBody').html(h); openMask('mkAcct');
   });
+});
+$(document).on('click','#btnAlAdd',function(){
+  var c=$.trim($('#alNewCode').val()), n=$.trim($('#alNewName').val()), e='';
+  if(!/^\d{4,10}$/.test(c)) e='科目代號須為 4~10 位數字'; else if(!n) e='請填科目名稱';
+  else if($('.al-code').filter(function(){ return this.value===c; }).length) e='科目 '+c+' 已在科目表';
+  $('#alErr').text(e); if(e) return;
+  var sd=sideOfCode(c);
+  $('#acListBody').append('<tr><td>'+esc(c)+'<input type="hidden" class="al-code" value="'+esc(c)+'"></td><td><input type="text" class="al-name" maxlength="60" value="'+esc(n)+'" style="width:240px;"></td><td>'+(sd==='D'?'借':(sd==='C'?'貸':'<span style="color:#8a6d45;">自選</span>'))+'</td><td><input type="checkbox" class="al-on" checked></td></tr>');
+  $('#alNewCode,#alNewName').val('');
+});
+$('#btnAcctListSave').on('click',function(){
+  var rows=[]; $('#acListBody tr').each(function(){ rows.push({code:$(this).find('.al-code').val(), name:$.trim($(this).find('.al-name').val()), active:$(this).find('.al-on').is(':checked')?1:0}); });
+  $.post(API+'?action=vch_accounts_save',{csrf:CSRF,rows:JSON.stringify(rows)},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
+    toast(esc(r.message)); loadAcct();
+  },'json').fail(function(x){ failMsg(x,'儲存失敗'); });
 });
 $('#btnAcctSave').on('click',function(){
   var cfg={}; $('.ac-code').each(function(){ var k=$(this).data('k'); cfg[k]={code:$.trim(this.value), name:$.trim($('.ac-name[data-k='+k+']').val())}; });
@@ -370,15 +393,14 @@ $('#btnAcctSave').on('click',function(){
     if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
     toast(esc(r.message)); closeMask('mkAcct'); loadAcct();
   },'json').fail(function(x){ failMsg(x,'儲存失敗'); });
-});
-/* 傳票列印（隱藏 iframe，不開新分頁） */
+});/* 傳票列印（隱藏 iframe，不開新分頁） */
 function voucherPrintHtml(r){
   var v=r.voucher, jd=0, jc=0, rows='';
   (r.lines||[]).forEach(function(l){ var D=(l.side==='D'), a=Number(l.amount)||0; if(D) jd+=a; else jc+=a;
     rows+='<tr><td>'+esc(l.code)+'</td><td style="text-align:left;'+(D?'':'padding-left:22px;')+'">'+esc(l.name)+(l.memo?'　'+esc(l.memo):'')+'</td><td class="r">'+(D?nf2(a):'')+'</td><td class="r">'+(D?'':nf2(a))+'</td></tr>'; });
-  var SG=r.signs||{}, sgs='<td>'+esc(v.created_by||'')+'</td>';
-  var hd='<td class="h">製單</td>';
+  var SG=r.signs||{}, sgs='', hd='';
   Object.keys(SLOTS).forEach(function(k){ hd+='<td class="h">'+esc(SLOTS[k])+'</td>'; var g=SG[k]; sgs+='<td>'+(g?esc(g.name)+'<br><span style="font-size:11px;">'+dd(g.date)+'</span>':'')+'</td>'; });
+  hd+='<td class="h">製單</td>'; sgs+='<td>'+esc(v.maker_name||v.created_by||'')+'</td>';
   return '<!doctype html><html><head><meta charset="utf-8"><title>傳票 '+esc(v.voucher_no||'')+'</title><style>'
     +'@page{size:A4 portrait;margin:0}body{margin:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#222}'
     +'.sheet{box-sizing:border-box;width:210mm;min-height:297mm;padding:16mm 14mm}'
@@ -484,7 +506,7 @@ $(document).on('click','.v-open',function(){
     (r.lines||[]).forEach(function(l){ var D=(l.side==='D'), a=Number(l.amount)||0; if(D) jd+=a; else jc+=a;
       jh+='<tr><td>'+esc(l.code)+'</td><td class="l" style="'+(D?'':'padding-left:26px;')+'">'+esc(l.name)+(l.memo?'　<span style="color:#8a6d45;font-size:12px;">'+esc(l.memo)+'</span>':'')+'</td><td class="r">'+(D?nf2(a):'')+'</td><td class="r">'+(D?'':nf2(a))+'</td></tr>'; });
     jh+='<tr><td colspan="2" style="text-align:right;font-weight:700;">合計</td><td class="r"><b>'+nf2(jd)+'</b></td><td class="r"><b>'+nf2(jc)+'</b></td></tr></tbody></table>';
-    h+=jh+'<div style="display:flex;max-width:780px;margin-top:8px;border:1px solid var(--a-line2);">'+signBoxes(r.signs||{}, v.created_by, CAN_ADMIN&&!void_, ed, id)+'</div>';
+    h+=jh+'<div style="display:flex;max-width:780px;margin-top:8px;border:1px solid var(--a-line2);">'+signBoxes(r.signs||{}, v.maker_name||v.created_by, CAN_ADMIN&&!void_, ed, id)+'</div>';
     $('#mvBody').html(h);
     var f='<button data-close="mkV">關閉</button>';
     if(ed) f+='<button class="go" id="btnVSave" data-id="'+id+'"><i class="fa fa-check"></i> 儲存</button>';

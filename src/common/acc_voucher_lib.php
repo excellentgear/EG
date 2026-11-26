@@ -252,6 +252,9 @@ function acc_voucher_get(PDO $db, int $id): ?array
         $lines = acc_vch_auto_lines($db, (string)$v['side'], (float)$v['total_amount']);
     }
     $signs = json_decode((string)($v['sign_json'] ?? ''), true); if (!is_array($signs)) $signs = [];
+    $v['maker_name'] = acc_vch_cname($db, $v['created_by'] ?? '');
+    foreach ($signs as &$sg) if (!empty($sg['name'])) $sg['name'] = acc_vch_cname($db, $sg['name']);
+    unset($sg);
     if ($v['status'] === 'void' && !empty($v['void_items_json'])) {          // 作廢後明細已釋放，顯示當時的快照
         $snap = json_decode($v['void_items_json'], true);
         return ['voucher' => $v, 'items' => is_array($snap) ? $snap : [], 'lines' => $lines, 'signs' => $signs];
@@ -376,12 +379,38 @@ function acc_vch_account_upsert(PDO $db, string $code, string $name): void
     $db->prepare("INSERT INTO acc_account (code, name) VALUES (?,?) ON DUPLICATE KEY UPDATE name=IF(name='' ,VALUES(name),name)")->execute([$code, $name]);
 }
 
-function acc_vch_accounts(PDO $db): array
+function acc_vch_accounts(PDO $db, bool $all = false): array
 {
     acc_voucher_ensure($db);
-    $rows = $db->query("SELECT code, name FROM acc_account WHERE active=1 ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT code, name, active FROM acc_account " . ($all ? '' : 'WHERE active=1 ') . "ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) $r['side'] = acc_vch_side_of_code($r['code']);
     return $rows;
+}
+
+/** 科目表維護：新增／改名／停用（科目代號不可改，要換就新增一個） */
+function acc_vch_accounts_save(PDO $db, array $rows): array
+{
+    acc_voucher_ensure($db);
+    $st = $db->prepare("INSERT INTO acc_account (code, name, active) VALUES (?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name), active=VALUES(active)");
+    foreach ($rows as $i => $r) {
+        $code = trim((string)($r['code'] ?? '')); $name = trim((string)($r['name'] ?? ''));
+        $n = $i + 1;
+        if (!preg_match('/^\d{4,10}$/', $code)) return ['success' => false, 'message' => "第 {$n} 列：科目代號須為 4~10 位數字"];
+        if ($name === '' || mb_strlen($name) > 60) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：請填科目名稱（60 字內）"];
+        $st->execute([$code, $name, !empty($r['active']) ? 1 : 0]);
+    }
+    return ['success' => true, 'message' => '已儲存科目表'];
+}
+
+/** 登入帳號 → 人員姓名（顯示用）；查不到就原樣回傳 */
+function acc_vch_cname(PDO $db, ?string $uname): string
+{
+    $uname = trim((string)$uname);
+    if ($uname === '') return '';
+    static $c = [];
+    if (isset($c[$uname])) return $c[$uname];
+    try { $q = $db->prepare("SELECT user_cname FROM user WHERE user_uname=? LIMIT 1"); $q->execute([$uname]); $n = trim((string)$q->fetchColumn()); } catch (Throwable $e) { $n = ''; }
+    return $c[$uname] = ($n !== '' ? $n : $uname);
 }
 
 /** 傳票號碼格式：V-民國年3碼＋MMDD＋流水3碼（例 V-1151126001）。回 [錯誤訊息|null, 號碼內含的西元日期|null] */
