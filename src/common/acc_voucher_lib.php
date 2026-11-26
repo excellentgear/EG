@@ -245,8 +245,9 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT], $expGroups);
     // 使用者手改自動分錄的科目：以該列順序為鍵，科目名稱一律取自科目表；借貸方向維持原分錄結構
     foreach ($autoOvr as $ai => $ocode) {
+        if (is_array($ocode)) $ocode = $ocode['code'] ?? '';   // 前端送 {code,name}，名稱一律以科目表為準
         $ocode = trim((string)$ocode);
-        if (is_array($ocode) || !isset($autoLines[(int)$ai])) continue;
+        if ($ocode === '' || !isset($autoLines[(int)$ai])) continue;
         if (!preg_match('/^\d{4,10}$/', $ocode)) return ['success' => false, 'message' => '分錄第 ' . ((int)$ai + 1) . ' 列：科目代號須為 4~10 位數字'];
         $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$ocode]);
         $oname = (string)$q->fetchColumn();
