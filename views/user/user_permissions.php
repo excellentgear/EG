@@ -367,76 +367,8 @@ try {
 //   label ＝ 使用者在畫面上看到的中文名（沿用原本快速切換列的用字）
 //   page  ＝ 這個模組對應的頁面檔名；用來即時查它在「子頁面設定」被歸到哪個主項目，
 //           所以在 views/admin/system_module_setting.php 改了主項目歸屬，這裡的分群會自動跟著變（鐵律4）
-$EG_ROLE_MODULES = [
-    'quotation'           => ['prefix'=>'quot',    'label'=>'報價單',              'page'=>'quotation_list_NEW.php'],
-    'notice'              => ['prefix'=>'notice',  'label'=>'公告/通知',           'page'=>'createEvent.php'],
-    'homepage'            => ['prefix'=>'home',    'label'=>'首頁設定',            'page'=>'home_page_setting.php'],
-    'qc'                  => ['prefix'=>'qc',      'label'=>'品管檢驗表 2.0',      'page'=>'inspection_entry_v2.php'],
-    'car'                 => ['prefix'=>'car',     'label'=>'異常矯正單',          'page'=>'correction_order.php'],
-    'master_data'         => ['prefix'=>'mdata',   'label'=>'主檔管理',            'page'=>'master_data_management.php'],
-    'attach_dl'           => ['prefix'=>'adl',     'label'=>'附件下載權限',        'page'=>'master_data_management.php'],
-    'imgedit'             => ['prefix'=>'imgedit', 'label'=>'批圖編輯器',          'page'=>''],   // 未登記進選單（帶參數才進得去）
-    'review_form'         => ['prefix'=>'rvf',     'label'=>'審核表單',            'page'=>'review_form.php'],
-    'sheet_form'          => ['prefix'=>'sf',      'label'=>'表格模板',            'page'=>'sheet_form.php'],
-    'hr_form'             => ['prefix'=>'hrf',     'label'=>'人資職務表單',        'page'=>'hr_position_forms.php'],
-    'form_signer'         => ['prefix'=>'fsd',     'label'=>'表單簽核設計器',      'page'=>'form_signer.php'],
-    'drawing_rename'      => ['prefix'=>'drawren', 'label'=>'圖面改檔名',          'page'=>'drawing_rename.php'],
-    'bom_rename'          => ['prefix'=>'bomren',  'label'=>'叫料改檔名',          'page'=>'bom_rename.php'],
-    'oready'              => ['prefix'=>'oready',  'label'=>'生管BOM',             'page'=>'OreadyReply_ForPm_BaseOfTime.php'],
-    'bom_track'           => ['prefix'=>'bomtrk',  'label'=>'BOM追蹤',             'page'=>'bom_tracking.php'],
-    'order_profit'        => ['prefix'=>'profit',  'label'=>'訂單毛利分析',        'page'=>'Order_Profit_Analysis.php'],
-    'part_process_report' => ['prefix'=>'ppr',     'label'=>'料號製程履歷報告',    'page'=>'part_process_report.php'],
-    'stamp'               => ['prefix'=>'stamp',   'label'=>'圖章管理',            'page'=>'stamp_management.php'],
-    'kpi'                 => ['prefix'=>'kpi',     'label'=>'KPI績效指標',         'page'=>'kpi_main.php'],
-    'personal_task'       => ['prefix'=>'ptask',   'label'=>'個人工作紀錄',        'page'=>'personal_task.php'],
-    'roster'              => ['prefix'=>'roster',  'label'=>'輪值排班',            'page'=>'roster.php'],
-    'as_doc'              => ['prefix'=>'asdoc',   'label'=>'AS文件管理',          'page'=>'as_document_management.php'],
-    'db_backup'           => ['prefix'=>'dbbk',    'label'=>'資料庫備份',          'page'=>'db_backup.php'],
-    'data_console'        => ['prefix'=>'dc',      'label'=>'資料急救台',          'page'=>'data_console.php'],
-    'tool_calib'          => ['prefix'=>'tcal',    'label'=>'量測儀器校驗',        'page'=>'tool_calibration.php'],
-    'training'            => ['prefix'=>'train',   'label'=>'教育訓練',            'page'=>'training_record.php'],
-    'meeting'             => ['prefix'=>'meet',    'label'=>'會議紀錄',            'page'=>'meeting_record.php'],
-    'vendor_audit'        => ['prefix'=>'vaud',    'label'=>'供應商稽核',          'page'=>'vendor_audit.php'],
-    'equip_machine'       => ['prefix'=>'eqm',     'label'=>'機台設備一覽表',      'page'=>'equipment_machine_list.php'],
-    'business_trip'       => ['prefix'=>'btrp',    'label'=>'公出單',              'page'=>'business_trip.php'],
-    'memo_request'        => ['prefix'=>'memo',    'label'=>'簽呈',                'page'=>'memo_request.php'],
-    'interview_record'    => ['prefix'=>'ivw',     'label'=>'訪談記錄',            'page'=>'interview_record.php'],
-    'doc_apply'           => ['prefix'=>'dap',     'label'=>'文件制修申請單',      'page'=>'doc_apply.php'],
-    'eng_change'          => ['prefix'=>'eng',     'label'=>'工程變更申請單',      'page'=>'eng_change.php'],
-    'eng_log'             => ['prefix'=>'elog',    'label'=>'工程處理紀錄',        'page'=>'eng_log.php'],
-    'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
-    'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
-    'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
-    'od_dispatch'         => ['prefix'=>'od',      'label'=>'批次發單',            'page'=>'od_dispatch.php'],
-    'risk_mgmt'           => ['prefix'=>'rm',      'label'=>'風險與機會管理',      'page'=>'risk_mgmt.php'],
-    'as_schedule'         => ['prefix'=>'asched',  'label'=>'AS文件排程',          'page'=>'as_schedule.php'],
-    'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
-    'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
-    'qa_abnormal'         => ['prefix'=>'qab',     'label'=>'品質異常處理單',      'page'=>'qa_abnormal_list.php'],
-    'sop_sip'             => ['prefix'=>'sopsip',  'label'=>'作業標準書SOP／檢驗指導書SIP', 'page'=>'sop_sip.php'],
-    'control_plan'        => ['prefix'=>'cp',      'label'=>'管制計畫CP',          'page'=>'control_plan.php'],
-    'data_audit'          => ['prefix'=>'dqa',     'label'=>'資料稽核',            'page'=>'data_audit.php'],
-    'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
-    'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
-    'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
-    'accounting'          => ['prefix'=>'acc',     'label'=>'會計',                'page'=>'recon_overview.php'],
-    'acc_recon_track'     => ['prefix'=>'art',     'label'=>'對帳進度追蹤',        'page'=>'recon_track.php'],
-    'acc_allowance'       => ['prefix'=>'aal',     'label'=>'折讓單',              'page'=>'allowance.php'],
-    'external_doc'        => ['prefix'=>'extdoc',  'label'=>'外來文件清單',        'page'=>'external_doc_list.php'],
-    'order_track'         => ['prefix'=>'otrk',    'label'=>'訂單追蹤',            'page'=>'_cleanOrder_Track_ate_only.php'],
-    'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
-    'td_dev_eval'         => ['prefix'=>'tdev',    'label'=>'產品開發評估表',      'page'=>'td_dev_eval.php'],
-    'con_review'          => ['prefix'=>'cnrv',    'label'=>'合約訂單審查表',      'page'=>'con_review.php'],
-    'pfmea'               => ['prefix'=>'pfmea',   'label'=>'PFMEA',               'page'=>'pfmea.php'],
-    'proc_transfer'       => ['prefix'=>'ptl',     'label'=>'製程移轉一覽表',      'page'=>'Transfer_Log_Analysis.php'],
-    'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
-    'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝排程',        'page'=>'packing_schedule.php'],
-    'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
-    'ps_v2'               => ['prefix'=>'psv2',    'label'=>'待加工排程V2.0',      'page'=>'process_schedule_V2.php'],
-    'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
-    'ir_track'            => ['prefix'=>'irt',     'label'=>'退貨追蹤',            'page'=>'IR_Track.php'],
-    'emp_mgmt'            => ['prefix'=>'emp',     'label'=>'員工資料管理',        'page'=>'employee_management.php'],
-];
+require_once __DIR__ . '/../../src/common/role_modules_lib.php';
+$EG_ROLE_MODULES = eg_role_modules();   // 唯一來源在 role_modules_lib.php
 
 // 員工資料管理的角色（HR管理員／HR／唯讀）：確保存在，下方角色指派區塊才列得出來
 try {
@@ -1865,7 +1797,7 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#b06f27;">應付涵蓋範圍</span>：廠商加工費＋材料／其他採購（<strong>只收月結</strong>；現金／零用金採購不經會計，由採購自行做零用金記帳）。
                          採購單是現金還是月結預設依付款方式文字判定，<strong>會計登錄</strong>以上可在應付頁逐張改判（須填原因、寫入稽核）。
                          月結採購的付款狀態<strong>以會計的付款沖帳為準</strong>並自動回寫採購單，採購頁只顯示結果。<br>
-                         <strong>會計檢閱</strong>＝只能查詢與匯出，不可修改；<strong>會計登錄</strong>＝檢閱＋維護客戶統編/發票抬頭、CSV 匯入、開立發票與收款沖帳、兩側都可對帳；<strong>會計管理員</strong>＝登錄＋作廢發票、刪除收款單、<strong>退回已鎖帳的對帳單</strong>。<br>
+                         <strong>會計檢閱</strong>＝只能查詢與匯出，不可修改；<strong>會計登錄</strong>＝檢閱＋維護客戶統編/發票抬頭、CSV 匯入、開立發票與<strong>作廢發票</strong>、收款沖帳、兩側都可對帳；<strong>會計管理員</strong>＝登錄＋刪除收款單、<strong>退回已鎖帳的對帳單</strong>、電子發票設定。<br>
                          <span style="color:#b06f27;">對帳分工（實務）</span>：應收由<strong>業務</strong>對完帳給會計、應付由<strong>生管</strong>對完帳給會計，所以另有兩個只做對帳的角色——<strong>應收對帳(業務)</strong> 只能對應收（客戶／出貨退貨），<strong>應付對帳(生管)</strong> 只能對應付（廠商／加工費），<span style="color:#b06f27;">兩者互不相通</span>（業務不能碰應付、生管不能碰應收），且都<strong>不能</strong>開發票或做收款付款。這兩個角色可以修改單據數量/單價/金額/備註與帳款月份，但<strong>每次修改都必填原因並寫入稽核紀錄</strong>。<br>
                          <span style="color:#b06f27;">鎖帳規則</span>：對帳人員按「確認正確」即鎖帳，之後不可改單也不可再暫存，<strong>僅會計管理員可退回重對</strong>（須填原因）。已開立發票的憑證另有更硬的鎖——不提供解鎖，只能作廢／折讓／補開，因為帳面必須與國稅局申報一致。<br>
                          <span style="color:#b06f27;">為什麼要先維護客戶發票資料</span>：開立電子發票必須有買方統一編號與買方名稱，目前 925 家有效客戶只有 12 家資料完整、近一年有出貨的 175 家中有 171 家缺資料，補齊前發票轉出會被擋下。<strong>未被指派角色者無法進入這些頁面</strong>；管理者固定擁有全部權限。',

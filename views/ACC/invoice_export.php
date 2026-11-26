@@ -446,8 +446,8 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
   <div class="m-head">角色權限說明<span class="m-close" data-close="mkRole">✕</span></div>
   <div class="m-body" style="font-size:13.5px;color:#5b3a1e;line-height:1.9;">
     <b>管理者</b>：固定擁有全部權限。<br>
-    <b>會計管理員</b>：會計登錄的全部權限，另可<b>作廢發票</b>。<br>
-    <b>會計登錄</b>：可產生發票、轉出、回填號碼、開折讓單。<br>
+    <b>會計管理員</b>：會計登錄的全部權限，另可設定電子發票筆數／日期／時間等。<br>
+    <b>會計登錄</b>：可產生發票、轉出、回填號碼、<b>作廢發票</b>、開折讓單。<br>
     <b>會計檢閱</b>：僅可查詢與列印。<br>
     <span style="color:#8a6d45;font-size:12.5px;">角色於「使用者權限設定」頁指派（模組 accounting）。</span>
   </div>
@@ -874,7 +874,7 @@ function renderInv(){
       +'<td class="r">'+(v.open_amt>0.005 && !isVoid?'<b style="color:#DD5138;">'+nf(v.open_amt)+'</b>':'')+'</td>'
       +'<td>'+(v.age_bucket?'<span class="pill age-'+v.age_bucket+'">'+v.age_days+'天</span>':'')+'</td>'
       +'<td><button class="btn-mini iv-detail" data-id="'+id+'">'+nf(v.item_cnt)+' 筆</button></td>'
-      +'<td>'+(CAN_ADMIN && !isVoid
+      +'<td>'+(CAN_EDIT && !isVoid
           ? '<button class="btn-mini iv-void" data-id="'+id+'">作廢</button>' : '')+'</td>'
       +'</tr>';
   });
@@ -992,6 +992,7 @@ $(document).on('input','.no-in',function(){
   $(this).toggleClass('bad', bad).attr('title', bad?'發票號碼須為英文 2 碼＋數字 8 碼（例 AB12345678），目前 '+v.length+' 碼':'');
 });
 $(document).on('blur','.no-in', function(){
+  this.value=$.trim(this.value).toUpperCase();      // 輸入後自動修正：去空白、英文轉大寫
   if(!CAN_EDIT) return;
   var id=$(this).data('id');
   var $tr=$('#ivBody tr[data-id="'+id+'"]');

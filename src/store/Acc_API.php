@@ -506,7 +506,7 @@ case 'inv_backfill_csv': {
 /* 作廢發票 */
 case 'inv_void': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
-    if (!$perms['canAdmin']) acc_err('僅會計管理員可作廢發票', 403);
+    if (!$perms['canEdit']) acc_err('需要會計登錄權限才能作廢發票', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $r = acc_invoice_void($db, (int)($_POST['invoice_id'] ?? 0),
                           acc_u8(trim((string)($_POST['reason'] ?? ''))), (string)$uid);
