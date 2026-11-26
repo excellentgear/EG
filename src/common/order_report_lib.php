@@ -77,14 +77,16 @@ function orp_locked_suffixes(PDO $db): array
     } catch (Throwable $e) { return []; }
 }
 
-/** 可綁定的檔名後綴＝part_viewer 檔名標籤設定中勾了「報告」的標籤 */
+/** 可綁定的檔名後綴＝part_viewer 檔名標籤設定中的全部標籤（勾了「報告」的排前面，其餘註明未勾） */
 function orp_suffix_choices(PDO $db): array
 {
     require_once __DIR__ . '/bom_dir_lib.php';
     $out = [];
     foreach (eg_bom_file_tags_all($db) as $t) {
-        if (!empty($t['is_report'])) $out[] = ['suffix' => $t['suffix'], 'label' => $t['label'], 'process_type_id' => $t['process_type_id']];
+        $out[] = ['suffix' => $t['suffix'], 'label' => $t['label'] . (empty($t['is_report']) ? '（未勾報告）' : ''),
+                  'process_type_id' => $t['process_type_id'], 'is_report' => !empty($t['is_report']) ? 1 : 0];
     }
+    usort($out, function ($x, $y) { return $y['is_report'] <=> $x['is_report']; });   // 穩定排序：報告標籤在前
     return $out;
 }
 
