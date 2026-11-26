@@ -1211,7 +1211,7 @@ function purchase_find_or_create_stock_item(PDO $db, array $item, array $req, ?i
          vendor_id, vendor_name, remark1, stock_date, is_active, source, Created_By)
         VALUES (?, NULL, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, CURDATE(), 1, 'purchase', ?)")
        ->execute([
-           $spec['spec_code'], $specId, (int)$spec['category_id'], $locName, $locId,
+           $spec['spec_code'], $specId, ((int)($item['stock_category_id'] ?? 0) ?: (int)$spec['category_id']), $locName, $locId,
            $item['unit_id'] !== null ? (int)$item['unit_id'] : ($spec['unit_id'] !== null ? (int)$spec['unit_id'] : null),
            ($item['unit_price'] ?? null) !== null ? (float)$item['unit_price'] : null,
            $req['vendor_id'] ?: null, $req['vendor_name'] ?: null,

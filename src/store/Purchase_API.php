@@ -159,6 +159,14 @@ case 'search_vendor': {
     jout(['vendors' => $st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
+/** 交付對象挑選：全部在職者（兼任者一個職務一列），前端先選部門再選人，或輸入部分文字模糊篩選 */
+case 'recv_people': {
+    require_once __DIR__ . '/../common/people_lib.php';
+    $rows = eg_people_list($db, ['all_posts' => true]);
+    jout(['people' => array_map(fn($r) => ['id' => (int)$r['id'], 'name' => $r['user_cname'], 'dept_id' => $r['dept_id'],
+        'dept_name' => $r['dept_name'], 'pos' => $r['position_name']], $rows)]);
+}
+
 case 'search_user': {
     $kw = trim($_GET['kw'] ?? '');
     $st = $db->prepare("SELECT u.id, u.user_cname, COALESCE(d.name,'') dept_name

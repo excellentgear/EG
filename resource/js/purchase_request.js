@@ -1569,7 +1569,7 @@ function openRecv() {
         var shownSpec = it.buy_spec_text || it.spec_text || '';
         var locCode = '';
         (META.recv_locations || META.locations || []).forEach(function (l) { if (String(l.location_id) === String(it.location_id)) locCode = l.location_code; });
-        var catOpts = '<option value="">（選品項種類）</option>';
+        var catOpts = '<option value="">' + ((it.buy_spec_id || it.spec_id) ? '（依採購料號的種類）' : '（選品項種類）') + '</option>';
         (META.categories || []).forEach(function (c) { catOpts += '<option value="' + c.category_id + '"' + (String(c.category_id) === String(it.stock_category_id || '') ? ' selected' : '') + '>' + esc(c.category_name) + '</option>'; });
         var basis = (it.buy_qty === null || it.buy_qty === undefined || it.buy_qty === '') ? parseFloat(it.qty_requested) : parseFloat(it.buy_qty);
         h += '<tr data-id="' + it.pr_item_id + '" data-left="' + left + '" data-spec="' + (boundSpec || '') + '" data-basis="' + basis + '">' +
@@ -1587,8 +1587,9 @@ function openRecv() {
             '<td><select class="rc-mode">' + modes + '</select></td>' +
             '<td><input type="text" class="rc-loc" list="rcLocList" autocomplete="off" data-eg-skip placeholder="輸入或選擇儲位" value="' + esc(locCode) + '" style="width:100%;">' +
                 '<select class="rc-cat" style="width:100%;margin-top:3px;display:none;" title="這個品項沒有採購料號：入庫要選「品項種類」（不會建立料號）">' + catOpts + '</select></td>' +
-            '<td><input type="text" class="rc-recv" placeholder="預設＝請購人" autocomplete="off" style="width:100%;">' +
-                '<div class="rc-recv-list"></div></td>' +
+            '<td class="rc-recv-cell"><select class="rc-dept" data-eg-skip style="width:100%;margin-bottom:3px;"><option value="">全部部門</option></select>' +
+                '<input type="text" class="rc-recv" list="rcPL' + it.pr_item_id + '" placeholder="輸入姓名篩選；不填＝請購人" autocomplete="off" data-eg-skip style="width:100%;">' +
+                '<datalist id="rcPL' + it.pr_item_id + '"></datalist></td>' +
             '<td><input type="text" class="rc-remark" style="width:100%;"></td></tr>';
     });
     $('#recvBody').html(h);
@@ -1718,34 +1719,41 @@ $(document).on('click', '#rcAttGo', function () {
 function toggleRecvCols() {
     $('#recvBody tr').each(function () {
         var m = $(this).find('.rc-mode').val();
-        $(this).find('.rc-loc').prop('disabled', m === 'expense' || m === 'service');
-        // 只有「入庫待領」才需要儲位；沒有採購料號的品項入庫要另選品項種類
-        $(this).find('.rc-cat').toggle(m === 'stock' && !$(this).data('spec'));
-        $(this).find('.rc-recv').prop('disabled', m !== 'direct')
-               .attr('placeholder', m === 'direct' ? '預設＝請購人' : '—');
+        // 只有「入庫待領」才顯示入庫儲位與品項種類；只有「直接交付」才顯示交付對象
+        var isStock = (m === 'stock'), isDirect = (m === 'direct');
+        $(this).find('.rc-loc').toggle(isStock);
+        $(this).find('.rc-cat').toggle(isStock);
+        $(this).find('.rc-recv-cell').children().toggle(isDirect);
+        if (!isStock) $(this).find('.rc-loc').val('');
+        if (!isDirect) { $(this).find('.rc-recv').val('').removeData('uid'); }
+        if (isDirect) fillRecvPeople($(this));
     });
 }
-// 交付對象搜尋（逐列）
-var recvT = null;
-$(document).on('input', '.rc-recv', function () {
-    var $in = $(this), $list = $in.siblings('.rc-recv-list');
-    clearTimeout(recvT); var kw = $in.val().trim();
-    if (kw.length < 1) { $list.empty(); return; }
-    recvT = setTimeout(function () {
-        api('search_user', { kw: kw }).done(function (r) {
-            var h = '<div class="sug">';
-            (r.users || []).forEach(function (u, i) {
-                h += '<a href="javascript:;" class="rc-pick" data-id="' + u.id + '" data-name="' + esc(u.user_cname) + '">' +
-                     esc(u.user_cname) + (u.dept_name ? '（' + esc(u.dept_name) + '）' : '') + '</a><br>';
-            });
-            $list.html(h + '</div>');
-        });
-    }, 300);
-});
-$(document).on('click', '.rc-pick', function () {
-    var $in = $(this).closest('td').find('.rc-recv');
-    $in.val($(this).data('name')).data('uid', $(this).data('id'));
-    $(this).closest('.rc-recv-list').empty();
+// 交付對象：先選部門再選人，或直接輸入部分姓名（datalist 模糊篩選）；不填＝請購人（後端預設）
+var RECV_PEOPLE = null;
+function loadRecvPeople(cb) {
+    if (RECV_PEOPLE) { cb(); return; }
+    api('recv_people', {}).done(function (r) { RECV_PEOPLE = r.people || []; cb(); }).fail(function () { RECV_PEOPLE = []; cb(); });
+}
+function recvPeopleLabel(p) { return p.name + (p.dept_name ? '（' + p.dept_name + '）' : ''); }
+function fillRecvPeople($tr) {
+    loadRecvPeople(function () {
+        var $dept = $tr.find('.rc-dept');
+        if ($dept.find('option').length <= 1) {
+            var seen = {}, h = '<option value="">全部部門</option>';
+            RECV_PEOPLE.forEach(function (p) { if (p.dept_name && !seen[p.dept_name]) { seen[p.dept_name] = 1; h += '<option value="' + esc(p.dept_name) + '">' + esc(p.dept_name) + '</option>'; } });
+            $dept.html(h);
+        }
+        var dn = $dept.val(), dl = '';
+        RECV_PEOPLE.forEach(function (p) { if (!dn || p.dept_name === dn) dl += '<option value="' + esc(recvPeopleLabel(p)) + '">'; });
+        $tr.find('datalist').html(dl);
+    });
+}
+$(document).on('change', '.rc-dept', function () { $(this).closest('td').find('.rc-recv').val('').removeData('uid'); fillRecvPeople($(this).closest('tr')); });
+$(document).on('input change', '.rc-recv', function () {
+    var v = $.trim($(this).val()), uid = 0;
+    (RECV_PEOPLE || []).forEach(function (p) { if (recvPeopleLabel(p) === v || (!uid && p.name === v)) uid = p.id; });
+    $(this).data('uid', uid || 0);
 });
 /* ── 綁定採購料號（採購側）─────────────────────────────
    申請人手打的品名沒有採購料號，由採購在「詢價」或「登錄到貨」時決定它是哪一支。
