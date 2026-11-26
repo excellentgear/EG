@@ -257,7 +257,7 @@ function renderItems(){
   if(!items.length) h='<tr><td colspan="11" style="padding:20px;color:#8a6d45;">此對象在該帳款月份沒有明細</td></tr>';
   items.forEach(function(it,i){
     var ret=(it.src_type==='IR');
-    h+='<tr data-i="'+i+'" class="'+(it.locked?'lockedrow ':'')+(SEL[i]?'on':'')+'"'+(ret?' style="color:#DD5138;"':'')+'>'
+    h+='<tr data-i="'+i+'" class="'+(it.locked?'lockedrow ':'')+(SEL[i]?'on':'')+'"'+(ret?' style="color:#DD5138;background:#FADADD;"':'')+'>'
       +'<td>'+(it.locked||!CAN_EDIT?'':'<input type="checkbox" class="vck"'+(SEL[i]?' checked':'')+'>')+'</td>'
       +'<td>'+(ret?'退貨':(it.src_type==='IS'?'出貨':esc(it.src_type)))+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td>'
       +'<td class="l">'+esc(it.product_id)+'</td><td class="l">'+esc((it.spec||'').substr(0,26))+'</td>'
@@ -551,7 +551,7 @@ $(document).on('click','.v-open',function(){
       +'<label>備註</label><input type="text" id="evNote" maxlength="200" style="width:240px;" value="'+esc(v.note||'')+'"'+(ed?'':' disabled')+'></div>'
       +(void_?'<div class="warn">此傳票已作廢：'+esc(v.void_reason||'')+'</div>':'')
       +'<table class="a-t"><thead><tr><th>類型</th><th>單號</th><th>日期</th><th>料號</th><th>品名規格</th><th>數量</th><th>單價</th><th>金額</th><th>發票</th></tr></thead><tbody>';
-    r.items.forEach(function(it){ h+='<tr><td>'+esc(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td><td class="l">'+esc(it.product_id)+'</td>'
+    r.items.forEach(function(it){ h+='<tr'+(it.src_type==='IR'?' style="background:#FADADD;"':'')+'><td>'+esc(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td><td class="l">'+esc(it.product_id)+'</td>'
       +'<td class="l">'+esc((it.spec||'').substr(0,26))+'</td><td class="r">'+nf(it.qty)+'</td><td class="r">'+np(it.unit_price)+'</td><td class="r">'+nf(it.amount)+'</td><td>'+esc(it.invoice_no||'')+'</td></tr>'; });
     h+='</tbody></table><div style="text-align:right;margin-top:6px;">合計 <b>'+nf(v.total_amount)+'</b></div>';
     var jd=0,jc=0, jh='<div style="font-weight:700;margin:12px 0 4px;"><i class="fa fa-book"></i> 會計分錄</div><table class="a-t" style="max-width:780px;"><thead><tr><th>會計科目</th><th>科目名稱</th><th>借方金額</th><th>貸方金額</th></tr></thead><tbody>';

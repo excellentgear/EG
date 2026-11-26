@@ -165,6 +165,7 @@ table.a-t tbody tr.dragging{opacity:.4;}
 .cell-in.mth{width:112px;text-align:center;}
 .cell-in.adj{background:#FFF3DF;border-color:var(--a-line2);font-weight:bold;}
 .orig-v{font-size:11px;color:#a08a6a;}
+.negv,td.negv b,input.negv{color:#DD5138 !important;font-weight:bold !important;}
 
 .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;line-height:16px;}
 .p-g{background:var(--a-acc);color:#fff;}
@@ -1270,12 +1271,12 @@ function render(){
       +(SIDE==='ap'?'<td>'+esc(l.bom||'')+'</td>':'')
       +'<td class="l">'+partCell(l)+'</td>'
       +'<td class="l" style="white-space:normal;word-break:break-all;min-width:150px;">'+esc(l.spec||'')+'</td>'
-      +'<td class="r orig-v">'+(l.orig_qty===null?'':nf(l.orig_qty))+'</td>'
-      +'<td class="r orig-v">'+(l.orig_price===null?'':n2(l.orig_price))+'</td>'
-      +'<td class="r orig-v"><b>'+(l.orig_amount===null?'':nf(l.orig_amount))+'</b></td>'
-      +'<td><input type="number" class="cell-in adj-q'+(l.adj_qty!==null&&l.adj_qty!==''?' adj':'')+'" data-f="adj_qty" value="'+esc(l.adj_qty===null?'':l.adj_qty)+'"'+ro+'></td>'
+      +'<td class="r orig-v'+(Number(l.orig_qty)<0?' negv':'')+'">'+(l.orig_qty===null?'':nf(l.orig_qty))+'</td>'
+      +'<td class="r orig-v'+(Number(l.orig_price)<0?' negv':'')+'">'+(l.orig_price===null?'':n2(l.orig_price))+'</td>'
+      +'<td class="r orig-v'+(Number(l.orig_amount)<0?' negv':'')+'"><b>'+(l.orig_amount===null?'':nf(l.orig_amount))+'</b></td>'
+      +'<td><input type="number" class="cell-in adj-q'+(l.adj_qty!==null&&l.adj_qty!==''?' adj':'')+(Number(l.adj_qty)<0?' negv':'')+'" data-f="adj_qty" value="'+esc(l.adj_qty===null?'':l.adj_qty)+'"'+ro+'></td>'
       +'<td><input type="number" step="0.0001" class="cell-in adj-p'+(l.adj_price!==null&&l.adj_price!==''?' adj':'')+'" data-f="adj_price" value="'+esc(l.adj_price===null?'':l.adj_price)+'"'+ro+'></td>'
-      +'<td><input type="number" step="0.01" class="cell-in adj-a'+(l.adj_amount!==null&&l.adj_amount!==''?' adj':'')+'" data-f="adj_amount" value="'+esc(l.adj_amount===null?'':l.adj_amount)+'"'+ro+'></td>'
+      +'<td><input type="number" step="0.01" class="cell-in adj-a'+(l.adj_amount!==null&&l.adj_amount!==''?' adj':'')+(Number(l.adj_amount)<0?' negv':'')+'" data-f="adj_amount" value="'+esc(l.adj_amount===null?'':l.adj_amount)+'"'+ro+'></td>'
       +'<td><input type="month" class="cell-in mth'+(l.adj_month?' adj':'')+'" data-f="adj_month" value="'+esc(l.adj_month||'')+'"'+ro+'></td>'
       +'<td>'+(l.group_no?'<span class="pill p-g">組'+l.group_no+'</span>':'')
              +(isParent?'<span class="pill p-s">拆分來源</span>':'')

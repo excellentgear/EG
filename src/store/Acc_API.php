@@ -1779,6 +1779,10 @@ case 'sheet_export': {
     $sheet = acc_sheet_get($db, $side, $pid, $bm);
     if (!$sheet) acc_err('此對象與月份尚無對帳底稿');
 
+    if ($side === 'ar' && ($s['fmt'] ?? '') !== 'csv') {      // 應收：比照 ERP 客戶對帳單格式（xlsx）
+        include_once $document_root . '/EGsystem/src/common/acc_recon_export_lib.php';
+        acc_sheet_export_xlsx($db, $sheet, $bm);
+    }
     $stLbl = ['draft' => '暫存中', 'confirmed' => '已確認鎖帳', 'reopened' => '已退回重對'];
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="對帳底稿_' . $sheet['party_name'] . '_' . $bm . '.csv"');
