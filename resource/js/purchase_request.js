@@ -1420,6 +1420,7 @@ function openRecv() {
     var isMaint = pt0 === 'VEHICLE' || pt0 === 'EQUIP_MAINT' ||
         CUR.items.some(function (it) { return it.purpose_type === 'VEHICLE' || it.purpose_type === 'EQUIP_MAINT'; });
     $('#rcExtraBody').empty(); $('#rcExtraSec').toggle(isMaint);
+    loadExtraNameList(isMaint ? [pt0].concat(CUR.items.map(function (it) { return it.purpose_type; })) : []);
     $('#rcMileage').val(CUR.vehicle_mileage || '');
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '';
@@ -1459,8 +1460,20 @@ function openRecv() {
     openMask('mRecv');
 }
 $(document).on('change', '.rc-mode', toggleRecvCols);
+/* 細項品名：可從「用途類別」底下設定的品項清單挑選，也可直接輸入（原生 datalist＝輸入即模糊篩選） */
+function loadExtraNameList(types) {
+    if (!$('#rcExtraNames').length) $('body').append('<datalist id="rcExtraNames"></datalist>');
+    var $dl = $('#rcExtraNames').empty();
+    var seen = {};
+    types.forEach(function (t) {
+        if (!t || seen[t]) return; seen[t] = 1;
+        api('item_list', { purpose_type: t, page_size: 50 }).done(function (r) {
+            (r.rows || []).forEach(function (x) { $dl.append($('<option>').attr('value', x.item_name)); });
+        });
+    });
+}
 function addExtraRow() {
-    $('#rcExtraBody').append('<tr><td><input type="text" class="x-name" style="width:100%;" autocomplete="off"></td>' +
+    $('#rcExtraBody').append('<tr><td><input type="text" class="x-name" list="rcExtraNames" placeholder="點選或輸入關鍵字篩選" style="width:100%;" autocomplete="off"></td>' +
         '<td><input type="text" class="x-spec" style="width:100%;" autocomplete="off"></td>' +
         '<td><input type="number" class="x-qty" step="0.01" value="1" style="width:100%;text-align:right;"></td>' +
         '<td><input type="number" class="x-price" step="0.01" style="width:100%;text-align:right;"></td>' +
