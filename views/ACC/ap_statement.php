@@ -207,7 +207,6 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
       </select>
       <input type="text" id="kw" placeholder="廠商編號／簡稱／全稱／統編" style="width:210px;">
       <label><input type="checkbox" id="onlyGap"> 只顯示資料有缺的</label>
-      <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
       <span class="a-role">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b>
         <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
     </div>
@@ -412,11 +411,14 @@ function filters(){
           sort:sortBy, dir:sortDir, per_page:perPage, page:page};
 }
 
+var kwSeq=0;
 function load(){
   if(!$('#ymFrom').val()||!$('#ymTo').val()){ toast('請選擇發票年月', true); return; }
   $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">計算中…</td></tr>');
   $('#tfoot').empty();
+  var mySeq=++kwSeq;
   $.post(API+'?action=ap_summary', filters(), function(r){
+    if(mySeq!==kwSeq) return;
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     rows=r.rows||[]; total=r.total||0;
     var s=r.summary||{};
@@ -495,8 +497,12 @@ $(document).on('click','#pgBtns button',function(){
   var p=parseInt($(this).data('p'),10); if(p>=1){ page=p; load(); }
 });
 $('#perPage').on('change',function(){ perPage=parseInt(this.value,10)||20; page=1; load(); });
-$('#btnSearch').on('click',function(){ page=1; load(); });
-$('#kw').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); page=1; load(); } });
+var kwTimer=null;
+$('#kw').on('input',function(){
+  clearTimeout(kwTimer);
+  kwTimer=setTimeout(function(){ page=1; load(); },300);
+});
+$('#kw').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); clearTimeout(kwTimer); page=1; load(); } });
 $('#ymFrom,#ymTo,#onlyGap,#src').on('change',function(){ page=1; load(); });
 
 $(document).on('click','#tbl thead th.sortable',function(){
