@@ -314,9 +314,17 @@ function acc_erp_stmt_recon_target(PDO $db, array $stash): array
     }
     if (!$names || !$cnt) return ['success' => false, 'message' => '查不到客戶或帳款月份'];
     arsort($names); arsort($cnt);
+    // 對帳單涵蓋的日期範圍（含退貨列）：對帳作業要用這個範圍帶入，否則落在帳款月截止日之後的明細會少帶
+    $dMin = ''; $dMax = '';
+    foreach ($stash['entries'] as $e) {
+        $d = (string)($e['erp_date'] ?? '');
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) continue;
+        if ($dMin === '' || $d < $dMin) $dMin = $d;
+        if ($dMax === '' || $d > $dMax) $dMax = $d;
+    }
     $party = (string)array_key_first($names); $bm = (string)array_key_first($cnt);
     return ['success' => true, 'token' => (string)($stash['token'] ?? ''), 'side' => 'ar', 'party_id' => $party, 'bm' => $bm,
-            'their_total' => $stash['their_total'] ?? null,
+            'their_total' => $stash['their_total'] ?? null, 'date_from' => $dMin, 'date_to' => $dMax,
             'multi_month' => count($cnt) > 1, 'multi_party' => count($names) > 1];
 }
 

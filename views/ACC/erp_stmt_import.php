@@ -257,7 +257,8 @@ $('#btnToRecon').on('click',function(){
     if(r.multi_party||r.multi_month) toast('這份對帳單涵蓋'+(r.multi_party?'多個客戶名稱':'')+(r.multi_party&&r.multi_month?'、':'')+(r.multi_month?'多個帳款月份':'')
       +'，已以筆數最多的「'+esc(r.party_id)+'／'+esc(r.bm)+'」開啟', false);
     var url='reconcile.php?side=ar&party_id='+encodeURIComponent(r.party_id)+'&bm='+encodeURIComponent(r.bm)
-      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total))+'&erp='+encodeURIComponent(r.token);
+      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total))+'&erp='+encodeURIComponent(r.token)
+      +(r.date_from&&r.date_to?'&rg_from='+encodeURIComponent(r.date_from)+'&rg_to='+encodeURIComponent(r.date_to):'');
     if(w) w.location=url; else window.open(url,'_blank');
   },'json').fail(function(x){ $b.prop('disabled',false); if(w) w.close(); var m='無法帶入'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
   });

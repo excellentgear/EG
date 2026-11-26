@@ -411,6 +411,31 @@ function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm, arr
         $b['range']['prior_months'] = $back;
     }
 
+    // 截止日晚於帳款月（例如 ERP 對帳單涵蓋到下個月）：把後面月份的明細也帶進來，否則會少撈
+    if ($to !== '' && substr($to, 0, 7) > $bm) {
+        $exF = [];
+        try {
+            $st = $db->prepare("SELECT l.src_type, l.src_id FROM acc_recon_line l JOIN acc_recon_sheet s ON s.sheet_id = l.sheet_id
+                                WHERE s.side = ? AND s.party_id = ? AND s.billing_month <> ? AND l.src_id > 0 AND l.src_type <> 'SPLIT'");
+            $st->execute([$side, $partyId, $bm]);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $exF[$r['src_type'] . '-' . (int)$r['src_id']] = true;
+        } catch (Throwable $e) {}
+        if ($side === 'ar') { try { foreach (acc_invoiced_src_map($db) as $k => $_) $exF[$k] = true; } catch (Throwable $e) {} }
+        $haveF = [];
+        foreach ($b['lines'] as $l) $haveF[$l['src_type'] . '-' . (int)$l['src_id']] = true;
+        for ($k = 1; $k <= 12; $k++) {
+            $nm = date('Y-m', strtotime($bm . '-01 +' . $k . ' month'));
+            if ($nm > substr($to, 0, 7)) break;
+            try { $nb = acc_sheet_build_core($db, $side, $partyId, $nm); } catch (Throwable $e) { continue; }
+            foreach ($nb['lines'] as $l) {
+                $key = $l['src_type'] . '-' . (int)$l['src_id'];
+                if (isset($exF[$key]) || isset($haveF[$key])) continue;
+                $haveF[$key] = true;
+                $b['lines'][] = $l;
+            }
+        }
+    }
+
     if ($from !== '' || $to !== '') {
         $b['lines'] = array_values(array_filter($b['lines'], function ($l) use ($from, $to) {
             $d = (string)($l['doc_date'] ?? '');

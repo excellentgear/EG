@@ -62,7 +62,8 @@ if (isset($_GET['side']) || isset($_GET['party_id']) || isset($_GET['bm'])) {
     $th = trim((string)($_GET['their'] ?? ''));
     $deep['their'] = is_numeric($th) ? $th : '';
     $deep['erp'] = preg_match('/^[a-f0-9]{10,40}$/', (string)($_GET['erp'] ?? '')) ? $_GET['erp'] : '';   // 由 ERP 對帳單匯入帶來的「對方紙本合計」
-    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => '', 'erp' => ''];
+    foreach (['rg_from', 'rg_to'] as $g) $deep[$g] = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($_GET[$g] ?? '')) ? $_GET[$g] : '';
+    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => '', 'erp' => '', 'rg_from' => '', 'rg_to' => ''];
 }
 ?>
 <!DOCTYPE html>
@@ -1183,6 +1184,10 @@ function loadSheet(o){
   var bm=$('#bm').val(), pid=$('#partySel').val();
   if(!bm || !pid){ toast('請選擇帳款月份與對象', true); return; }
   var rg=(o && o.rg) ? o.rg : {};
+  // 由 ERP 對帳單帶來：第一次載入用對帳單涵蓋的日期範圍，才不會漏掉落在帳款月截止日之後的明細
+  if(!(o && o.rg) && DEEP.erp && DEEP.rg_from && DEEP.rg_to && !DEEP._rgUsed && pid===DEEP.party_id){
+    DEEP._rgUsed=1; rg={date_to:DEEP.rg_to};   // 只帶結數日（起日留空＝往前未對完的照舊帶入）
+  }
   $.post(API+'?action=sheet_load',$.extend({side:SIDE, party_id:pid, billing_month:bm}, rg),function(r){
     if(!r.ok){ toast(esc(r.error||'載入失敗'), true); return; }
     sheet = r.sheet; canEdit = !!r.can_edit;
