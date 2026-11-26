@@ -211,9 +211,10 @@ function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
         if (isset($seen[$name])) return ['ok' => false, 'msg' => '項目名稱重複：' . $name];
         $seen[$name] = 1;
         $pt = (int)($r['process_type_id'] ?? 0);
-        if ($pt <= 0) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：請選擇對應的製程大類'];
+        if ($pt > 0) {   // 製程大類可不選（沒有對應大類的項目）
         $chk = $db->prepare("SELECT 1 FROM process_type WHERE process_type_id=?"); $chk->execute([$pt]);
         if (!$chk->fetchColumn()) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列：製程大類不存在'];
+        }
         $suffix = trim((string)($r['tag_suffix'] ?? ''));
         if ($suffix !== '' && !in_array($suffix, $okSuffix, true)) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：檔名後綴「' . $suffix . '」不在「ERP/資材報告 檔名標籤」的報告標籤內'];
         $id = (int)($r['opt_id'] ?? 0);
@@ -240,10 +241,10 @@ function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
         foreach ($clean as $c) {
             if ($c['id'] > 0) {
                 $db->prepare("UPDATE order_report_opt SET opt_name=?,process_type_id=?,tag_suffix=?,is_active=?,sort_order=? WHERE opt_id=?")
-                   ->execute([$c['name'], $c['pt'], $c['suffix'] === '' ? null : $c['suffix'], $c['active'], $c['sort'], $c['id']]);
+                   ->execute([$c['name'], $c['pt'] > 0 ? $c['pt'] : null, $c['suffix'] === '' ? null : $c['suffix'], $c['active'], $c['sort'], $c['id']]);
             } else {
                 $db->prepare("INSERT INTO order_report_opt (opt_name,process_type_id,tag_suffix,is_active,sort_order,created_at,created_by) VALUES (?,?,?,?,?,NOW(),?)")
-                   ->execute([$c['name'], $c['pt'], $c['suffix'] === '' ? null : $c['suffix'], $c['active'], $c['sort'], $uname]);
+                   ->execute([$c['name'], $c['pt'] > 0 ? $c['pt'] : null, $c['suffix'] === '' ? null : $c['suffix'], $c['active'], $c['sort'], $uname]);
                 $keepIds[] = (int)$db->lastInsertId();
             }
         }
