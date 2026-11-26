@@ -482,6 +482,7 @@ table.ot tr.lock{color:#a08a6a;}
         <button id="btnUncheckAll"><i class="fa fa-square-o"></i> 全部取消</button>
         <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
         <button id="btnSortNo" title="把底稿明細整份依出貨單號重新排序"><i class="fa fa-sort-alpha-asc"></i> 依單號排序</button>
+        <button id="btnToInvoice" class="go" style="display:none;" title="鎖帳後直接到發票開立，帶入這家客戶與帳款月份"><i class="fa fa-file-text-o"></i> 開立發票</button>
         <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出底稿</button>
         <button id="btnPrint"><i class="fa fa-print"></i> 列印對帳單</button>
       </div>
@@ -930,6 +931,7 @@ $(document).ready(function () {
 var API = '../../src/store/Acc_API.php';
 var TAX_RATE = <?= json_encode($taxRate) ?>;
 var P = {
+  canEdit: <?= $perms['canEdit'] ? 'true' : 'false' ?>,
   canReconAr: <?= $perms['canReconAr'] ? 'true' : 'false' ?>,
   canReconAp: <?= $perms['canReconAp'] ? 'true' : 'false' ?>,
   canAdmin:   <?= $perms['canAdmin']   ? 'true' : 'false' ?>
@@ -1425,6 +1427,7 @@ function updateStat(){
   $('#btnSave,#btnConfirm').prop('disabled', !canEdit || locked);
   $('#btnGroup,#btnUngroup,#btnSplit,#btnCheckAll,#btnUncheckAll').prop('disabled', !canEdit || locked);
   $('#btnReopen').toggle(P.canAdmin && locked);
+  $('#btnToInvoice').toggle(SIDE==='ar' && locked && !!P.canEdit);
 
   var nb='';
   if(locked) nb='<div class="okbox">此對帳單已於 '+esc(sheet.confirmed_at||'')+' 由 <b>'
@@ -1687,6 +1690,10 @@ $('#btnConfirm').on('click',function(){
                                toast('確認失敗', true); });
   },'json').fail(function(){ $b.prop('disabled',false).html('<i class="fa fa-check"></i> 確認正確（鎖帳）');
                              toast('暫存失敗', true); });
+});
+$('#btnToInvoice').on('click',function(){
+  if(!sheet) return;
+  window.location='invoice_export.php?bm='+encodeURIComponent(sheet.billing_month)+'&customer='+encodeURIComponent(sheet.party_id);
 });
 $('#btnReopen').on('click',function(){ $('#roReason').val(''); openMask('mkReopen'); });
 $('#roOk').on('click',function(){

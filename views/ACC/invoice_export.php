@@ -525,7 +525,20 @@ $('#btnCandPrev').on('click',function(){
 
 $.getJSON(API,{action:'meta'},function(r){
   if(!r.ok){ toast(esc(r.error||'初始化失敗'), true); return; }
-  CSRF=r.csrf; loadCand();
+  CSRF=r.csrf;
+  /* 由對帳作業帶來（?bm=2026-11&customer=德士）：切到該帳款月份、篩出該客戶並自動勾選，按「產生發票草稿」即可 */
+  var q=new URLSearchParams(location.search), qBm=q.get('bm'), qCust=(q.get('customer')||'').trim();
+  if(/^\d{4}-\d{2}$/.test(qBm||'') && qCust){
+    $('#candBm').val(qBm); $('#invBmFrom').val(qBm); $('#invBmTo').val(qBm);
+    window.afterCand=function(){
+      $('#candKw').val(qCust); refreshCandKwList();
+      var g=cand.filter(function(x){ return x.customer===qCust; })[0];
+      if(g && g.can_issue && CAN_EDIT){ candSel={}; candSel[qCust]=1; renderCand(); toast('已帶入 <b>'+esc(qCust)+'</b>（'+esc(qBm)+'）的待開立憑證並勾選，確認後按「產生發票草稿」'); }
+      else if(g && !g.can_issue){ renderCand(); toast(esc(qCust)+' 的發票資料不完整（缺統編或抬頭），請先到「客戶發票資料維護」補齊', true); }
+      else { $('#invKw').val(qCust); $('.tab-btn[data-tab=inv]').click(); toast(esc(qCust)+' '+esc(qBm)+' 沒有待開立的憑證（可能已有發票草稿），已切到發票管理並篩出該客戶'); }
+    };
+  }
+  loadCand();
 }).fail(function(){ toast('無法連線到會計 API', true); });
 
 /* ══════════════ 分頁1：待開立 ══════════════ */
@@ -549,6 +562,7 @@ function loadCand(){
       : '');
     refreshCandKwList();
     renderCand();
+    if(window.afterCand){ var f=window.afterCand; window.afterCand=null; f(); }
   },'json').fail(function(){ toast('查詢失敗', true); });
 }
 
