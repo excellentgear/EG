@@ -730,6 +730,7 @@ function einvLoad(){
     var noMail=r.invoices.filter(function(x){ return x.no_email; });
     $('#einvWarn').html(noMail.length
       ? '<div class="warn">買方電子信箱固定帶入客戶主檔標記為「本公司」的電子發票信箱，目前尚未設定（買方電子信箱會是空白）。請到客戶主檔編輯「本公司」那一筆，在「發票收件」填入電子發票信箱。</div>' : '');
+    if(noMail.length) toast('「本公司」尚未設定電子發票信箱，買方電子信箱會是空白，請先到客戶主檔補上', true);
     var notes=[];
     r.invoices.forEach(function(x){
       if(x.mode==='merge_part') notes.push(esc(x.customer)+'：同料號合併，'+x.raw_rows+' 筆 → '+x.rows+' 筆');
