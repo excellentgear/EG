@@ -419,8 +419,12 @@ function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm, arr
             return true;
         }));
     }
-    usort($b['lines'], fn($x, $y) => strcmp((string)$x['doc_date'], (string)$y['doc_date'])
-                                   ?: strcmp((string)$x['doc_no'], (string)$y['doc_no']));
+    if ($side === 'ar') {   // 出貨單依「出貨單號」排序（不依日期），同單號依明細 id 維持 ERP 原順序
+        usort($b['lines'], fn($x, $y) => strcmp((string)$x['doc_no'], (string)$y['doc_no']) ?: ((int)$x['src_id'] <=> (int)$y['src_id']));
+    } else {
+        usort($b['lines'], fn($x, $y) => strcmp((string)$x['doc_date'], (string)$y['doc_date'])
+                                       ?: strcmp((string)$x['doc_no'], (string)$y['doc_no']));
+    }
     foreach ($b['lines'] as $i => &$l) $l['sort_order'] = ($i + 1) * 10;
     unset($l);
     return $b;
@@ -5397,4 +5401,37 @@ function acc_default_billing_month(PDO $db, string $side, ?string $partyId = nul
                  'reason' => $who . '結帳日 ' . $cut . ' 日：' . ($d >= $cut
                     ? ("今天 {$m}/{$d} 已過結帳日，預設對本月（{$cur}）")
                     : ("今天 {$m}/{$d} 還沒到結帳日，本月帳還沒結完，預設對上個月（{$prev}）"))];
+}
+
+/** 對帳底稿「不加入」的來源單據（自動帶入時略過）。表在交易外建立。 */
+function acc_sheet_excl_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_sheet_excl (
+        sheet_id INT NOT NULL, src_type VARCHAR(6) NOT NULL, src_id INT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (sheet_id, src_type, src_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='對帳底稿：使用者選擇不加入的來源單據'");
+}
+function acc_sheet_excl_keys(PDO $db, int $sheetId): array
+{
+    try {
+        acc_sheet_excl_ensure($db);
+        $st = $db->prepare("SELECT src_type, src_id FROM acc_recon_sheet_excl WHERE sheet_id=?");
+        $st->execute([$sheetId]);
+        $o = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $o[$r['src_type'] . '-' . (int)$r['src_id']] = true;
+        return $o;
+    } catch (Throwable $e) { return []; }
+}
+function acc_sheet_excl_set(PDO $db, int $sheetId, array $keys, string $mode): void
+{
+    acc_sheet_excl_ensure($db);
+    foreach ($keys as $k) {
+        if (!preg_match('/^(IS|IR|TLOG|PURC)-(\d+)$/', (string)$k, $m)) continue;
+        if ($mode === 'remove') $db->prepare("DELETE FROM acc_recon_sheet_excl WHERE sheet_id=? AND src_type=? AND src_id=?")->execute([$sheetId, $m[1], (int)$m[2]]);
+        else $db->prepare("INSERT IGNORE INTO acc_recon_sheet_excl (sheet_id, src_type, src_id) VALUES (?,?,?)")->execute([$sheetId, $m[1], (int)$m[2]]);
+    }
 }

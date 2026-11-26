@@ -1482,7 +1482,7 @@ case 'sheet_load': {
            （交接日期前後的帳），改完若不告訴使用者，底稿永遠少那幾筆而且完全沒有徵兆。
            所以每次載入都跟來源即時對一次：missing＝來源有、底稿沒有；stale＝底稿有、來源已不屬於本月。
            兩者都只回報不自動改，因為底稿上的加總／拆分是人對出來的，不可以被自動覆蓋。 */
-        $missing = []; $stale = []; $rangeOut = null;
+        $missing = []; $stale = []; $excluded = []; $rangeOut = null;
         try {
             $src  = acc_sheet_build($db, $side, $pid, $bm, $rgOpt);
             $rangeOut = $src['range'] ?? null;
@@ -1499,19 +1499,13 @@ case 'sheet_load': {
                 if (($l['src_type'] ?? '') !== 'SPLIT') $have[$l['src_type'] . '-' . (int)$l['src_id']] = true;
             }
             $srcKeys = [];
-            $zeroAdd = [];
+            // 使用者在這份底稿上選擇「不加入」的單據（前端預設會自動帶入其餘的，排除的留著不帶）
+            $exclKeys = acc_sheet_excl_keys($db, (int)$sheet['sheet_id']);
             foreach ($src['lines'] as $l) {
                 $k = $l['src_type'] . '-' . (int)$l['src_id'];
                 $srcKeys[$k] = true;
                 if (isset($have[$k])) continue;
-                // 0 元明細：金額為 0 不影響任何合計，直接併進底稿（才看得到漏填單價的列）；其餘仍走「來源有、底稿沒有」提醒
-                if (abs((float)$l['orig_amount']) < 0.0001 && $sheet['status'] !== 'confirmed') $zeroAdd[] = $l; else $missing[] = $l;
-            }
-            foreach ($zeroAdd as $zl) {
-                $maxSo = null;
-                foreach ($sheet['lines'] as $sl) if ((string)$sl['doc_no'] === (string)$zl['doc_no']) $maxSo = max((float)$maxSo, (float)$sl['sort_order']);
-                $zl['sort_order'] = $maxSo !== null ? $maxSo + 1 : (float)$zl['sort_order'];
-                $sheet['lines'][] = $zl;
+                if (isset($exclKeys[$k])) $excluded[] = $l; else $missing[] = $l;
             }
             foreach ($sheet['lines'] as $l) {
                 if (($l['src_type'] ?? '') === 'SPLIT' || (int)$l['src_id'] <= 0) continue;
@@ -1529,7 +1523,7 @@ case 'sheet_load': {
                  'opt' => acc_recon_party_opt($db, $side, $pid),
                  'settlement' => acc_default_billing_month($db, $side, $pid),
                  'contact_hint' => acc_contact_hint_for($db, $side, $pid),
-                 'missing' => $missing, 'stale' => $stale, 'range' => $rangeOut]);
+                 'missing' => $missing, 'excluded' => $excluded, 'stale' => $stale, 'range' => $rangeOut]);
     }
     $built = acc_sheet_build($db, $side, $pid, $bm, $rgOpt);
     $t = acc_sheet_totals($db, $built['lines']);
@@ -1545,6 +1539,23 @@ case 'sheet_load': {
              'settlement' => acc_default_billing_month($db, $side, $pid),
              'contact_hint' => acc_contact_hint_for($db, $side, $pid),
              'missing' => [], 'stale' => [], 'range' => $built['range'] ?? null]);
+}
+
+/* 底稿「不加入」的單據：排除／取消排除（只影響這份底稿的自動帶入） */
+case 'sheet_excl': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $sid = (int)($_POST['sheet_id'] ?? 0);
+    $st = $db->prepare("SELECT side, status FROM acc_recon_sheet WHERE sheet_id=? LIMIT 1");
+    $st->execute([$sid]);
+    $sh = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$sh) acc_err('請先暫存底稿後再設定排除');
+    if ($sh['status'] === 'confirmed') acc_err('已鎖帳的底稿不可調整');
+    acc_recon_guard($perms, ($sh['side'] === 'ap') ? 'TLOG' : 'IS');
+    $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
+    if (!is_array($keys)) acc_err('資料格式錯誤');
+    acc_sheet_excl_set($db, $sid, $keys, ($_POST['mode'] ?? 'add') === 'remove' ? 'remove' : 'add');
+    acc_out(['ok' => true]);
 }
 
 /* 暫存底稿 */

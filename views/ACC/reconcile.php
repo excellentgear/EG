@@ -481,6 +481,7 @@ table.ot tr.lock{color:#a08a6a;}
         <button id="btnCheckAll"><i class="fa fa-check-square-o"></i> 全部標已對到</button>
         <button id="btnUncheckAll"><i class="fa fa-square-o"></i> 全部取消</button>
         <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
+        <button id="btnSortNo" title="把底稿明細整份依出貨單號重新排序"><i class="fa fa-sort-alpha-asc"></i> 依單號排序</button>
         <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出底稿</button>
         <button id="btnPrint"><i class="fa fa-print"></i> 列印對帳單</button>
       </div>
@@ -1208,7 +1209,7 @@ function loadSheet(o){
     $('#emptyBox').hide(); $('#sheetBox').show();
     $('#btnReopen').toggle(P.canAdmin && sheet.status==='confirmed');
     render();
-    renderSync(r.missing||[], r.stale||[]);
+    renderSync(r.missing||[], r.stale||[], r.excluded||[]);
     erpAutoCheck();
     RANGE = r.range || null; renderRange();
     renderContactHint(r.contact_hint);
@@ -1801,17 +1802,58 @@ $('#swAuto').on('click',function(){
 });
 
 /* ── 底稿與來源不一致的提醒（跨月改過月份、或暫存後又有新單）─────────── */
-var syncMissing=[];
-function renderSync(missing, stale){
-  syncMissing = missing||[];
-  var h='';
+var syncMissing=[], autoAdded=[], exclList=[], staleList=[];
+/* 依出貨單號排序（單號相同依明細 id）；onlyNew＝只把新帶入的列插到同單號／較大單號之前，其餘維持原順序 */
+function sortByDocNo(onlyNew){
+  var tops=lines.filter(function(l){ return !l.split_parent_key; });
+  var cmp=function(a,b){ var x=String(a.doc_no||''), y=String(b.doc_no||''); return x<y?-1:(x>y?1:((a.src_id||0)-(b.src_id||0))); };
+  var out;
+  if(onlyNew){
+    var olds=tops.filter(function(l){ return !l._new; }).sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); });
+    out=olds.slice();
+    tops.filter(function(l){ return l._new; }).sort(cmp).forEach(function(n){
+      var at=-1;
+      for(var i=0;i<out.length;i++){ if(String(out[i].doc_no||'')<=String(n.doc_no||'')) at=i; }   // 最後一個單號不大於它的位置
+      out.splice(at+1,0,n);
+    });
+    lines.forEach(function(l){ delete l._new; });
+  } else { out=tops.sort(cmp); }
+  out.forEach(function(l,i){ l.sort_order=(i+1)*10; });
+  lines.forEach(function(c){ if(c.split_parent_key){ var p=lines.filter(function(x){ return x.client_key===c.split_parent_key; })[0]; if(p) c.sort_order=(p.sort_order||0)+(c.split_seq||1)/100; } });
+}
+function lkey(l){ return l.src_type+'-'+(l.src_id||0); }
+/* 符合對帳區間、但還不在底稿裡的單據：預設自動帶入（尚未暫存）；使用者可選「不加入」，之後不再自動帶入 */
+function renderSync(missing, stale, excluded){
+  syncMissing = [];
+  autoAdded = missing||[]; exclList = excluded||[]; staleList = stale||[];
+  if(autoAdded.length && canEdit && sheet && sheet.status!=='confirmed'){
+    autoAdded.forEach(function(l){ lines.push($.extend({}, l, {client_key:nk(), split_parent_key:null, sort_order:0, checked:0, check_seq:0, _new:1})); });
+    sortByDocNo(true);      // 新帶入的依單號插到對應位置（已排好的其餘列相對順序不變）
+    render();
+  } else { syncMissing = autoAdded; autoAdded = []; }
+  drawSyncBox();
+}
+function drawSyncBox(){
+  var stale = staleList, h='';
+  if(autoAdded.length){
+    var sa=0; autoAdded.forEach(function(l){ sa+=Number(l.orig_amount)||0; });
+    h+='<div class="info" style="display:flex;align-items:center;gap:10px;">'
+      +'<span>已自動帶入 <b>'+autoAdded.length+'</b> 筆符合對帳區間（本月份或往前未對完）、原本不在底稿裡的單據（合計 '+nf(sa)
+      +'），<b>尚未暫存</b>，按「暫存進度」才會存起來。不需要的可選「不加入」。</span>'
+      +'<button class="btn-mini" id="btnExclAuto" style="margin-left:auto;">不加入這 '+autoAdded.length+' 筆</button>'
+      +'<button class="btn-mini" id="btnShowMissing">看看是哪幾筆</button></div>';
+  }
   if(syncMissing.length){
     var sum=0; syncMissing.forEach(function(l){ sum+=Number(l.orig_amount)||0; });
     h+='<div class="warn" style="display:flex;align-items:center;gap:10px;">'
-      +'<span>有 <b>'+syncMissing.length+'</b> 筆符合對帳區間（本月份或往前未對完）的單據不在這份底稿裡（合計 '+nf(sum)
-      +'）——通常是暫存之後才把它們改成本月份，或又有新的出貨。</span>'
+      +'<span>有 <b>'+syncMissing.length+'</b> 筆符合對帳區間的單據不在這份底稿裡（合計 '+nf(sum)+'）。</span>'
       +'<button class="btn-mini" id="btnAddMissing" style="margin-left:auto;">加入這 '+syncMissing.length+' 筆</button>'
       +'<button class="btn-mini" id="btnShowMissing">看看是哪幾筆</button></div>';
+  }
+  if(exclList.length){
+    h+='<div class="a-hint" style="display:flex;align-items:center;gap:10px;margin:4px 0;">'
+      +'<span>已設定「不加入」<b>'+exclList.length+'</b> 筆符合區間的單據。</span>'
+      +'<button class="btn-mini" id="btnInclExcl">重新加入</button></div>';
   }
   if(SETL && SETL.source==='party' && SETL.billing_month && sheet
      && SETL.billing_month!==sheet.billing_month){
@@ -1847,11 +1889,31 @@ $(document).on('click','#btnAddMissing',function(){
       sort_order:max+(n+1)*10, checked:0, check_seq:0}));
   });
   toast('已加入 '+syncMissing.length+' 筆，記得按「暫存進度」存起來');
-  syncMissing=[]; $('#syncBox').html(''); render();
+  syncMissing=[]; drawSyncBox(); render();
+});
+$(document).on('click','#btnSortNo',function(){ sortByDocNo(false); render(); toast('已依出貨單號排序，記得按「暫存進度」存起來'); });
+$(document).on('click','#btnExclAuto',function(){
+  if(!sheet || !sheet.sheet_id){ toast('請先按「暫存進度」建立底稿後，才能設定不加入', true); return; }
+  var keys=autoAdded.map(lkey);
+  $.post(API+'?action=sheet_excl',{csrf:CSRF,sheet_id:sheet.sheet_id,keys:JSON.stringify(keys),mode:'add'},function(r){
+    if(!r.ok){ toast(esc(r.error||'設定失敗'), true); return; }
+    var set={}; keys.forEach(function(k){ set[k]=1; });
+    lines=lines.filter(function(l){ return !(set[lkey(l)] && !l.line_id); });
+    exclList=exclList.concat(autoAdded); autoAdded=[]; drawSyncBox(); render();
+    toast('已設為不加入，之後開啟這份底稿不會再自動帶入');
+  },'json').fail(function(){ toast('設定失敗', true); });
+});
+$(document).on('click','#btnInclExcl',function(){
+  var keys=exclList.map(lkey);
+  $.post(API+'?action=sheet_excl',{csrf:CSRF,sheet_id:sheet.sheet_id,keys:JSON.stringify(keys),mode:'remove'},function(r){
+    if(!r.ok){ toast(esc(r.error||'設定失敗'), true); return; }
+    var back=exclList; exclList=[]; autoAdded=[]; renderSync(back, staleList, []);
+    toast('已重新加入 '+back.length+' 筆，記得按「暫存進度」');
+  },'json').fail(function(){ toast('設定失敗', true); });
 });
 $(document).on('click','#btnShowMissing',function(){
   var h='<table class="ot"><thead><tr><th>單號</th><th>日期</th><th>類別</th><th>料號</th><th>數量</th><th>金額</th></tr></thead><tbody>';
-  syncMissing.forEach(function(l){
+  (autoAdded.length?autoAdded:syncMissing).forEach(function(l){
     h+='<tr><td class="l">'+esc(l.doc_no||'')+'</td><td>'+esc(dispDate(l.doc_date))+'</td>'
       +'<td>'+kindPill(l)+'</td><td class="l">'+esc(l.product_id||'')+'</td>'
       +'<td class="r">'+nf(l.orig_qty)+'</td><td class="r">'+nf(l.orig_amount)+'</td></tr>';
@@ -1864,7 +1926,7 @@ $(document).on('click','#btnDropStale',function(){
   var before=lines.length;
   lines = lines.filter(function(l){ return staleIds.indexOf(Number(l.line_id))<0; });
   toast('已移除 '+(before-lines.length)+' 筆，記得按「暫存進度」存起來');
-  staleIds=[]; render(); renderSync(syncMissing, []);
+  staleIds=[]; staleList=[]; render(); drawSyncBox();
 });
 
 /* 簡易資訊跳窗（借用既有 mkSplit 之外另開一個，避免蓋掉正在填的內容） */
