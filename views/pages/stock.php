@@ -572,6 +572,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 品項種類顯示設定欄位（料號規格/標籤/保管者/廠商）
             static $catShowCols = null;
             if ($catShowCols === null) { try { $catShowCols = $pdo->query("SHOW COLUMNS FROM stock_item_categories")->fetchAll(PDO::FETCH_COLUMN); } catch(Exception $e){ $catShowCols=[]; } }
+            // 客戶欄顯示名稱（客戶／廠商）：舊資料庫補欄位，一次性
+            if ($catShowCols && !in_array('party_label', $catShowCols)) {
+                try { $pdo->exec("ALTER TABLE stock_item_categories ADD COLUMN party_label VARCHAR(10) NOT NULL DEFAULT '客戶' COMMENT '列表「客戶」欄顯示名稱：客戶／廠商'"); $catShowCols[]='party_label'; } catch(Exception $e){}
+            }
+            if (!in_array('source', $stockCols)) {
+                try { $pdo->exec("ALTER TABLE stock_items ADD COLUMN source VARCHAR(20) NULL COMMENT 'purchase=採購進貨'"); $stockCols[]='source'; } catch(Exception $e){}
+            }
             $hasCatShow  = in_array('show_spec', $catShowCols);
             $anyShowSpec = false; $anyShowLabel = false;
             if ($hasCatShow) { try {
@@ -635,6 +642,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $locJoin  = $hasLocation ? "LEFT JOIN stock_locations l ON l.location_id=si.location_id LEFT JOIN stock_areas sa ON sa.area_id = l.area" : "";
             $unitJoin = $hasUnit     ? "LEFT JOIN stock_units u ON u.unit_id=si.unit_id" : "";
             $catShowSel = $hasCatShow ? "c.show_spec, c.show_label, c.show_keeper, c.show_vendor," : "0 AS show_spec, 0 AS show_label, 0 AS show_keeper, 0 AS show_vendor,";
+            $catShowSel .= (in_array('party_label', $catShowCols) && $hasCategory) ? " c.party_label," : " '客戶' AS party_label,";
             $catSel   = $hasCategory ? "c.category_name, c.color AS cat_color, c.need_bom_bind, c.need_order_bind, $catShowSel" : "NULL AS category_name, NULL AS cat_color, 0 AS need_bom_bind, 0 AS need_order_bind, $catShowSel";
             $locSel   = $hasLocation ? "l.location_code, sa.area_name AS area_display_name," : "si.storage_location AS location_code, NULL AS area_display_name,";
             $unitSel  = $hasUnit     ? "u.unit_name, u.unit_symbol," : "NULL AS unit_name, NULL AS unit_symbol,";
@@ -2076,7 +2084,12 @@ LBLSQL;
 
             // 動態組合欄位（兼容尚未建立新欄位的環境）
             $catCols = $pdo->query("SHOW COLUMNS FROM stock_item_categories")->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('party_label', $catCols)) {
+                try { $pdo->exec("ALTER TABLE stock_item_categories ADD COLUMN party_label VARCHAR(10) NOT NULL DEFAULT '客戶' COMMENT '列表「客戶」欄顯示名稱：客戶／廠商'"); $catCols[]='party_label'; } catch(Exception $e){}
+            }
+            $partyLabel = (($_POST['party_label']??'')==='廠商') ? '廠商' : '客戶';
             $extraCols = []; $extraVals = [];
+            if (in_array('party_label',$catCols)) { $extraCols[]='party_label'; $extraVals[]=$partyLabel; }
             if (in_array('show_in_dashboard',$catCols)) { $extraCols[]='show_in_dashboard'; $extraVals[]=$showDash; }
             if (in_array('show_spec',$catCols))   { $extraCols[]='show_spec';   $extraVals[]=$showSpec; }
             if (in_array('show_label',$catCols))  { $extraCols[]='show_label';  $extraVals[]=$showLabel; }
@@ -3883,7 +3896,9 @@ LBLSQL;
                 $cst2=$pdo->prepare("SELECT req_id,COUNT(*) AS cnt,SUM(CASE WHEN qty_issued>=qty_requested THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN is_urgent=1 THEN 1 ELSE 0 END) AS urgent_cnt FROM stock_requisition_items WHERE req_id IN ($inSql) GROUP BY req_id");
                 $cst2->execute($reqIds); foreach($cst2->fetchAll(PDO::FETCH_ASSOC) as $c) $itemCounts[$c['req_id']]=$c; }
             foreach($rows as &$r){ $r['item_cnt']=$itemCounts[$r['req_id']]['cnt']??0; $r['done_cnt']=$itemCounts[$r['req_id']]['done']??0; $r['urgent_cnt']=$itemCounts[$r['req_id']]['urgent_cnt']??0; }
-            echo json_encode(['success'=>true,'rows'=>$rows,'total'=>$totalCount,'pages'=>(int)ceil($totalCount/$ps),'page'=>$page]);
+            $cnts=['all'=>0,'0'=>0,'1'=>0,'2'=>0];
+            foreach($pdo->query("SELECT status,COUNT(*) n FROM stock_requisitions WHERE (is_active=1 OR is_active IS NULL) GROUP BY status")->fetchAll(PDO::FETCH_ASSOC) as $c){ $cnts[(string)intval($c['status'])]=(int)$c['n']; $cnts['all']+=(int)$c['n']; }
+            echo json_encode(['success'=>true,'rows'=>$rows,'total'=>$totalCount,'pages'=>(int)ceil($totalCount/$ps),'page'=>$page,'counts'=>$cnts]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -4651,7 +4666,8 @@ html,body,.main_container,.container.body{overflow-x:hidden!important;}
 .pg-header{display:flex;align-items:center;justify-content:space-between;background:var(--card);border-radius:10px;padding:13px 20px;margin-bottom:14px;box-shadow:0 2px 6px rgba(0,0,0,.06)}
 .pg-header h3{margin:0;font-size:19px;font-weight:700;color:var(--primary)}
 .tab-sw{display:flex;gap:4px;background:#eef1f5;border-radius:8px;padding:4px}
-.tab-btn{border:none;background:transparent;padding:6px 14px;border-radius:6px;font-size:13px;font-weight:600;color:#888;cursor:pointer;transition:all .2s}
+.cnt-warn{color:#d9230f;font-weight:700}.btn-primary .cnt-warn{color:#ffb8a8}
+.tab-btn{white-space:nowrap;border:none;background:transparent;padding:6px 14px;border-radius:6px;font-size:13px;font-weight:600;color:#888;cursor:pointer;transition:all .2s}
 .tab-btn.active{background:var(--card);color:var(--primary);box-shadow:0 2px 5px rgba(0,0,0,.1)}
 
 /* 統計卡片 */
@@ -4844,7 +4860,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <button class="tab-btn" data-stk-feat="stock_analysis" onclick="switchTab('analysis',this)">📊 分析報表</button>
       <button class="tab-btn" id="tab-btn-count" onclick="switchTab('count',this)" style="display:none;">📋 庫存盤點</button>
       <button class="tab-btn" id="tab-btn-setting" onclick="switchTab('setting',this)" style="display:none;">⚙️ 主資料設定</button>
-      <button class="tab-btn" id="tab-btn-req" data-stk-feat="stock_req_view" onclick="switchTab('req',this)">📋 領庫需求單</button>
+      <button class="tab-btn" id="tab-btn-req" data-stk-feat="stock_req_view" onclick="switchTab('req',this)">📋 領庫需求 <span id="req-badge" class="badge" style="background:#F0A24B;display:none;"></span></button>
       <button class="tab-btn" id="tab-btn-inb" data-stk-feat="stock_req_view" onclick="switchTab('inb',this)">📥 入庫單 <span id="inb-badge" class="badge" style="background:#F0A24B;display:none;"></span></button>
       <button class="tab-btn" id="tab-btn-report" data-stk-feat="stock_report" onclick="switchTab('report',this)">📊 異動紀錄</button>
       <button class="tab-btn" id="tab-btn-olb" data-stk-feat="stock_report" onclick="switchTab('olb',this)">🏷️ 領庫印標籤</button>
@@ -5131,10 +5147,10 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <span id="req-perm-badge" style="font-size:11px;padding:3px 8px;border-radius:10px;background:#e8f4fd;color:#1a78c2;border:1px solid #b8d8f0;font-weight:600;"></span>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <div class="btn-group btn-group-sm" role="group" id="req-status-btns">
-        <button type="button" class="btn btn-default req-status-btn" data-status="" onclick="setReqStatusFilter('',this)">全部</button>
-        <button type="button" class="btn btn-primary req-status-btn" data-status="0" onclick="setReqStatusFilter('0',this)">待出庫</button>
-        <button type="button" class="btn btn-default req-status-btn" data-status="1" onclick="setReqStatusFilter('1',this)">部分出庫</button>
-        <button type="button" class="btn btn-default req-status-btn" data-status="2" onclick="setReqStatusFilter('2',this)">已完成</button>
+        <button type="button" class="btn btn-default req-status-btn" data-status="" onclick="setReqStatusFilter('',this)">全部<span class="req-cnt" data-k="all"></span></button>
+        <button type="button" class="btn btn-primary req-status-btn" data-status="0" onclick="setReqStatusFilter('0',this)">待出庫<span class="req-cnt" data-k="0"></span></button>
+        <button type="button" class="btn btn-default req-status-btn" data-status="1" onclick="setReqStatusFilter('1',this)">部分出庫<span class="req-cnt" data-k="1"></span></button>
+        <button type="button" class="btn btn-default req-status-btn" data-status="2" onclick="setReqStatusFilter('2',this)">已完成<span class="req-cnt" data-k="2"></span></button>
       </div>
       <div class="input-group input-group-sm" style="width:200px;">
         <input type="text" id="req-filter-kw" class="form-control" placeholder="搜尋單號/標題/部門" oninput="loadRequisitions()" ondblclick="clearReqKw()">
@@ -5242,10 +5258,10 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <span class="text-muted" style="font-size:12px;">來源：包裝自主檢查表「成品入庫方式」的入庫數量；與包裝排程「待入庫」同步</span>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <div class="btn-group btn-group-sm" id="inb-status-btns">
-        <button type="button" class="btn btn-default inb-st" data-status="" onclick="setInbStatus('',this)">全部</button>
-        <button type="button" class="btn btn-primary inb-st" data-status="pending" onclick="setInbStatus('pending',this)">待入庫</button>
-        <button type="button" class="btn btn-default inb-st" data-status="partial" onclick="setInbStatus('partial',this)">部分入庫</button>
-        <button type="button" class="btn btn-default inb-st" data-status="done" onclick="setInbStatus('done',this)">已完成</button>
+        <button type="button" class="btn btn-default inb-st" data-status="" onclick="setInbStatus('',this)">全部<span class="inb-cnt" data-k="all"></span></button>
+        <button type="button" class="btn btn-primary inb-st" data-status="pending" onclick="setInbStatus('pending',this)">待入庫<span class="inb-cnt" data-k="pending"></span></button>
+        <button type="button" class="btn btn-default inb-st" data-status="partial" onclick="setInbStatus('partial',this)">部分入庫<span class="inb-cnt" data-k="partial"></span></button>
+        <button type="button" class="btn btn-default inb-st" data-status="done" onclick="setInbStatus('done',this)">已完成<span class="inb-cnt" data-k="done"></span></button>
       </div>
       <div class="input-group input-group-sm" style="width:220px;">
         <input type="text" id="inb-kw" class="form-control" placeholder="搜尋BOM/料號/客戶" oninput="clearTimeout(window._inbT);window._inbT=setTimeout(function(){loadInbound(1)},350)">
@@ -5973,7 +5989,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
   <div class="form-group"><label>移出位置</label><input type="text" id="move-from" class="form-control" readonly style="background:#f5f5f5;"></div>
   <div class="form-group"><label>移入儲位 <span style="color:red;">*</span></label>
     <select id="move-to-id" class="form-control" onchange="onMoveLocChange()"><option value="">— 選擇儲位 —</option></select>
-    <input type="text" id="move-to-str" class="form-control" placeholder="或手動輸入位置..." style="margin-top:5px;">
+    <input type="hidden" id="move-to-str">
   </div>
   <div class="form-group"><label>日期</label><input type="date" id="move-date" class="form-control"></div>
   <div class="form-group"><label>備註</label><textarea id="move-remark" class="form-control" rows="2"></textarea></div>
@@ -6199,6 +6215,14 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <label style="font-weight:400;margin:0;cursor:pointer;"><input type="checkbox" id="cat-show-vendor"> 廠商</label>
     </div>
     <small style="font-size:11px;color:#aaa;">保管者 / 廠商 會在新增/編輯庫存時提供選擇，並顯示於庫存列表「客戶」欄</small>
+  </div>
+  <div class="form-group" style="margin-top:4px;">
+    <label><i class="fa fa-user" style="color:var(--accent);"></i> 列表「客戶」欄顯示</label>
+    <select id="cat-party-label" class="form-control" style="max-width:200px;">
+      <option value="客戶">客戶（料號綁定的客戶）</option>
+      <option value="廠商">廠商（庫存上的廠商資料）</option>
+    </select>
+    <small style="font-size:11px;color:#aaa;">選「廠商」時，這個種類的列表會在客戶欄帶入廠商資料（採購進貨的備品會自動帶入廠商）</small>
   </div>
 
   <!-- 允許儲位：搜尋 + 標籤多選（需求3）-->
@@ -7552,7 +7576,7 @@ function renderTable(rows, page, ps){
             costVal = hasBomCost ? parseFloat(r.bom_cost_snapshot) : (r.unit_cost ? parseFloat(r.unit_cost) : null);
             costSrc = hasBomCost
                 ? '<span style="font-size:9px;color:#27ae60;display:block;line-height:1.2;">[BOM]</span>'
-                : (r.unit_cost ? '<span style="font-size:9px;color:#888;display:block;line-height:1.2;">[手動]</span>' : '');
+                : (r.unit_cost ? (r.source==='purchase' ? '<span style="font-size:9px;color:#B8741A;display:block;line-height:1.2;">[採購進貨]</span>' : '<span style="font-size:9px;color:#888;display:block;line-height:1.2;">[手動]</span>') : '');
         }
         var costStr = costVal != null ? '<span title="'+(hasBomCost?'BOM自動計算':'手動輸入')+'">$'+costVal.toLocaleString('zh-TW',{maximumFractionDigits:2})+'</span>'+costSrc : (r.bom_ref?'<span style="font-size:10px;color:#e67e22;">[請先建立成本資料]</span>':'—');
 
@@ -7618,13 +7642,16 @@ function renderTable(rows, page, ps){
         else if(parseInt(r.show_label)&&r.labels_str){ var _lh=buildLabelsHtml(r.labels_str); if(_lh) labelLine='<div style="margin-top:3px;">'+_lh+'</div>'; }
         // 客戶欄：依設定附加 廠商 / 保管者
         var clientExtra='';
-        if(parseInt(r.show_vendor)&&r.vendor_name) clientExtra+='<div style="font-size:11px;color:#888;padding-left:8px;">廠商：'+esc(r.vendor_name)+'</div>';
+        // 品項種類設為「廠商」時，客戶欄改顯示廠商（採購進貨的備品會自動帶入廠商）
+        var _asVendor=(r.party_label==='廠商');
+        var _purTag=(r.source==='purchase')?'<div style="margin-top:2px;"><span style="font-size:10px;background:#F3E2C7;color:#8A5A2B;border-radius:3px;padding:0 5px;">採購進貨</span></div>':'';
+        if(!_asVendor && parseInt(r.show_vendor)&&r.vendor_name) clientExtra+='<div style="font-size:11px;color:#888;padding-left:8px;">廠商：'+esc(r.vendor_name)+'</div>';
         if(parseInt(r.show_keeper)&&r.keeper_name) clientExtra+='<div style="font-size:11px;color:#888;padding-left:8px;">保管：'+esc(r.keeper_name)+'</div>';
 
         h+='<tr'+trClass+'>'
           +(G._canBatch?'<td style="text-align:center;"><input type="checkbox" class="list-item-chk" data-id="'+r.stock_item_id+'" data-did="'+esc(r.d_id)+'" data-client="'+esc(r.client_name||'')+'" onchange="updateListSelection()"></td>':'')
-          +'<td>'+didCell+remarkStr+safeBadge+groupBadge+specLine+labelLine+'</td>'
-          +'<td style="font-size:12px;">'+esc(r.client_name||'—')
+          +'<td>'+didCell+_purTag+remarkStr+safeBadge+groupBadge+specLine+labelLine+'</td>'
+          +'<td style="font-size:12px;">'+(_asVendor?esc(r.vendor_name||r.client_name||'—')+' <span style="font-size:10px;color:#B8741A;">廠商</span>':esc(r.client_name||'—'))
             +((!r.client_name&&hasF('stock_unbound_check'))?' <i class="fa fa-link" title="料號尚未綁定客戶，點此快速綁定（完全同名唯一一筆會自動綁定）" style="color:#F39C12;cursor:pointer;" onclick="quickBindStock('+r.stock_item_id+')"></i>':'')
             +clientExtra+'</td>'
           +'<td>'+catBadge+'</td>'
@@ -7755,7 +7782,7 @@ function clearItemForm(){
     $('#item-cost,#item-price,#item-ey,#item-pkg,#item-r1').val('');
     $('#item-keeper,#item-keeper-id,#item-vendor,#item-vendor-id').val('');
     $('#ac-keeper,#ac-vendor').hide(); $('#item-keeper-wrap,#item-vendor-wrap').hide();
-    $('#item-qty').val(0); $('#item-cat,#item-loc').val('');
+    $('#item-qty').val(0); $('#item-cat,#item-loc').val(''); $('#item-loc').trigger('change');
     _fillItemUnitDefaultPCS();
     // 重置 BOM/訂單下拉
     $('#item-bom-sel').html('<option value="">— 選擇BOM（選定料號後自動載入）—</option>');
@@ -9034,6 +9061,7 @@ function openCatModal(id){
         $('#cat-name,#cat-code').val(''); $('#cat-ey').val(''); $('#cat-color').val('#1ABB9C');
         $('#cat-bom,#cat-order').val(0); $('#cat-dashboard').val(1); $('#cat-sort').val(0);
         $('#cat-show-spec,#cat-show-label,#cat-show-keeper,#cat-show-vendor').prop('checked',false);
+        $('#cat-party-label').val('客戶');
         _loadCatLocList(0);
         $('#catModal').modal('show');
         return;
@@ -9053,6 +9081,7 @@ function openCatModal(id){
             $('#cat-show-label').prop('checked',parseInt(c.show_label)===1);
             $('#cat-show-keeper').prop('checked',parseInt(c.show_keeper)===1);
             $('#cat-show-vendor').prop('checked',parseInt(c.show_vendor)===1);
+            $('#cat-party-label').val(c.party_label==='廠商'?'廠商':'客戶');
         }
         _loadCatLocList(id);
         $('#catModal').modal('show');
@@ -9116,6 +9145,7 @@ function saveCat(){
         show_label:$('#cat-show-label').is(':checked')?1:0,
         show_keeper:$('#cat-show-keeper').is(':checked')?1:0,
         show_vendor:$('#cat-show-vendor').is(':checked')?1:0,
+        party_label:$('#cat-party-label').val(),
         color:$('#cat-color').val(),
         sort_order:$('#cat-sort').val()||0
     },function(r){
@@ -11701,6 +11731,12 @@ var _editClientSuggestions = [];
 var _crClientAcTimer = null;
 var _editClientAcTimer = null;
 
+function reqApplyCounts(c){
+    if(!c) return;
+    $('.req-cnt').each(function(){ var k=$(this).data('k'), v=c[k]||0; $(this).text(' '+v).toggleClass('cnt-warn',v>0&&(k==='0'||k==='1'||k===0||k===1)); });
+    var n=(c['0']||0)+(c['1']||0);
+    $('#req-badge').text(n).toggle(n>0);
+}
 function loadRequisitions(p){
     G.req.page = p || 1;
     var activeBtn = $('.req-status-btn.btn-primary');
@@ -11708,7 +11744,7 @@ function loadRequisitions(p){
     G.req.kw = $('#req-filter-kw').val().trim();
     ajx({action:'get_requisitions', status:G.req.status===''?'all':G.req.status, kw:G.req.kw, page:G.req.page, page_size:G.req.pageSize}, function(r){
         if(!r.success){ toast(r.message||'載入失敗','error'); return; }
-        var tb = $('#req-tbody'); tb.empty();
+        reqApplyCounts(r.counts); var tb = $('#req-tbody'); tb.empty();
         if(!r.rows||!r.rows.length){ tb.html('<tr><td colspan="10" class="text-center text-muted" style="padding:20px;">目前沒有符合的需求單</td></tr>'); $('#req-pager').html(''); return; }
         var statusLabel = [
             '<span style="display:inline-block;padding:3px 10px;border-radius:4px;font-size:13px;font-weight:700;background:#e8e8e8;color:#555;">待出庫</span>',
@@ -11728,7 +11764,7 @@ function loadRequisitions(p){
                 +'<td>'+esc(row.dept_name||'')+'</td>'
                 +'<td>'+esc(row.requester_name||row.creator_name||'')+'</td>'
                 +'<td>'+(statusLabel[st]||'')+'</td>'
-                +'<td>'+esc(row.item_cnt||0)+' 項'+(parseInt(row.urgent_cnt||0)>0?' <span class="label label-danger" style="font-size:10px;"><i class="fa fa-bolt"></i> '+row.urgent_cnt+'急</span>':'')+(row.done_cnt>0?' <small class="text-muted">('+row.done_cnt+'完)</small>':'')+'</td>'
+                +'<td>'+esc(row.item_cnt||0)+' 項'+(parseInt(row.urgent_cnt||0)>0?' <span class="label label-danger" style="font-size:10px;"><i class="fa fa-bolt"></i> '+row.urgent_cnt+'急</span>':'')+(row.done_cnt>0&&(row.item_cnt-row.done_cnt)>0?' <small class="text-muted">( '+(row.item_cnt-row.done_cnt)+' 未領)</small>':'')+'</td>'
                 +'<td style="font-size:12px;white-space:nowrap;">'+esc(crAt)+'</td>'
                 +'<td style="font-size:12px;white-space:nowrap;color:'+(modAt!==crAt?'var(--accent)':'#aaa')+';">'+esc(modAt)+'</td>'
                 +'<td><button class="btn btn-xs btn-info" onclick="openReqDetail('+row.req_id+')" title="查看"><i class="fa fa-eye"></i></button>'
@@ -13577,12 +13613,23 @@ function inbStockHtml(x){
     }).join('；')+'</div>';
 }
 function setInbStatus(st,btn){ INB.status=st; $('.inb-st').removeClass('btn-primary').addClass('btn-default'); $(btn).removeClass('btn-default').addClass('btn-primary'); loadInbound(1); }
+function inbApplyCounts(c){
+    if(!c) return;
+    $('.inb-cnt').each(function(){ var k=$(this).data('k'), v=c[k]||0; $(this).text(' '+v).toggleClass('cnt-warn',v>0&&(k==='pending'||k==='partial')); });
+    var n=(c.pending||0)+(c.partial||0);
+    $('#inb-badge').text(n).toggle(n>0);
+}
+$(function(){
+    // 分頁標籤的未完成數量：不必先點開分頁就要看得到
+    ajx({action:'inbound_list',status:'',kw:'',page:1,per:10},function(r){ if(r&&r.success) inbApplyCounts(r.counts); });
+    ajx({action:'get_requisitions',status:'all',kw:'',page:1,page_size:10},function(r){ if(r&&r.success) reqApplyCounts(r.counts); });
+});
 function loadInbound(page){
     INB.page=page||1;
     ajx({action:'inbound_list',status:INB.status,kw:$('#inb-kw').val(),page:INB.page,per:INB.per},function(r){
         if(!r.success){ $('#inb-body').html('<tr><td colspan="10" class="text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
         var pend=(r.counts.pending||0)+(r.counts.partial||0);
-        $('#inb-badge').text(pend).toggle(pend>0);
+        inbApplyCounts(r.counts);
         if(!r.rows.length){ $('#inb-body').html('<tr><td colspan="10" class="text-center text-muted" style="padding:20px;">目前沒有符合的入庫單</td></tr>'); $('#inb-pager').html(''); return; }
         INB.rows={}; var h='';
         r.rows.forEach(function(x){
@@ -13600,15 +13647,110 @@ function loadInbound(page){
         $('#inb-pager').html('共 '+r.total+' 筆　'+p);
     });
 }
+// 通用「輸入框式下拉」：把既有 select 藏起來，改用輸入框（點選列全部、打字模糊篩選）；select 仍是唯一的值來源，原有程式不必改
+function stkSelCombo(selId, beforeOpen){
+    var $sel=$('#'+selId); if(!$sel.length||$sel.data('combo')) return; $sel.data('combo',1);
+    var $wrap=$('<div style="position:relative;"></div>');
+    var $inp=$('<input type="text" class="form-control" autocomplete="off" placeholder="點選列出全部，或輸入關鍵字篩選" style="padding-right:24px;"><i class="fa fa-caret-down" style="position:absolute;right:8px;top:11px;color:#888;pointer-events:none;"></i>');
+    $sel.before($wrap); $wrap.append($inp); $wrap.append($sel.hide());
+    var $box=null;
+    function opts(){ var a=[]; $sel.find('option').each(function(){ if(this.value!=='') a.push({v:this.value,t:$(this).text()}); }); return a; }
+    function sync(){
+        var $o=$sel.find('option:selected'), v=$sel.val();
+        $inp.val(v?$o.text():'');
+        if(!opts().length){ $inp.attr('placeholder',$.trim($sel.find('option').first().text())||'無可用儲位'); } else $inp.attr('placeholder','點選列出全部，或輸入關鍵字篩選');
+        $inp.prop('disabled',$sel.prop('disabled'));
+    }
+    function hide(){ if($box){ $box.remove(); $box=null; } }
+    function show(filter){
+        hide();
+        var kws=filter?$.trim($inp.val()).toLowerCase().split(/\s+/).filter(Boolean):[];
+        var hits=opts().filter(function(o){ var t=o.t.toLowerCase(); return kws.every(function(k){ return t.indexOf(k)>=0; }); });
+        var r=$inp[0].getBoundingClientRect();
+        $box=$('<div></div>').css({position:'fixed',left:r.left,top:r.bottom+2,width:r.width,maxHeight:240,overflowY:'auto',background:'#fff',border:'1px solid #ccc',borderRadius:4,boxShadow:'0 4px 12px rgba(0,0,0,.2)',zIndex:20000});
+        if(!hits.length) $box.append('<div style="padding:6px 10px;color:#999;font-size:12px;">查無符合的儲位</div>');
+        hits.slice(0,100).forEach(function(o){
+            $('<div></div>').text(o.t).attr('data-v',o.v).css({padding:'6px 10px',cursor:'pointer',fontSize:13})
+              .on('mouseenter',function(){ $(this).css('background','#F7E0BD'); }).on('mouseleave',function(){ $(this).css('background',''); })
+              .on('mousedown',function(e){ e.preventDefault(); $sel.val($(this).attr('data-v')).trigger('change'); hide(); }).appendTo($box);
+        });
+        if(hits.length>100) $box.append('<div style="padding:4px 10px;color:#999;font-size:12px;">僅列前 100 筆，請再輸入更多關鍵字</div>');
+        $('body').append($box);
+    }
+    $inp.on('focus click',function(){ if(beforeOpen && beforeOpen()===false){ $inp.blur(); return; } if(!$box) show(false); });
+    $inp.on('input',function(){ $sel.val(''); show(true); });
+    $inp.on('keydown',function(e){
+        if(e.which===27) hide();
+        if(e.which===13&&$box){ var f=$box.children('[data-v]').first(); if(f.length){ e.preventDefault(); f.trigger('mousedown'); } }
+    });
+    $inp.on('blur',function(){ setTimeout(function(){ hide(); sync(); },150); });
+    $sel.on('change',function(){ if(!$box) sync(); });
+    new MutationObserver(sync).observe($sel[0],{childList:true,attributes:true,attributeFilter:['disabled']});
+    $(window).on('resize',hide); document.addEventListener('scroll',function(e){ if($box && !$box[0].contains(e.target)) hide(); },true);
+    sync(); window._stkCombos=window._stkCombos||[]; window._stkCombos.push(sync);
+}
+$(document).on('shown.bs.modal',function(){ (window._stkCombos||[]).forEach(function(f){ f(); }); });
+$(function(){
+    ['ml-to-id','move-to-id','split-target-loc-id','grp-loc'].forEach(function(id){ stkSelCombo(id); });
+    stkSelCombo('item-loc',function(){
+        if(!$('#item-cat').val()){ toast('請先選擇品項種類，系統將依種類篩選可用儲位','error'); $('#item-cat').focus(); return false; }
+    });
+});
+function inbLocLabel(id){
+    var r=''; (INB.locs||[]).forEach(function(l){ if(String(l.location_id)===String(id)&&id!=='') r=(l.area_name?l.area_name+' ':'')+l.location_code; });
+    return r;
+}
 function inbLocOpts(sel){
     var h='<option value="">選擇儲位</option>';
     (INB.locs||[]).forEach(function(l){ h+='<option value="'+l.location_id+'"'+(String(sel)===String(l.location_id)?' selected':'')+'>'+esc((l.area_name?l.area_name+' ':'')+l.location_code)+'</option>'; });
     return h;
 }
 function inbAddRow(loc,qty){
-    $('#inb-splits').append('<tr><td><select class="form-control input-sm inb-loc" data-eg-filter="輸入儲位篩選…">'+inbLocOpts(loc)+'</select></td><td><input type="number" min="1" class="form-control input-sm inb-qty" value="'+(qty||'')+'" oninput="inbSum()"></td><td><button class="btn btn-xs btn-default" onclick="$(this).closest(\'tr\').remove();inbSum()">×</button></td></tr>');
+    $('#inb-splits').append('<tr><td><div style="position:relative;"><input type="text" class="form-control input-sm inb-loc-q" autocomplete="off" placeholder="點選列出全部，或輸入關鍵字篩選" value="'+esc(inbLocLabel(loc))+'" style="padding-right:24px;"><i class="fa fa-caret-down" style="position:absolute;right:8px;top:9px;color:#888;pointer-events:none;"></i><input type="hidden" class="inb-loc" value="'+esc(loc||'')+'"></div></td><td><input type="number" min="1" class="form-control input-sm inb-qty" value="'+(qty||'')+'" oninput="inbSum()"></td><td><button class="btn btn-xs btn-default" onclick="$(this).closest(\'tr\').remove();inbSum()">×</button></td></tr>');
     inbSum();
 }
+// 儲位模糊篩選：打字即列出符合的儲位（fixed 定位避免被跳窗捲動容器裁掉），點選後同步到下拉
+(function(){
+    var $box=null;
+    function hide(){ if($box){ $box.remove(); $box=null; } }
+    function show($inp){
+        hide();
+        var kws=$.trim($inp.val()).toLowerCase().split(/\s+/).filter(Boolean);
+        
+        var hits=(INB.locs||[]).filter(function(l){
+            var t=((l.area_name?l.area_name+' ':'')+l.location_code).toLowerCase();
+            return kws.every(function(k){ return t.indexOf(k)>=0; });
+        });
+        var r=$inp[0].getBoundingClientRect();
+        $box=$('<div id="inb-loc-pop"></div>').css({position:'fixed',left:r.left,top:r.bottom+2,width:r.width,maxHeight:220,overflowY:'auto',background:'#fff',border:'1px solid #ccc',borderRadius:4,boxShadow:'0 4px 12px rgba(0,0,0,.2)',zIndex:20000});
+        if(!hits.length) $box.append('<div style="padding:6px 10px;color:#999;font-size:12px;">查無符合的儲位</div>');
+        hits.slice(0,50).forEach(function(l){
+            $('<div class="inb-loc-item"></div>').text((l.area_name?l.area_name+' ':'')+l.location_code).attr('data-id',l.location_id)
+              .css({padding:'6px 10px',cursor:'pointer',fontSize:13}).appendTo($box);
+        });
+        if(hits.length>50) $box.append('<div style="padding:4px 10px;color:#999;font-size:12px;">僅列前 50 筆，請再輸入更多關鍵字</div>');
+        $('body').append($box);
+        $box.data('inp',$inp);
+    }
+    $(document).on('focus click','.inb-loc-q',function(){ if(!$box) show($(this)); });
+    $(document).on('input','.inb-loc-q',function(){ $(this).closest('td').find('.inb-loc').val(''); show($(this)); });
+    $(document).on('mouseenter','.inb-loc-item',function(){ $(this).css('background','#F7E0BD'); }).on('mouseleave','.inb-loc-item',function(){ $(this).css('background',''); });
+    $(document).on('mousedown','.inb-loc-item',function(e){
+        e.preventDefault();
+        var $inp=$box.data('inp'), $td=$inp.closest('td');
+        $td.find('.inb-loc').val($(this).attr('data-id'));
+        $inp.val($(this).text());
+        hide();
+    });
+    $(document).on('blur','.inb-loc-q',function(){
+        var $i=$(this); setTimeout(function(){ hide(); if(!$i.closest('td').find('.inb-loc').val()) $i.val(''); },150);
+    });
+    $(document).on('keydown','.inb-loc-q',function(e){
+        if(e.which===27) hide();
+        if(e.which===13 && $box){ var f=$box.find('.inb-loc-item').first(); if(f.length){ e.preventDefault(); f.trigger('mousedown'); } }
+    });
+    $('#inbModal').on('hidden.bs.modal',hide);
+})();
 function inbSum(){
     var s=0; $('.inb-qty').each(function(){ s+=parseInt($(this).val())||0; });
     var rem=INB.cur?INB.cur.remain_qty:0;
