@@ -191,6 +191,8 @@ function openMask(id){ $('#'+id).addClass('show'); } function closeMask(id){ $('
 $(document).on('click','[data-close]',function(){ closeMask($(this).data('close')); });
 $(document).on('click','.a-mask',function(e){ if(e.target===this) $(this).removeClass('show'); });
 $('#btnHelp').on('click',function(){ openMask('mkHelp'); });
+var SRC_LBL={IS:'出貨',IR:'退貨',TLOG:'加工移轉',PURC:'採購'};
+function srcLbl(t){ return esc(SRC_LBL[t]||t); }
 function failMsg(x,d){ var m=d||'操作失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); }
 
 $.getJSON(API,{action:'meta'},function(r){
@@ -263,7 +265,7 @@ function renderItems(){
     var ret=(it.src_type==='IR');
     h+='<tr data-i="'+i+'" class="'+(it.locked?'lockedrow ':'')+(SEL[i]?'on':'')+'"'+(ret?' style="color:#DD5138;background:#FADADD;"':'')+'>'
       +'<td>'+(it.locked||!CAN_EDIT?'':'<input type="checkbox" class="vck"'+(SEL[i]?' checked':'')+'>')+'</td>'
-      +'<td>'+(ret?'退貨':(it.src_type==='IS'?'出貨':esc(it.src_type)))+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td>'
+      +'<td>'+srcLbl(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td>'
       +'<td class="l">'+esc(it.product_id)+'</td><td class="l">'+esc((it.spec||'').substr(0,26))+'</td>'
       +'<td class="r">'+nf(it.qty)+'</td><td class="r">'+np(it.unit_price)+'</td><td class="r">'+nf(it.amount)+'</td>'
       +'<td>'+esc(it.invoice_no||(it.invoiced?'已開（未回填號碼）':''))+'</td>'
@@ -555,7 +557,7 @@ $(document).on('click','.v-open',function(){
       +'<label>備註</label><input type="text" id="evNote" maxlength="200" style="width:240px;" value="'+esc(v.note||'')+'"'+(ed?'':' disabled')+'></div>'
       +(void_?'<div class="warn">此傳票已作廢：'+esc(v.void_reason||'')+'</div>':'')
       +'<table class="a-t"><thead><tr><th>類型</th><th>單號</th><th>日期</th><th>料號</th><th>品名規格</th><th>數量</th><th>單價</th><th>金額</th><th>發票</th></tr></thead><tbody>';
-    r.items.forEach(function(it){ h+='<tr'+(it.src_type==='IR'?' style="background:#FADADD;"':'')+'><td>'+esc(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td><td class="l">'+esc(it.product_id)+'</td>'
+    r.items.forEach(function(it){ h+='<tr'+(it.src_type==='IR'?' style="background:#FADADD;"':'')+'><td>'+srcLbl(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td><td class="l">'+esc(it.product_id)+'</td>'
       +'<td class="l">'+esc((it.spec||'').substr(0,26))+'</td><td class="r">'+nf(it.qty)+'</td><td class="r">'+np(it.unit_price)+'</td><td class="r">'+nf(it.amount)+'</td><td>'+esc(it.invoice_no||'')+'</td></tr>'; });
     h+='</tbody></table><div style="text-align:right;margin-top:6px;">合計 <b>'+nf(v.total_amount)+'</b></div>';
     var jd=0,jc=0, jh='<div style="font-weight:700;margin:12px 0 4px;"><i class="fa fa-book"></i> 會計分錄</div><table class="a-t" style="max-width:780px;"><thead><tr><th>會計科目</th><th>科目名稱</th><th>借方金額</th><th>貸方金額</th></tr></thead><tbody>';

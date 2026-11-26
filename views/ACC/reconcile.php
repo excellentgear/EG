@@ -1456,7 +1456,7 @@ function renderVinv(locked){
     +'<b>廠商發票</b> 發票號碼 <input type="text" id="vinvNo" maxlength="11" style="width:130px;text-transform:uppercase;" placeholder="AB-12345678" value="'+esc(no)+'"'+(ed?'':' disabled')+'>'
     +' 發票日期 <input type="date" id="vinvDate" value="'+esc(dt)+'"'+(ed?'':' disabled')+'>'
     +(ed?' <button type="button" id="vinvSave" class="btn-warm">儲存發票</button>':'')
-    +' <button type="button" id="vinvVch"'+(no?'':' disabled title="請先登錄廠商發票號碼"')+'>開立傳票</button></div>').show();
+    +' <button type="button" id="vinvVch" title="'+(no?'':'尚無廠商發票也可直接開傳票')+'">開立傳票</button></div>').show();
 }
 $(document).on('click','#vinvSave',function(){
   var $b=$(this).prop('disabled',true);
@@ -1468,11 +1468,12 @@ $(document).on('click','#vinvSave',function(){
   },'json').fail(function(){ $b.prop('disabled',false); toast('儲存失敗', true); });
 });
 $(document).on('click','#vinvVch',function(){
-  if(!sheet || !sheet.vendor_inv_no) return;
-  if(($('#vinvNo').val()||'').toUpperCase()!==sheet.vendor_inv_no || $('#vinvDate').val()!==(sheet.vendor_inv_date||'')){
-    toast('發票號碼或日期已修改，請先按「儲存發票」', true); return; }
+  if(!sheet) return;
+  var no=sheet.vendor_inv_no||'';
+  if(($('#vinvNo').val()||'').toUpperCase()!==no || $('#vinvDate').val()!==(sheet.vendor_inv_date||'')){
+    toast('發票號碼或日期已修改，請先按「儲存發票」；不需發票請清空欄位', true); return; }
   window.open('voucher.php?side=ap&bm='+encodeURIComponent(sheet.billing_month)+'&party='+encodeURIComponent(sheet.party_id)
-    +'&inv='+encodeURIComponent(sheet.vendor_inv_no)+'&idate='+encodeURIComponent(sheet.vendor_inv_date||''),'_blank');
+    +(no?'&inv='+encodeURIComponent(no)+'&idate='+encodeURIComponent(sheet.vendor_inv_date||''):''),'_blank');
 });
 $('#theirTotal').on('input', updateStat);
 
