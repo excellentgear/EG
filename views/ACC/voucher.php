@@ -75,6 +75,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
         <label>對象</label>
         <select id="vSide"><option value="ar">客戶（應收）</option><option value="ap">廠商（應付）</option></select>
         <label>帳款月份</label><input type="month" id="vBm">
+        <button id="btnVThis">本月</button><button id="btnVPrev">上月</button>
         <button id="btnVParties" class="btn-warm"><i class="fa fa-refresh"></i> 載入對象</button>
         <label>客戶／廠商</label>
         <select id="vParty" data-eg-filter="輸入名稱或代號篩選…" style="min-width:260px;"><option value="">（請先載入）</option></select>
@@ -159,7 +160,20 @@ $(document).on('click','.a-mask',function(e){ if(e.target===this) $(this).remove
 $('#btnHelp').on('click',function(){ openMask('mkHelp'); });
 function failMsg(x,d){ var m=d||'操作失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); }
 
-$.getJSON(API,{action:'meta'},function(r){ if(r.ok) CSRF=r.csrf; });
+$.getJSON(API,{action:'meta'},function(r){
+  if(r.ok) CSRF=r.csrf;
+  /* 由發票管理「開傳票」帶來（?side=ar&bm=2026-11&party=德士）：載入對象→選定→列出明細→勾選可開立的 */
+  var q=new URLSearchParams(location.search), qb=q.get('bm'), qp=(q.get('party')||'').trim();
+  if(/^\d{4}-\d{2}$/.test(qb||'') && qp){
+    $('#vSide').val(q.get('side')==='ap'?'ap':'ar'); $('#vBm').val(qb);
+    window.afterParties=function(){
+      if(!$('#vParty option').filter(function(){ return this.value===qp; }).length){ toast(esc(qp)+' 在 '+esc(qb)+' 沒有可開傳票的明細', true); return; }
+      window.afterItems=function(){ $('#btnVAll').trigger('click'); };
+      $('#vParty').val(qp).trigger('change');
+    };
+    loadParties();
+  }
+});
 (function(){
   var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1);
   var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
@@ -182,10 +196,17 @@ function loadParties(){
     var h='<option value="">（選擇'+(side==='ar'?'客戶':'廠商')+'，共 '+r.parties.length+' 家）</option>';
     r.parties.forEach(function(p){ h+='<option value="'+esc(p.id)+'">'+esc(p.name)+'　'+esc(p.code||'')+'　'+nf(p.amount)+' 元／'+p.cnt+'筆</option>'; });
     $('#vParty').html(h);
+    if(window.afterParties){ var f=window.afterParties; window.afterParties=null; f(); }
   },'json').fail(function(x){ failMsg(x,'載入失敗'); });
 }
 $('#btnVParties').on('click',loadParties);
 $('#vSide,#vBm').on('change',function(){ $('#vBox').hide(); loadParties(); });
+$('#btnVThis,#btnVPrev').on('click',function(){
+  var d=new Date(); d.setDate(1); if(this.id==='btnVPrev') d.setMonth(d.getMonth()-1);
+  $('#vBm').val(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)).trigger('change');
+});
+// 選定（或篩選到只剩一家而自動選起）客戶／廠商後直接列出明細
+$('#vParty').on('change',function(){ if($(this).val()) loadItems(); });
 function loadItems(){
   var pid=$('#vParty').val(); if(!pid){ toast('請先選擇客戶／廠商', true); return; }
   $.post(API+'?action=vch_candidates',{side:$('#vSide').val(),party_id:pid,bm:$('#vBm').val()},function(r){
@@ -194,6 +215,7 @@ function loadItems(){
     var lk=items.filter(function(i){return i.locked;}).length;
     $('#vInfo').html('<div class="info"><b>'+esc(r.party_name)+'</b>　共 '+items.length+' 筆明細'+(lk?'，其中 '+lk+' 筆已有傳票（灰底，不可重複開立）':'')+'。</div>');
     renderItems();
+    if(window.afterItems){ var f=window.afterItems; window.afterItems=null; f(); }
   },'json').fail(function(x){ failMsg(x,'查詢失敗'); });
 }
 $('#btnVLoad').on('click',loadItems);

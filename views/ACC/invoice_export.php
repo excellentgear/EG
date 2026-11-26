@@ -874,7 +874,9 @@ function renderInv(){
       +'<td class="r">'+(v.open_amt>0.005 && !isVoid?'<b style="color:#DD5138;">'+nf(v.open_amt)+'</b>':'')+'</td>'
       +'<td>'+(v.age_bucket?'<span class="pill age-'+v.age_bucket+'">'+v.age_days+'天</span>':'')+'</td>'
       +'<td><button class="btn-mini iv-detail" data-id="'+id+'">'+nf(v.item_cnt)+' 筆</button></td>'
-      +'<td>'+(CAN_EDIT && !isVoid
+      +'<td>'+(CAN_EDIT && v.status==='issued' && !isAllow
+          ? '<button class="btn-mini iv-vch" data-bm="'+esc(v.billing_month)+'" data-c="'+esc(v.customer_name)+'" title="到傳票管理，帶入這家客戶與帳款月份">開傳票</button> ' : '')
+        +(CAN_EDIT && !isVoid
           ? '<button class="btn-mini iv-void" data-id="'+id+'">作廢</button>' : '')+'</td>'
       +'</tr>';
   });
@@ -1016,6 +1018,9 @@ $(document).on('blur','.no-in', function(){
     });
 });
 
+$(document).on('click','.iv-vch',function(){
+  window.open('voucher.php?side=ar&bm='+encodeURIComponent($(this).data('bm'))+'&party='+encodeURIComponent($(this).data('c')),'_blank');
+});
 /* 作廢 */
 $(document).on('click','.iv-void',function(){
   var id=$(this).data('id');

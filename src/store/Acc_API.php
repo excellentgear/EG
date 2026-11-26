@@ -715,6 +715,19 @@ case 'vch_parties': {
         foreach ($r['rows'] as $x) $out[] = ['id' => $x['maker_id_no'], 'name' => $x['maker_name'], 'code' => $x['maker_id_no'],
                                              'full' => $x['maker_full'], 'cnt' => (int)$x['cnt'], 'amount' => (float)$x['amount']];
     }
+    // 已有「已確認鎖帳」對帳單的對象，筆數與金額改以鎖帳內容為準（與發票、傳票明細一致）
+    try {
+        $cq = $db->prepare("SELECT party_id FROM acc_recon_sheet WHERE side=? AND billing_month=? AND status='confirmed'");
+        $cq->execute([$side, $bm]);
+        $conf = array_flip($cq->fetchAll(PDO::FETCH_COLUMN));
+        foreach ($out as &$po) {
+            if (!isset($conf[$po['id']])) continue;
+            $cd = acc_voucher_candidates($db, $side, (string)$po['id'], $bm);
+            $po['cnt'] = count($cd['items']);
+            $po['amount'] = array_sum(array_column($cd['items'], 'amount'));
+        }
+        unset($po);
+    } catch (Throwable $e) {}
     acc_out(['parties' => $out]);
 }
 

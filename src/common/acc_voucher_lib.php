@@ -87,6 +87,15 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
 {
     $side = ($side === 'ap') ? 'ap' : 'ar';
     $b = acc_sheet_build($db, $side, $partyId, $bm);
+    /* 這個對象這個月若有「已確認鎖帳」的對帳單，只列對帳單裡有的憑證（出貨＋退貨），
+       與發票開立所用的資料一致；沒有鎖帳的對帳單才用來源憑證。金額 0 的不開傳票。 */
+    $cs = acc_sheet_get($db, $side, $partyId, $bm);
+    if ($cs && ($cs['status'] ?? '') === 'confirmed') {
+        $in = [];
+        foreach ($cs['lines'] as $sl) if ((int)$sl['src_id'] > 0) $in[strtoupper((string)$sl['src_type']) . '-' . (int)$sl['src_id']] = true;
+        $b['lines'] = array_values(array_filter($b['lines'], fn($l) => isset($in[strtoupper($l['src_type']) . '-' . (int)$l['src_id']])));
+    }
+    $b['lines'] = array_values(array_filter($b['lines'], fn($l) => abs((float)$l['orig_amount']) >= 0.0001));
     $vmap = acc_voucher_src_map($db);
     $imap = ($side === 'ar') ? acc_invoiced_src_map($db) : [];
     $items = [];
