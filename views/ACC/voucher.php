@@ -127,6 +127,9 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
   <div class="m-body">
     <div id="jHead" class="info" style="margin-bottom:8px;"></div>
     <div style="font-weight:700;color:#5b3a1e;margin-bottom:6px;"><i class="fa fa-book"></i> 會計分錄　<span style="font-weight:400;font-size:12.5px;color:#8a6d45;">依勾選明細自動帶出；匯費、手續費等請在下方加入科目，借貸方向依科目代號首碼自動判定（1／5／6＝借方，2／3／4＝貸方）</span></div>
+    <div style="margin-bottom:6px;font-size:13px;color:#5b3a1e;">小數處理（未稅金額）：
+      <select id="jRound" style="width:auto;"><option value="none">不處理（保留小數）</option><option value="round">四捨五入至整數</option><option value="floor">無條件捨去至整數</option></select>
+      <span style="color:#8a6d45;font-size:12.5px;">稅額以處理後的未稅金額計算</span></div>
     <table class="a-t" id="tblJ"><thead><tr><th style="width:110px;">會計科目</th><th>科目名稱</th><th style="width:140px;">借方金額</th><th style="width:140px;">貸方金額</th><th style="width:60px;"></th></tr></thead>
       <tbody id="jBody"></tbody>
       <tfoot><tr><td colspan="2" style="text-align:right;font-weight:700;">合計</td><td class="r" id="jDsum" style="font-weight:700;">0</td><td class="r" id="jCsum" style="font-weight:700;">0</td><td id="jBal"></td></tr></tfoot></table>
@@ -307,7 +310,13 @@ function loadAcct(cb){
   });
 }
 loadAcct();
-function selNet(){ var n=0; Object.keys(SEL).forEach(function(i){ n+=Number(items[i].amount)||0; }); return Math.round(n*100)/100; }
+function selNet(){
+  var n=0; Object.keys(SEL).forEach(function(i){ n+=Number(items[i].amount)||0; }); n=Math.round(n*100)/100;
+  var m=$('#jRound').val();
+  if(m==='round') n=n<0?-Math.round(-n):Math.round(n);
+  else if(m==='floor') n=n<0?Math.ceil(n-1e-9):Math.floor(n+1e-9);
+  return n;
+}
 function autoLines(){
   var net=selNet(), side=$('#vSide').val(), abs=Math.abs(net), tax=Math.round(abs*TAXR), neg=net<0, L=[];
   var A=function(k){ return ACFG[k]||{code:'',name:''}; };
@@ -348,6 +357,7 @@ function journalRender(){
   $('#btnJConfirm').prop('disabled', !jBalanced);
   $('#vSigns').html(signBoxes({}, ME, false, false, 0));
 }
+$('#jRound').on('change',journalRender);
 $('#jCode').on('input change',function(){
   var code=$.trim(this.value), a=ACCT.filter(function(x){ return x.code===code; })[0];
   if(a) $('#jName').val(a.name);
@@ -483,6 +493,7 @@ $('#btnVCreate').on('click',function(){
   if(noE){ toast('傳票號碼：'+esc(noE), true); $('#vNo').focus(); return; }
   JX=[]; $('#jErr').text('');
   $('#jTitle').text('確認傳票 '+noV);
+  $('#jRound').val('none');
   $('#jHead').html('<b>'+esc($('#vParty option:selected').text().split('　')[0])+'</b>　帳款月份 '+esc($('#vBm').val())+'　傳票日期 '+dd(d)+'　共 '+k.length+' 筆憑證、未稅合計 '+nf2(selNet()));
   journalRender(); openMask('mkJ');
 });
@@ -494,7 +505,7 @@ $('#btnJConfirm').on('click',function(){
   var sel=k.map(function(i){ return {src_type:items[i].src_type, src_id:items[i].src_id}; });
   var $b=$(this).prop('disabled',true);
   $.post(API+'?action=vch_create',{csrf:CSRF,side:$('#vSide').val(),party_id:$('#vParty').val(),bm:$('#vBm').val(),
-    voucher_date:d,voucher_no:noV,note:$('#vNote').val(),sel:JSON.stringify(sel),extra:JSON.stringify(JX)},function(r){
+    voucher_date:d,voucher_no:noV,note:$('#vNote').val(),sel:JSON.stringify(sel),extra:JSON.stringify(JX),rounding:$('#jRound').val()},function(r){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'開立失敗'), true); return; }
     closeMask('mkJ'); toast('<b>'+esc(r.message)+'</b>　可到「傳票查詢」列印或看明細');

@@ -755,7 +755,7 @@ case 'vch_create': {
     $r = acc_voucher_create($db, (string)($_POST['side'] ?? 'ar'), acc_u8(trim((string)($_POST['party_id'] ?? ''))),
         trim((string)($_POST['bm'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
         acc_u8((string)($_POST['voucher_no'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), $sel,
-        (string)($_SESSION['userName'] ?? $uid), $extra);
+        (string)($_SESSION['userName'] ?? $uid), $extra, (string)($_POST['rounding'] ?? 'none'));
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

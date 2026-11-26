@@ -153,9 +153,10 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
 
 /** 建立傳票。$sel＝[{src_type,src_id}]；明細內容一律以當下資料庫重算，不信前端金額 */
 function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, string $date, ?string $no,
-                            string $note, array $sel, string $userName, array $extra = []): array
+                            string $note, array $sel, string $userName, array $extra = [], string $rounding = 'none'): array
 {
     acc_voucher_ensure($db);   // DDL 在交易外
+    if (!in_array($rounding, ['none', 'round', 'floor'], true)) $rounding = 'none';
     $side = ($side === 'ap') ? 'ap' : 'ar';
     if (!preg_match('/^\d{4}-\d{2}$/', $bm)) return ['success' => false, 'message' => '帳款月份格式錯誤'];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '傳票日期格式錯誤'];
@@ -185,6 +186,10 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     }
     $total = 0.0;
     foreach ($pick as $it) $total += $it['amount'];
+    $total = round($total, 2);
+    // 小數處理（確認傳票時選）：四捨五入／無條件捨去（負數＝往 0 方向捨去），整數後才算稅額與分錄
+    if ($rounding === 'round') $total = round($total, 0, PHP_ROUND_HALF_UP);
+    elseif ($rounding === 'floor') $total = $total < 0 ? ceil($total - 1e-9) : floor($total + 1e-9);
     // 分錄：自動分錄（依選取明細金額重算）＋使用者追加的科目（匯費、手續費…），借貸必須平衡
     [$extraLines, $exErr] = acc_vch_clean_extra($db, $extra);
     if ($exErr) return ['success' => false, 'message' => $exErr];
