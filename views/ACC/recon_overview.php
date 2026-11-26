@@ -211,13 +211,14 @@ table.a-t tbody tr:hover{background:#FBF0DE;}
     </div>
 <?php else: ?>
     <div class="a-bar">
-      <label>帳款月份</label>
-      <input type="month" id="bmFrom" style="width:145px;"> ~ <input type="month" id="bmTo" style="width:145px;">
+      <select id="dateBasis" style="width:110px;" title="帳款月份＝這份對帳是哪個月的帳；做帳月份＝實際做這份對帳的月份（例如 11 月才做 9 月的帳，帳款月份＝9 月、做帳月份＝11 月）">
+        <option value="bm">帳款月份</option>
+        <option value="made">做帳月份</option>
+      </select>
+      <input type="month" id="dtFrom" autocomplete="off" style="width:145px;"> ~ <input type="month" id="dtTo" autocomplete="off" style="width:145px;">
       <button id="btnThis">本月</button>
       <button id="btnPrev">上月</button>
       <button id="btnAllMonth" title="不限月份，看全部底稿">全部月份</button>
-      <label title="實際做這份對帳的月份（例如 11 月才做 9 月的帳，帳款月份＝9 月、做帳月份＝11 月）">做帳月份</label>
-      <input type="month" id="madeFrom" style="width:145px;"> ~ <input type="month" id="madeTo" style="width:145px;">
       <label>側別</label>
       <select id="side" style="width:120px;" <?= $lockSide ? 'disabled' : '' ?>>
 <?php if ($lockSide === ''): ?>
@@ -238,7 +239,6 @@ table.a-t tbody tr:hover{background:#FBF0DE;}
         <option value="reopened">已退回重對</option>
       </select>
       <input type="text" id="kw" placeholder="對象／編號／暫存人／確認人">
-      <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
       <span class="a-role">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b>
         <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
     </div>
@@ -362,7 +362,7 @@ var LOCK_SIDE = <?= json_encode($lockSide) ?>;
 
 var rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = 'billing_month', sortDir = 'desc';
-var onlyDiff = false, onlyOpen = true;   // 預設只看還沒對完的
+var onlyDiff = false, onlyOpen = false;   // 預設顯示全部，不限定
 var CSRF = '', roTarget = null;
 
 var SIDE_LABEL = {ar:'應收', ap:'應付'};
@@ -383,19 +383,19 @@ $('#btnRoleHelp').on('click',function(){ openMask('mkRole'); });
 function shortT(t){ return t ? String(t).substr(5,11) : ''; }   // MM-DD HH:MM
 
 /* 預設不限月份：幾個月對一次帳、或晚幾個月才對的，沒對完的都要看得到；要縮小範圍再選帳款月份或做帳月份 */
+function BASIS(){ return $('#dateBasis').val()||'bm'; }
 function setMonth(offset){
   var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+offset);
   var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
-  $('#bmFrom').val(m); $('#bmTo').val(m); page=1; load();
+  $('#dtFrom').val(m); $('#dtTo').val(m); page=1; load();
 }
 $('#btnThis').on('click',function(){ setMonth(0); });
 $('#btnPrev').on('click',function(){ setMonth(-1); });
-$('#btnAllMonth').on('click',function(){ $('#bmFrom,#bmTo,#madeFrom,#madeTo').val(''); page=1; load(); });
-$(function(){ if(onlyOpen) $("#btnOnlyOpen").css({background:'#B9793C', color:'#fff'}); });
+$('#btnAllMonth').on('click',function(){ $('#dtFrom,#dtTo').val(''); page=1; load(); });
 
 function filters(){
   return {side: LOCK_SIDE || $('#side').val(), status:$('#status').val(),
-          bm_from:$('#bmFrom').val(), bm_to:$('#bmTo').val(), made_from:$('#madeFrom').val(), made_to:$('#madeTo').val(), kw:$('#kw').val(),
+          bm_from:BASIS()==='bm'?$('#dtFrom').val():'', bm_to:BASIS()==='bm'?$('#dtTo').val():'', made_from:BASIS()==='made'?$('#dtFrom').val():'', made_to:BASIS()==='made'?$('#dtTo').val():'', kw:$('#kw').val(),
           only_diff:onlyDiff?1:0, only_open:onlyOpen?1:0,
           sort:sortBy, dir:sortDir, per_page:perPage, page:page};
 }
@@ -498,9 +498,9 @@ $(document).on('click','#pgBtns button',function(){
   var p=parseInt($(this).data('p'),10); if(p>=1){ page=p; load(); }
 });
 $('#perPage').on('change',function(){ perPage=parseInt(this.value,10)||20; page=1; load(); });
-$('#btnSearch').on('click',function(){ page=1; load(); });
+var kwT; $('#kw').on('input',function(){ clearTimeout(kwT); kwT=setTimeout(function(){ page=1; load(); },350); });
 $('#kw').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); page=1; load(); } });
-$('#bmFrom,#bmTo,#madeFrom,#madeTo,#side,#status').on('change',function(){ page=1; load(); });
+$('#dtFrom,#dtTo,#dateBasis,#side,#status').on('change',function(){ page=1; load(); });
 $('#kw').on('dblclick',function(){ if($(this).val()!==''){ $(this).val(''); page=1; load(); } });
 
 /* 這兩個是後端篩選（統計與分頁都會跟著變），不是只挑當頁 */
