@@ -322,12 +322,10 @@ function autoLines(){
   var A=function(k){ return ACFG[k]||{code:'',name:''}; };
   if(side==='ar'){
     // 收入與退回分開列示、銷項稅額分兩行，應收帳款以含稅淨額入帳
-    var tS=Math.round(P.ship*TAXR), tR=Math.round(P.ret*TAXR), an=Math.round((P.ship+tS-P.ret-tR)*100)/100;
-    L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:an<0?'C':'D',amount:Math.abs(an)});
+    L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:neg?'C':'D',amount:Math.round((abs+tax)*100)/100});
     L.push({code:A('ar_ret').code,name:A('ar_ret').name,side:'D',amount:P.ret});
-    L.push({code:A('ar_tax').code,name:A('ar_tax').name,side:'D',amount:tR,memo:'退貨稅額'});
+    L.push({code:A('ar_tax').code,name:A('ar_tax').name,side:neg?'D':'C',amount:tax});
     L.push({code:A('ar_rev').code,name:A('ar_rev').name,side:'C',amount:P.ship});
-    L.push({code:A('ar_tax').code,name:A('ar_tax').name,side:'C',amount:tS,memo:'出貨稅額'});
   } else {
     L.push({code:A('ap_exp').code,name:A('ap_exp').name,side:neg?'C':'D',amount:abs});
     L.push({code:A('ap_tax').code,name:A('ap_tax').name,side:neg?'C':'D',amount:tax});

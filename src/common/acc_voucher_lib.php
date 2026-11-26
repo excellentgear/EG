@@ -533,16 +533,15 @@ function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = n
     $cfg = acc_vch_acct_cfg($db);
     $rate = acc_tax_rate($db);
     if ($side === 'ar' && $parts !== null) {
-        // 應收：收入與退回分開列示、銷項稅額分兩行，應收帳款以含稅淨額入帳
+        // 應收：收入與退回分開列示；銷項稅額只列一行，以（出貨－退貨）淨額計算；應收帳款以含稅淨額入帳
         $ship = (float)$parts['ship']; $ret = (float)$parts['ret'];
-        $taxS = (float)round($ship * $rate); $taxR = (float)round($ret * $rate);
-        $arNet = round(($ship + $taxS) - ($ret + $taxR), 2);
+        $netAmt = round($ship - $ret, 2); $neg = $netAmt < 0;
+        $tax = (float)round(abs($netAmt) * $rate);
         $L = [];
-        $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $arNet < 0 ? 'C' : 'D', 'amount' => abs($arNet), 'auto' => 1, 'memo' => ''];
+        $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $neg ? 'C' : 'D', 'amount' => round(abs($netAmt) + $tax, 2), 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_ret']['code'],  'name' => $cfg['ar_ret']['name'],  'side' => 'D', 'amount' => $ret,  'auto' => 1, 'memo' => ''];
-        $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => 'D', 'amount' => $taxR, 'auto' => 1, 'memo' => '退貨稅額'];
+        $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => $neg ? 'D' : 'C', 'amount' => $tax, 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_rev']['code'],  'name' => $cfg['ar_rev']['name'],  'side' => 'C', 'amount' => $ship, 'auto' => 1, 'memo' => ''];
-        $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => 'C', 'amount' => $taxS, 'auto' => 1, 'memo' => '出貨稅額'];
         return array_values(array_filter($L, fn($l) => $l['amount'] > 0.004));
     }
     $tax = round(abs($net) * $rate);
