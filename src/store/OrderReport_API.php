@@ -30,7 +30,7 @@ switch ($action) {
         if (!$pm['add'] && !$pm['edit'] && !$pm['del']) { http_response_code(403); orpReply(['success' => false, 'message' => '您沒有設定報告項目的權限']); }
         $used = [];
         try { $used = array_map('intval', $pdo->query("SELECT DISTINCT opt_id FROM order_report_sel WHERE opt_id>0")->fetchAll(PDO::FETCH_COLUMN)); } catch (Throwable $e) {}
-        orpReply(['success' => true, 'options' => orp_options($pdo, false), 'types' => orp_process_types($pdo), 'perm' => $pm, 'used' => $used]);
+        orpReply(['success' => true, 'options' => orp_options($pdo, false), 'types' => orp_process_types($pdo), 'suffixes' => orp_suffix_choices($pdo), 'perm' => $pm, 'used' => $used]);
     }
     case 'save_defs': {
         $pm = orp_perms($pdo, $uid);

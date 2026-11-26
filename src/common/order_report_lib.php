@@ -41,6 +41,10 @@ function orp_ensure_schema(PDO $db): void
                 UNIQUE KEY uk_order_opt (order_id, opt_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         }
+        // 對應 part_viewer「ERP/資材報告 檔名標籤」的檔名後綴（可空；2026-11-26）
+        if (!$db->query("SHOW COLUMNS FROM order_report_opt LIKE 'tag_suffix'")->fetchColumn()) {
+            $db->exec("ALTER TABLE order_report_opt ADD COLUMN tag_suffix VARCHAR(30) NULL AFTER process_type_id");
+        }
         $done = true;
     } catch (Throwable $e) { error_log('orp_ensure_schema: ' . $e->getMessage()); }
 }
@@ -63,6 +67,27 @@ function orp_perms(PDO $db, int $uid): array
     } catch (Throwable $e) { return $p; }
 }
 
+/** 已被報告項目綁定的檔名後綴（part_viewer 的檔名標籤設定據此反灰，不可改名／刪除） */
+function orp_locked_suffixes(PDO $db): array
+{
+    orp_ensure_schema($db);
+    try {
+        return array_values(array_filter(array_map('strval',
+            $db->query("SELECT DISTINCT tag_suffix FROM order_report_opt WHERE tag_suffix IS NOT NULL AND tag_suffix<>''")->fetchAll(PDO::FETCH_COLUMN))));
+    } catch (Throwable $e) { return []; }
+}
+
+/** 可綁定的檔名後綴＝part_viewer 檔名標籤設定中勾了「報告」的標籤 */
+function orp_suffix_choices(PDO $db): array
+{
+    require_once __DIR__ . '/bom_dir_lib.php';
+    $out = [];
+    foreach (eg_bom_file_tags_all($db) as $t) {
+        if (!empty($t['is_report'])) $out[] = ['suffix' => $t['suffix'], 'label' => $t['label'], 'process_type_id' => $t['process_type_id']];
+    }
+    return $out;
+}
+
 /** 製程大類清單（供設定下拉） */
 function orp_process_types(PDO $db): array
 {
@@ -76,7 +101,7 @@ function orp_options(PDO $db, bool $onlyActive = true, array $keepIds = []): arr
 {
     orp_ensure_schema($db);
     try {
-        $sql = "SELECT o.opt_id, o.opt_name, o.process_type_id, o.sort_order, o.is_active, pt.process_type AS ptype_name
+        $sql = "SELECT o.opt_id, o.opt_name, o.process_type_id, o.tag_suffix, o.sort_order, o.is_active, pt.process_type AS ptype_name
                 FROM order_report_opt o LEFT JOIN process_type pt ON pt.process_type_id = o.process_type_id";
         $rows = $db->query($sql . " ORDER BY o.sort_order, o.opt_id")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
@@ -89,6 +114,7 @@ function orp_options(PDO $db, bool $onlyActive = true, array $keepIds = []): arr
             'opt_id' => $id, 'opt_name' => (string)$r['opt_name'],
             'process_type_id' => $r['process_type_id'] === null ? null : (int)$r['process_type_id'],
             'ptype_name' => (string)($r['ptype_name'] ?? ''),
+            'tag_suffix' => (string)($r['tag_suffix'] ?? ''),
             'is_active' => (int)$r['is_active'],
         ];
     }
@@ -176,6 +202,7 @@ function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
     $cur = [];
     foreach ($db->query("SELECT * FROM order_report_opt")->fetchAll(PDO::FETCH_ASSOC) as $o) $cur[(int)$o['opt_id']] = $o;
     $clean = []; $seen = []; $keepIds = [];
+    $okSuffix = array_column(orp_suffix_choices($db), 'suffix');
     foreach ($rows as $i => $r) {
         $name = trim((string)($r['opt_name'] ?? ''));
         if ($name === '') return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列：請輸入項目名稱'];
@@ -187,17 +214,19 @@ function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
         if ($pt <= 0) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：請選擇對應的製程大類'];
         $chk = $db->prepare("SELECT 1 FROM process_type WHERE process_type_id=?"); $chk->execute([$pt]);
         if (!$chk->fetchColumn()) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列：製程大類不存在'];
+        $suffix = trim((string)($r['tag_suffix'] ?? ''));
+        if ($suffix !== '' && !in_array($suffix, $okSuffix, true)) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：檔名後綴「' . $suffix . '」不在「ERP/資材報告 檔名標籤」的報告標籤內'];
         $id = (int)($r['opt_id'] ?? 0);
         $active = !empty($r['is_active']) ? 1 : 0;
         if ($id > 0) {
             if (!isset($cur[$id])) return ['ok' => false, 'msg' => '項目已不存在，請重新開啟設定'];
             $o = $cur[$id]; $keepIds[] = $id;
-            $changed = $o['opt_name'] !== $name || (int)$o['process_type_id'] !== $pt || (int)$o['is_active'] !== $active || (int)$o['sort_order'] !== $i + 1;
+            $changed = $o['opt_name'] !== $name || (int)$o['process_type_id'] !== $pt || (int)$o['is_active'] !== $active || (int)$o['sort_order'] !== $i + 1 || (string)($o['tag_suffix'] ?? '') !== $suffix;
             if ($changed && empty($perm['edit'])) return ['ok' => false, 'msg' => '您沒有「修改」報告項目的權限'];
         } elseif (empty($perm['add'])) {
             return ['ok' => false, 'msg' => '您沒有「新增」報告項目的權限'];
         }
-        $clean[] = ['id' => $id, 'name' => $name, 'pt' => $pt, 'active' => $active, 'sort' => $i + 1];
+        $clean[] = ['id' => $id, 'name' => $name, 'pt' => $pt, 'suffix' => $suffix, 'active' => $active, 'sort' => $i + 1];
     }
     // 要刪除的（原有但這次沒送來）：需 del 權限，且不可已被訂單使用
     foreach ($cur as $id => $o) {
@@ -210,11 +239,11 @@ function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
     try {
         foreach ($clean as $c) {
             if ($c['id'] > 0) {
-                $db->prepare("UPDATE order_report_opt SET opt_name=?,process_type_id=?,is_active=?,sort_order=? WHERE opt_id=?")
-                   ->execute([$c['name'], $c['pt'], $c['active'], $c['sort'], $c['id']]);
+                $db->prepare("UPDATE order_report_opt SET opt_name=?,process_type_id=?,tag_suffix=?,is_active=?,sort_order=? WHERE opt_id=?")
+                   ->execute([$c['name'], $c['pt'], $c['suffix'] === '' ? null : $c['suffix'], $c['active'], $c['sort'], $c['id']]);
             } else {
-                $db->prepare("INSERT INTO order_report_opt (opt_name,process_type_id,is_active,sort_order,created_at,created_by) VALUES (?,?,?,?,NOW(),?)")
-                   ->execute([$c['name'], $c['pt'], $c['active'], $c['sort'], $uname]);
+                $db->prepare("INSERT INTO order_report_opt (opt_name,process_type_id,tag_suffix,is_active,sort_order,created_at,created_by) VALUES (?,?,?,?,?,NOW(),?)")
+                   ->execute([$c['name'], $c['pt'], $c['suffix'] === '' ? null : $c['suffix'], $c['active'], $c['sort'], $uname]);
                 $keepIds[] = (int)$db->lastInsertId();
             }
         }
