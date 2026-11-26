@@ -447,6 +447,9 @@ $(document).on('click','#pgBtns button',function(){
 $('#perPage').on('change',function(){ perPage=parseInt(this.value,10)||20; page=1; load(); });
 $('#btnSearch').on('click',function(){ page=1; load(); });
 $('#kw').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); page=1; load(); } });
+// 輸入關鍵字（客戶編號／簡稱／全名，部分字串即可）時即時查詢，不必再按 Enter
+var kwTimer=null;
+$('#kw').on('input',function(){ clearTimeout(kwTimer); kwTimer=setTimeout(function(){ page=1; load(); },350); });
 $('#bmFrom,#bmTo,#onlyGap').on('change',function(){ page=1; load(); });
 
 $(document).on('click','#tbl thead th.sortable',function(){
