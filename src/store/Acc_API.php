@@ -529,7 +529,9 @@ case 'inv_einv_xlsx': {
     if (!$ids) acc_err('沒有選取發票');
     $d = trim((string)($s['inv_date'] ?? date('Y-m-d')));
     if ($e = acc_einv_date_check($db, $d)) acc_err($e);
-    $built = acc_einv_build($db, $ids, $d);
+    $tm = trim((string)($s['inv_time'] ?? ''));
+    if ($tm !== '' && !acc_einv_time_ok($tm)) acc_err('發票時間格式須為 HH:MM（例 18:30）');
+    $built = acc_einv_build($db, $ids, $d, $tm);
     if (!$built['rows']) acc_err('沒有可匯出的發票明細');
     if ($action === 'inv_einv_preview') {
         acc_out(['header' => $built['header'], 'rows' => $built['rows'],
@@ -549,7 +551,7 @@ case 'inv_einv_settings_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改設定', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
-    $r = acc_einv_settings_save($db, $_POST['max_rows'] ?? '', $_POST['back_days'] ?? '', (string)$uid, (string)($_SESSION['userName'] ?? ''));
+    $r = acc_einv_settings_save($db, $_POST['max_rows'] ?? '', $_POST['back_days'] ?? '', (string)$uid, (string)($_SESSION['userName'] ?? ''), $_POST['time'] ?? null);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

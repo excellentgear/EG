@@ -14,12 +14,13 @@ require_once __DIR__ . '/order_as_tag_lib.php';
 /** 管理員設定（system_settings）：每張電子發票筆數上限、開立日期可往前幾天 */
 function acc_einv_settings(PDO $db): array
 {
-    $out = ['max_rows' => 36, 'back_days' => 6];
+    $out = ['max_rows' => 36, 'back_days' => 6, 'time' => '18:30'];
     try {
         $st = $db->query("SELECT setting_key, setting_value FROM system_settings
-                          WHERE setting_key IN ('acc_einv_max_rows','acc_einv_back_days')");
+                          WHERE setting_key IN ('acc_einv_max_rows','acc_einv_back_days','acc_einv_time')");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $v = trim((string)$r['setting_value']);
+            if ($r['setting_key'] === 'acc_einv_time') { if (acc_einv_time_ok($v)) $out['time'] = $v; continue; }
             if (!ctype_digit($v)) continue;
             if ($r['setting_key'] === 'acc_einv_max_rows' && (int)$v >= 1)  $out['max_rows']  = min(500, (int)$v);
             if ($r['setting_key'] === 'acc_einv_back_days' && (int)$v >= 0) $out['back_days'] = min(60, (int)$v);
@@ -28,7 +29,13 @@ function acc_einv_settings(PDO $db): array
     return $out;
 }
 
-function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, string $uname): array
+/** 發票時間 HH:MM（00:00~23:59） */
+function acc_einv_time_ok(string $t): bool
+{
+    return (bool)preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $t);
+}
+
+function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, string $uname, $time = null): array
 {
     $maxRows = trim((string)$maxRows); $backDays = trim((string)$backDays);
     if (!ctype_digit($maxRows) || (int)$maxRows < 1 || (int)$maxRows > 500) return ['success' => false, 'message' => '每張發票筆數上限須為 1~500 的整數'];
@@ -38,6 +45,10 @@ function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, strin
                         updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)");
     $st->execute(['acc_einv_max_rows',  $maxRows,  (int)$uid, $uname]);
     $st->execute(['acc_einv_back_days', $backDays, (int)$uid, $uname]);
+    if ($time !== null && trim((string)$time) !== '') {
+        if (!acc_einv_time_ok(trim((string)$time))) return ['success' => false, 'message' => '發票時間格式須為 HH:MM（例 18:30）'];
+        $st->execute(['acc_einv_time', trim((string)$time), (int)$uid, $uname]);
+    }
     return ['success' => true, 'message' => '已儲存', 'settings' => acc_einv_settings($db)];
 }
 
@@ -75,26 +86,28 @@ function acc_einv_desc_of_tag(?array $tag): string
 /** 會計聯絡人 email（客戶聯絡人設為會計者），沒有則退回客戶發票 email */
 function acc_einv_email(PDO $db, string $customerId, array $cust): string
 {
-    try {
-        $st = $db->prepare("SELECT email FROM customer_contacts
-                            WHERE customer_id=? AND is_accounting=1 AND email<>''
-                            ORDER BY is_primary DESC, sort_order, contact_id LIMIT 1");
-        $st->execute([$customerId]);
-        $e = trim((string)$st->fetchColumn());
-        if ($e !== '') return $e;
-    } catch (Throwable $e) {}
-    foreach (['invoice_email', 'customer_email'] as $k) {
-        $v = trim((string)($cust[$k] ?? ''));
-        if ($v !== '') return $v;
+    // 客戶主檔「發票收件」的電子發票信箱優先（可由聯絡人帶入），其次標了「發票」的聯絡人、再來才是會計聯絡人
+    $v = trim((string)($cust['invoice_email'] ?? ''));
+    if ($v !== '') return $v;
+    foreach (['is_invoice_recv', 'is_accounting'] as $flag) {
+        try {
+            $st = $db->prepare("SELECT email FROM customer_contacts
+                                WHERE customer_id=? AND {$flag}=1 AND email<>''
+                                ORDER BY is_primary DESC, sort_order, contact_id LIMIT 1");
+            $st->execute([$customerId]);
+            $e = trim((string)$st->fetchColumn());
+            if ($e !== '') return $e;
+        } catch (Throwable $e) {}
     }
-    return '';
+    $v = trim((string)($cust['customer_email'] ?? ''));
+    return $v;
 }
 
 /**
  * 產生匯入列。$ids＝acc_invoice.invoice_id 陣列；$invDate＝YYYY-MM-DD。
  * @return array ['header'=>[...20欄], 'rows'=>[[...20欄]...], 'invoices'=>[摘要...]]
  */
-function acc_einv_build(PDO $db, array $ids, string $invDate): array
+function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = ''): array
 {
     $ids = array_values(array_filter(array_map('intval', $ids)));
     $header = ['訂單編號', '發票日期', '發票類型', '載具', '載具顯碼', '載具隱碼', '捐贈對象', '買方統編',
@@ -151,7 +164,9 @@ function acc_einv_build(PDO $db, array $ids, string $invDate): array
     $cust = acc_customer_by_name($db);
     $cfg  = acc_einv_settings($db);
     $maxRows = $cfg['max_rows'];
-    $dateTxt = str_replace('-', '/', $invDate) . ' ' . ($invDate === date('Y-m-d') ? date('H:i') : '12:00');
+    // 發票日期的時間：預設 18:30（管理員可在電子發票設定改固定時間），匯出預覽時也可臨時修改
+    $tm = acc_einv_time_ok($invTime) ? $invTime : $cfg['time'];
+    $dateTxt = str_replace('-', '/', $invDate) . ' ' . $tm;
     $rows = []; $sum = []; $seen = [];
 
     foreach ($invs as $v) {

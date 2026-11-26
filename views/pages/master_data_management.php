@@ -11202,6 +11202,16 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 
 <div class="form-section-title"><i class="fa fa-file-text"></i> 發票收件</div>
 <div class="row">
+    <div class="col-md-12">
+        <div class="form-group">
+            <label>從聯絡人帶入</label>
+            <select class="form-control" id="cf-invoice_contact_pick" onfocus="refreshInvContactPick()" onmousedown="refreshInvContactPick()" onchange="onInvContactPick(this)" data-eg-skip>
+                <option value="">（請選聯絡人，帶入發票收件人／部門／電子發票信箱）</option>
+            </select>
+        </div>
+    </div>
+</div>
+<div class="row">
     <div class="col-md-4">
         <div class="form-group">
             <label>發票收件人</label>
@@ -11212,6 +11222,12 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
         <div class="form-group">
             <label>發票收件部門</label>
             <input type="text" class="form-control" id="cf-invoice_dept" name="invoice_dept" maxlength="100" placeholder="部門">
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="form-group">
+            <label><i class="fa fa-envelope-o" style="color:#888;margin-right:5px;"></i>電子發票信箱</label>
+            <input type="text" class="form-control" id="cf-invoice_email" name="invoice_email" placeholder="例：miffy@oaktai.com.tw" maxlength="255" autocomplete="off" spellcheck="false">
         </div>
     </div>
 </div>
@@ -11267,10 +11283,6 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     <label><i class="fa fa-truck" style="color:#888;margin-right:5px;"></i>出貨要求</label>
     <label style="font-weight:normal;cursor:pointer;margin:0 0 0 12px;"><input type="checkbox" id="cf-shipping_req_none" name="shipping_req_none" value="1" style="margin-right:4px;" onchange="onShippingNoneChange()">無特殊要求</label>
     <textarea class="form-control" id="cf-shipping_req" name="shipping_req" rows="2" placeholder="例：全數依圖尺寸施工、附檢驗表、出貨前通知配送"></textarea>
-</div>
-<div class="form-group">
-    <label><i class="fa fa-envelope-o" style="color:#888;margin-right:5px;"></i>電子發票 Email</label>
-    <input type="text" class="form-control" id="cf-invoice_email" name="invoice_email" placeholder="例：miffy@oaktai.com.tw / david@oaktai.com.tw" maxlength="255">
 </div>
 <div class="form-group">
     <label><i class="fa fa-sticky-note-o" style="color:#888;margin-right:5px;"></i>一般備註</label>
@@ -19821,6 +19833,31 @@ function _ctAutoH(t) {
 function _ctAutoAll() { document.querySelectorAll('#cf-contacts-wrap textarea').forEach(_ctAutoH); }
 function _ctVal(row, sel) { var e = row.querySelector(sel); return e ? e.value.replace(/\s*[\r\n]+\s*/g, ' ').trim() : ''; }
 
+/* 發票收件：從聯絡人分頁的聯絡人挑一位，帶入發票收件人／部門／電子發票信箱（只填入，仍可再手動修改） */
+function _invContactRows() {
+    var out = [];
+    document.querySelectorAll('#cf-contacts-wrap .contact-row').forEach(function(r){
+        var g = function(c){ var e = r.querySelector(c); return e ? (e.value||'').trim() : ''; };
+        var name = g('.ct-name'); if (!name) return;
+        var inv = r.querySelector('.ct-inv');
+        out.push({name:name, dept:g('.ct-dept'), email:g('.ct-email'), inv: !!(inv && inv.checked)});
+    });
+    return out;
+}
+function refreshInvContactPick() {
+    var sel = document.getElementById('cf-invoice_contact_pick'); if (!sel) return;
+    var cur = sel.value, rows = _invContactRows(), h = '<option value="">（請選聯絡人，帶入發票收件人／部門／電子發票信箱）</option>';
+    rows.forEach(function(c, i){
+        h += '<option value="'+i+'">'+escHtml((c.dept?c.dept+' ':'')+c.name+(c.email?'　'+c.email:'　（未填信箱）')+(c.inv?'　★發票':''))+'</option>';
+    });
+    if (sel.getAttribute('data-sig') !== h) { sel.innerHTML = h; sel.setAttribute('data-sig', h); if (cur) sel.value = cur; }
+}
+function onInvContactPick(sel) {
+    var c = _invContactRows()[parseInt(sel.value, 10)]; if (!c) return;
+    var set = function(id, v){ var e = document.getElementById(id); if (e) e.value = v; };
+    set('cf-invoice_recipient', c.name); set('cf-invoice_dept', c.dept); set('cf-invoice_email', c.email);
+    if (!c.email) alert('這位聯絡人沒有填信箱，電子發票信箱已清空，請到「聯絡人」分頁補上或直接在此輸入。');
+}
 function syncContactsHidden() {
     var rows = document.querySelectorAll('#cf-contacts-wrap .contact-row');
     var primaryEl = document.querySelector('input[name=contact_primary]:checked');

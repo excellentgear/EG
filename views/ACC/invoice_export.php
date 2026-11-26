@@ -260,6 +260,8 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
       <div class="a-bar">
         <label>帳款月份</label>
         <input type="month" id="invBmFrom"> ~ <input type="month" id="invBmTo">
+        <button id="btnInvThis">本月</button>
+        <button id="btnInvPrev">上月</button>
         <label>狀態</label>
         <select id="invStatus">
           <option value="all">全部</option>
@@ -351,6 +353,8 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
     <div class="a-bar" style="margin-bottom:8px;">
       <label>發票開立日期</label>
       <input type="date" id="einvDate" style="width:160px;">
+      <label style="margin-left:10px;">時間</label>
+      <input type="text" id="einvTime" maxlength="5" style="width:70px;" data-eg-hint="例 18:30" autocomplete="off">
       <span id="einvRange" style="color:#8a6d45;font-size:13px;"></span>
     </div>
     <div id="einvWarn"></div>
@@ -374,6 +378,11 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
       <label>每張電子發票筆數上限</label><br>
       <input type="number" id="cfgMaxRows" min="1" max="500" step="1" style="width:120px;"> 筆
       <div style="font-size:12px;color:#8a6d45;">超過時自動切成多張（訂單編號加 -1、-2…）。各客戶的「頁數上限」＝此筆數 × 頁數。</div>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label>發票日期的時間（預設）</label><br>
+      <input type="text" id="cfgTime" maxlength="5" style="width:90px;" autocomplete="off" data-eg-hint="例 18:30">
+      <div style="font-size:12px;color:#8a6d45;">匯入檔「發票日期」欄的時間部分（HH:MM），預設 18:30；匯出預覽時仍可臨時修改。</div>
     </div>
     <div>
       <label>開立日期可往前幾天</label><br>
@@ -511,6 +520,11 @@ $('.tab-btn').on('click',function(){
   var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
   $('#candBm').val(m); $('#invBmFrom').val(m); $('#invBmTo').val(m);
 })();
+$('#btnInvThis,#btnInvPrev').on('click',function(){
+  var d=new Date(); d.setDate(1); if(this.id==='btnInvPrev') d.setMonth(d.getMonth()-1);
+  var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
+  $('#invBmFrom').val(m); $('#invBmTo').val(m); ivPage=1; loadInv();
+});
 $('#btnCandThis').on('click',function(){
   var d=new Date();
   $('#candBm').val(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2));
@@ -701,9 +715,10 @@ $('#btnCdCreate').on('click',function(){
 /* 電子發票匯入檔預覽／下載 */
 var einvIds=[], CAN_CFG=false;
 function einvLoad(){
-  var d=$('#einvDate').val();
+  var d=$('#einvDate').val(), tm=$.trim($('#einvTime').val());
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(tm)){ $('#btnEinvDl').prop('disabled',true); toast('發票時間格式須為 HH:MM（例 18:30）', true); return; }
   $('#tblEinv').html('<tr><td style="padding:18px;color:#8a6d45;">載入中…</td></tr>');
-  $.post(API+'?action=inv_einv_preview',{ids:einvIds.join(','),inv_date:d},function(r){
+  $.post(API+'?action=inv_einv_preview',{ids:einvIds.join(','),inv_date:d,inv_time:tm},function(r){
     if(!r.ok){ $('#tblEinv').html(''); toast(esc(r.error||'預覽失敗'), true); $('#btnEinvDl').prop('disabled',true); return; }
     $('#btnEinvDl').prop('disabled',false);
     var h='<thead><tr>'+r.header.map(function(t){ return '<th>'+esc(t)+'</th>'; }).join('')+'</tr></thead><tbody>';
@@ -715,7 +730,7 @@ function einvLoad(){
     var noMail=r.invoices.filter(function(x){ return x.no_email; });
     $('#einvWarn').html(noMail.length
       ? '<div class="warn">'+noMail.map(function(x){return esc(x.customer);}).join('、')
-        +' 沒有設定會計聯絡人 EMAIL（買方電子信箱會是空白）。</div>' : '');
+        +' 沒有設定電子發票信箱（買方電子信箱會是空白）。請到客戶主檔「發票收件」設定，或在聯絡人勾選「發票」。</div>' : '');
     var notes=[];
     r.invoices.forEach(function(x){
       if(x.mode==='merge_part') notes.push(esc(x.customer)+'：同料號合併，'+x.raw_rows+' 筆 → '+x.rows+' 筆');
@@ -736,7 +751,16 @@ function openEinv(ids){
   einvIds=ids;
   $.getJSON(API,{action:'inv_einv_range'},function(r){
     if(!r.ok){ toast(esc(r.error||'無法取得日期範圍'), true); return; }
-    $('#einvDate').attr({min:r.min,max:r.max}).val(r.today);
+    // 發票日期＝列表上設定的「開立日期」（多張不同日期時取第一張；超出可開立範圍就取最接近的並提示）
+    var pick='', ds=[];
+    einvIds.forEach(function(id){ invRows.forEach(function(v){ if(+v.invoice_id===+id && v.invoice_date) ds.push(v.invoice_date); }); });
+    if(ds.length) pick=ds[0];
+    var useD=pick||r.today;
+    if(useD<r.min){ useD=r.min; toast('列表的開立日期 '+esc(pick)+' 早於可開立範圍，已改為 '+r.min, true); }
+    else if(useD>r.max){ useD=r.max; toast('列表的開立日期 '+esc(pick)+' 晚於可開立範圍，已改為 '+r.max, true); }
+    else if(ds.some(function(x){ return x!==ds[0]; })) toast('選取的發票開立日期不一致，預覽先用第一張的 '+esc(ds[0])+'，請確認', true);
+    $('#einvDate').attr({min:r.min,max:r.max}).val(useD);
+    $('#einvTime').val((r.settings&&r.settings.time)||'18:30');
     CAN_CFG=r.can_admin; $('#einvRange').text('可選 '+r.min+' ~ '+r.max+'（往前最多 '+r.back_days+' 天，往後到本月月底）');
     openMask('mkEinv'); einvLoad();
   });
@@ -744,19 +768,21 @@ function openEinv(ids){
 $('#btnEinvCfg').on('click',function(){
   $.getJSON(API,{action:'inv_einv_range'},function(r){
     if(!r.ok){ toast(esc(r.error||'讀取失敗'), true); return; }
-    $('#cfgMaxRows').val(r.settings.max_rows); $('#cfgBackDays').val(r.settings.back_days);
+    $('#cfgMaxRows').val(r.settings.max_rows); $('#cfgBackDays').val(r.settings.back_days); $('#cfgTime').val(r.settings.time||'18:30');
     openMask('mkEinvCfg');
   });
 });
 $('#btnEinvCfgSave').on('click',function(){
-  var mr=$('#cfgMaxRows').val(), bd=$('#cfgBackDays').val();
+  var mr=$('#cfgMaxRows').val(), bd=$('#cfgBackDays').val(), tm=$.trim($('#cfgTime').val());
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(tm)){ toast('發票時間格式須為 HH:MM（例 18:30）', true); return; }
   if(!/^\d+$/.test(mr)||+mr<1||+mr>500){ toast('每張發票筆數上限須為 1~500 的整數', true); return; }
   if(!/^\d+$/.test(bd)||+bd>60){ toast('可往前開立天數須為 0~60 的整數', true); return; }
-  $.post(API+'?action=inv_einv_settings_save',{csrf:CSRF,max_rows:mr,back_days:bd},function(r){
+  $.post(API+'?action=inv_einv_settings_save',{csrf:CSRF,max_rows:mr,back_days:bd,time:tm},function(r){
     if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
     closeMask('mkEinvCfg'); toast('已儲存電子發票設定');
   },'json').fail(function(x){ var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
 });
+$('#einvTime').on('change blur',function(){ einvLoad(); });
 $('#einvDate').on('change',function(){
   var v=$(this).val(), mn=$(this).attr('min'), mx=$(this).attr('max');
   if(!v || v<mn || v>mx){ toast('開立日期須在 '+mn+' ~ '+mx+' 之間', true); $('#btnEinvDl').prop('disabled',true); return; }
@@ -764,7 +790,7 @@ $('#einvDate').on('change',function(){
 });
 $('#btnEinvDl').on('click',function(){
   var d=$('#einvDate').val();
-  window.location=API+'?action=inv_einv_xlsx&ids='+einvIds.join(',')+'&inv_date='+encodeURIComponent(d);
+  window.location=API+'?action=inv_einv_xlsx&ids='+einvIds.join(',')+'&inv_date='+encodeURIComponent(d)+'&inv_time='+encodeURIComponent($.trim($('#einvTime').val()));
   setTimeout(function(){
     $.post(API+'?action=inv_export_mark',{csrf:CSRF, ids:JSON.stringify(einvIds)},function(r){
       closeMask('mkEinv');
@@ -821,7 +847,7 @@ function renderInv(){
       +'<td>'+(isAllow?'<span class="pill dt-ALLOWANCE">折讓單</span>':'發票')+'</td>'
       +'<td><span class="pill st-'+v.status+'">'+esc(STATUS_LABEL[v.status]||v.status)+'</span></td>'
       +'<td>'+(canEditNo
-          ? '<input type="text" class="no-in" data-id="'+id+'" maxlength="10" value="'+esc(v.invoice_no||'')+'" placeholder="AB12345678">'
+          ? '<input type="text" class="no-in" data-id="'+id+'" maxlength="10" value="'+esc(v.invoice_no||'')+'" data-eg-hint="英文2碼＋數字8碼，例 AB12345678" autocomplete="off">'
           : '<b>'+esc(v.invoice_no||'—')+'</b>')+'</td>'
       +'<td>'+(canEditNo
           ? '<input type="date" class="dt-in" data-id="'+id+'" value="'+esc(v.invoice_date||'')+'">'
@@ -944,7 +970,8 @@ $('#btnInvMark').on('click',function(){
 /* 就地回填發票號碼：號碼與日期都填好且格式正確才送出 */
 $(document).on('input','.no-in',function(){
   var v=this.value.toUpperCase(); this.value=v;
-  $(this).toggleClass('bad', v!=='' && !validInvNo(v));
+  var bad=(v!=='' && !validInvNo(v));
+  $(this).toggleClass('bad', bad).attr('title', bad?'發票號碼須為英文 2 碼＋數字 8 碼（例 AB12345678），目前 '+v.length+' 碼':'');
 });
 $(document).on('blur','.no-in, .dt-in', function(){
   if(!CAN_EDIT) return;
@@ -953,7 +980,7 @@ $(document).on('blur','.no-in, .dt-in', function(){
   var no=$.trim($tr.find('.no-in').val()||'').toUpperCase();
   var dt=$.trim($tr.find('.dt-in').val()||'');
   if(no==='') return;
-  if(!validInvNo(no)){ return; }             // 格式不對先不送，等使用者改完
+  if(!validInvNo(no)){ if($(this).hasClass('no-in')) toast('發票號碼格式不正確：須為英文 2 碼＋數字 8 碼（例 AB12345678）', true); return; }   // 格式不對不送出
   if(dt===''){ toast('請一併填寫開立日期', true); $tr.find('.dt-in').focus(); return; }
   var i=parseInt($tr.data('i'),10), v=invRows[i];
   if(v && v.invoice_no===no && v.invoice_date===dt) return;
