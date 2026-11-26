@@ -38,7 +38,8 @@ define('PURCHASE_PURPOSE_TYPES', [
     'BOM'   => '製令 BOM',
     'PART'  => '料號',
     'STOCK' => '常備品補貨',
-    'EQUIP' => '設備維修／治工具',
+    'EQUIP_MAINT' => '設備維修保養',
+    'TOOLING' => '治工具',
     'VEHICLE' => '公司車輛',
     'OTHER' => '其他',
 ]);
@@ -250,11 +251,40 @@ function purchase_ensure_schema(PDO $db): void
         Created_At TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uk_plate (plate_no)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='採購用：公司車輛主檔'");
+    $db->exec("CREATE TABLE IF NOT EXISTS purchase_maint_type (
+        maint_id INT AUTO_INCREMENT PRIMARY KEY,
+        maint_name VARCHAR(40) NOT NULL COMMENT '保養類別（定期保養／維修…）',
+        scope VARCHAR(10) NOT NULL DEFAULT 'both' COMMENT 'both／equip(設備)／vehicle(車輛)',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT NOT NULL DEFAULT 1,
+        UNIQUE KEY uk_name (maint_name)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='採購用：設備／車輛保養類別（管理員可增減）'");
+    if ((int)$db->query("SELECT COUNT(*) FROM purchase_maint_type")->fetchColumn() === 0) {
+        $seed = $db->prepare("INSERT INTO purchase_maint_type (maint_name, scope, sort_order) VALUES (?,?,?)");
+        foreach ([['定期保養', 'both'], ['維修', 'both'], ['零件更換', 'both'], ['校驗／檢測', 'equip'], ['加油', 'vehicle']] as $i => $sd) {
+            $seed->execute([$sd[0], $sd[1], $i + 1]);
+        }
+    }
+    foreach ([
+        'purchase_request'      => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
+                                    'purpose_maint_id INT NULL', 'vehicle_mileage INT NULL', 'vehicle_mileage_date DATE NULL'],
+        'purchase_request_item' => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
+                                    'purpose_maint_id INT NULL'],
+    ] as $vt => $cols) {
+        foreach ($cols as $def) {
+            $cn = explode(' ', $def)[0];
+            if ($db->query("SHOW COLUMNS FROM $vt LIKE '$cn'")->fetch()) continue;
+            try { $db->exec("ALTER TABLE $vt ADD COLUMN $def"); }
+            catch (Throwable $e) { error_log('purchase ALTER ' . $vt . '.' . $cn . ': ' . $e->getMessage()); }
+        }
+    }
+
+    // 用途代碼變長了（EQUIP_MAINT 11 字），舊欄位是 VARCHAR(10) 放不下
     foreach (['purchase_request', 'purchase_request_item'] as $vt) {
-        $hv = $db->query("SHOW COLUMNS FROM $vt LIKE 'purpose_vehicle_id'")->fetch();
-        if (!$hv) {
-            try { $db->exec("ALTER TABLE $vt ADD COLUMN purpose_vehicle_id INT NULL COMMENT '用途=公司車輛時的車輛ID(purchase_vehicle)'"); }
-            catch (Throwable $e) { error_log('purchase_vehicle ALTER ' . $vt . ': ' . $e->getMessage()); }
+        $ct = $db->query("SHOW COLUMNS FROM $vt LIKE 'purpose_type'")->fetch(PDO::FETCH_ASSOC);
+        if ($ct && preg_match('/varchar\((\d+)\)/i', (string)$ct['Type'], $m) && (int)$m[1] < 20) {
+            try { $db->exec("ALTER TABLE $vt MODIFY COLUMN purpose_type VARCHAR(20) NULL"); }
+            catch (Throwable $e) { error_log('purchase ALTER ' . $vt . '.purpose_type: ' . $e->getMessage()); }
         }
     }
 
@@ -725,10 +755,10 @@ function purchase_purpose_normalize(PDO $db, array $src): array
 {
     $type = strtoupper(trim((string)($src['purpose_type'] ?? '')));
     if ($type === '' || !isset(PURCHASE_PURPOSE_TYPES[$type])) {
-        return ['type' => null, 'order_id' => null, 'bom' => null, 'd_id' => null, 'note' => null, 'label' => null, 'vehicle_id' => null];
+        return ['type' => null, 'order_id' => null, 'bom' => null, 'd_id' => null, 'note' => null, 'label' => null, 'vehicle_id' => null, 'equip_kind' => null, 'equip_id' => null, 'maint_id' => null];
     }
     $out = ['type' => $type, 'order_id' => null, 'bom' => null, 'd_id' => null,
-            'note' => trim((string)($src['purpose_note'] ?? '')) ?: null, 'label' => null, 'vehicle_id' => null];
+            'note' => trim((string)($src['purpose_note'] ?? '')) ?: null, 'label' => null, 'vehicle_id' => null, 'equip_kind' => null, 'equip_id' => null, 'maint_id' => null];
 
     if ($type === 'ORDER') {
         $oid = (int)($src['purpose_order_id'] ?? 0);
@@ -769,12 +799,63 @@ function purchase_purpose_normalize(PDO $db, array $src): array
         if (!$r) throw new RuntimeException('找不到該車輛，請重新選擇');
         $out['vehicle_id'] = $vid;
         $out['label'] = $r['plate_no'] . ($r['vehicle_name'] !== null && $r['vehicle_name'] !== '' ? '（' . $r['vehicle_name'] . '）' : '');
+        purchase_maint_apply($db, $src, $out, 'vehicle');
+    } elseif ($type === 'EQUIP_MAINT') {
+        // 設備維修保養：綁機台設備清單(machine_list)或量具設備清單(qc_tool)其中一筆
+        $kind = (string)($src['purpose_equip_kind'] ?? '');
+        $eid  = (int)($src['purpose_equip_id'] ?? 0);
+        if (!in_array($kind, ['machine', 'qc_tool'], true) || $eid <= 0) {
+            throw new RuntimeException('用途選「設備維修保養」時，請從機台或量具清單挑一台設備');
+        }
+        if ($kind === 'machine') {
+            $st = $db->prepare("SELECT machine, field_no FROM machine_list WHERE machine_id=?");
+            $st->execute([$eid]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$r) throw new RuntimeException('找不到該機台，請重新選擇');
+            $fn = trim((string)$r['field_no']); $mn = trim((string)$r['machine']);
+            $out['label'] = $fn !== '' && $fn !== $mn ? trim($fn . ' ' . $mn) : ($mn !== '' ? $mn : $fn);
+        } else {
+            require_once __DIR__ . '/qc_tool_display_lib.php';
+            $r = qc_tool_pick_one($db, $eid);
+            if (!$r) throw new RuntimeException('找不到該量具，請重新選擇');
+            $out['label'] = (string)($r['label'] ?: $r['tool_no']);
+        }
+        $out['equip_kind'] = $kind;
+        $out['equip_id']   = $eid;
+        purchase_maint_apply($db, $src, $out, 'equip');
     } else {
-        // STOCK / EQUIP / OTHER：不綁單據，label 就用類別名（OTHER 另接自由說明）
+        // STOCK / TOOLING / OTHER：不綁單據，label 就用類別名（OTHER 另接自由說明）
         $out['label'] = PURCHASE_PURPOSE_TYPES[$type]
                       . ($type === 'OTHER' && $out['note'] !== null ? '：' . mb_substr($out['note'], 0, 60) : '');
     }
     return $out;
+}
+
+/** 保養類別（定期保養／維修…，管理員可預先建立）：必選，並把類別名稱接在顯示名稱後面 */
+function purchase_maint_apply(PDO $db, array $src, array &$out, string $scope): void
+{
+    $mid = (int)($src['purpose_maint_id'] ?? 0);
+    if ($mid <= 0) throw new RuntimeException('請選擇保養類別（例：定期保養、維修）');
+    $st = $db->prepare("SELECT maint_name FROM purchase_maint_type WHERE maint_id=? AND scope IN ('both', ?)");
+    $st->execute([$mid, $scope]);
+    $nm = $st->fetchColumn();
+    if ($nm === false) throw new RuntimeException('找不到該保養類別，請重新選擇');
+    $out['maint_id'] = $mid;
+    $out['label'] .= '｜' . $nm;
+}
+
+/** 用途欄位在 purchase_request／purchase_request_item 的欄位清單與值（單頭、品項共用，免得兩邊欄位數對不上） */
+function purchase_purpose_cols(): array
+{
+    return ['purpose_type', 'purpose_order_id', 'purpose_bom', 'purpose_d_id', 'purpose_vehicle_id',
+            'purpose_equip_kind', 'purpose_equip_id', 'purpose_maint_id', 'purpose_note', 'purpose_label'];
+}
+function purchase_purpose_vals(?array $pp): array
+{
+    $pp = $pp ?: [];
+    return [$pp['type'] ?? null, $pp['order_id'] ?? null, $pp['bom'] ?? null, $pp['d_id'] ?? null,
+            $pp['vehicle_id'] ?? null, $pp['equip_kind'] ?? null, $pp['equip_id'] ?? null,
+            $pp['maint_id'] ?? null, $pp['note'] ?? null, $pp['label'] ?? null];
 }
 
 /** 品項用途留白時沿用單頭，給顯示／成本歸戶用 */
@@ -788,6 +869,9 @@ function purchase_purpose_effective(array $item, array $req): array
         'bom'   => $s['purpose_bom'] ?? null,
         'd_id'  => $s['purpose_d_id'] ?? null,
         'vehicle_id' => $s['purpose_vehicle_id'] ?? null,
+        'equip_kind' => $s['purpose_equip_kind'] ?? null,
+        'equip_id' => $s['purpose_equip_id'] ?? null,
+        'maint_id' => $s['purpose_maint_id'] ?? null,
         'note'  => $s['purpose_note'] ?? null,
         'label' => $s['purpose_label'] ?? null,
         'from'  => $useItem ? 'item' : 'req',

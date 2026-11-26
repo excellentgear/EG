@@ -473,6 +473,17 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <div id="ppVehMsg" class="hint" style="margin-top:4px;"></div>
             </div>
         </div>
+        <div id="ppMaintWrap" style="display:none;margin-top:10px;">
+            <div class="pq-fld"><label>保養類別 <span style="color:#DD5138;">*</span></label>
+                <div id="ppMaintList"></div>
+                <p class="hint" style="margin:2px 0 0;">定期保養做進貨時，還可以在同一張單另外加「更換零件」等品項。</p>
+            </div>
+            <div id="ppMaintAdd" style="display:none;margin-top:4px;">
+                <input type="text" id="ppMaintNew" placeholder="沒有想要的類別？直接輸入新增" style="width:220px;" autocomplete="off">
+                <button class="pq-btn warm" id="ppMaintNewBtn" type="button"><i class="fa fa-plus"></i> 新增類別</button>
+                <span id="ppMaintMsg" class="hint"></span>
+            </div>
+        </div>
         <div class="pq-fld" id="ppNoteWrap" style="display:none;margin-top:10px;">
             <label id="ppNoteLabel">說明</label>
             <input type="text" id="ppNote" placeholder="簡單寫一下是為了什麼">
@@ -538,7 +549,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div class="pq-mask" id="mRecv"><div class="pq-modal wide">
     <div class="m-head"><span>登錄到貨</span><span class="m-close" onclick="closeMask('mRecv')">✕</span></div>
     <div class="m-body">
-        <div class="pq-grid"><div class="pq-fld"><label>到貨日期</label><input type="date" id="rcDate"></div></div>
+        <div class="pq-grid"><div class="pq-fld"><label>到貨日期</label><input type="date" id="rcDate"></div>
+            <div class="pq-fld" id="rcMileWrap" style="display:none;"><label>里程數（公里，選填）</label>
+                <input type="text" id="rcMileage" inputmode="numeric" data-eg-hint="車輛保養時填目前里程，方便日後查紀錄；不確定可以留白" autocomplete="off"></div></div>
         <div class="pq-wrap">
             <table class="pq-table" id="recvTable">
                 <thead><tr><th>品名</th><th>規格</th><th style="width:13%;">採購料號</th><th>已到／應到</th><th style="width:9%;">本次到貨</th>

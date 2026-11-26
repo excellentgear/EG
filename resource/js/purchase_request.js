@@ -422,7 +422,7 @@ function openReq(id) {
             $('#rUrgent').prop('checked', false);   // 品項載入後再依「是否全部急件」回推
             if (q.purpose_type) {
                 REQPP = { type: q.purpose_type, order_id: q.purpose_order_id || 0, bom: q.purpose_bom || '',
-                          d_id: q.purpose_d_id || 0, vehicle_id: q.purpose_vehicle_id || 0, note: q.purpose_note || '', label: q.purpose_label || '' };
+                          d_id: q.purpose_d_id || 0, vehicle_id: q.purpose_vehicle_id || 0, equip_kind: q.purpose_equip_kind || '', equip_id: q.purpose_equip_id || 0, maint_id: q.purpose_maint_id || 0, note: q.purpose_note || '', label: q.purpose_label || '' };
             }
             renderReqPurpose();
             q.items.forEach(function (it) {
@@ -493,6 +493,7 @@ function addItemRow(spec, prefill) {
         if (prefill.purpose_type) {
             $tr.data('pp', { type: prefill.purpose_type, order_id: prefill.purpose_order_id || 0,
                              bom: prefill.purpose_bom || '', d_id: prefill.purpose_d_id || 0, vehicle_id: prefill.purpose_vehicle_id || 0,
+                             equip_kind: prefill.purpose_equip_kind || '', equip_id: prefill.purpose_equip_id || 0, maint_id: prefill.purpose_maint_id || 0,
                              note: prefill.purpose_note || '', label: prefill.purpose_label || '' });
         }
         if (!spec) { $tr.find('.i-name').val(prefill.item_name || ''); $tr.find('.i-spec').val(prefill.spec_text || '');
@@ -530,6 +531,7 @@ function collectItems() {
             purpose_bom: pp.bom || '',
             purpose_d_id: pp.d_id || '',
             purpose_vehicle_id: pp.vehicle_id || '',
+            purpose_equip_kind: pp.equip_kind || '', purpose_equip_id: pp.equip_id || '', purpose_maint_id: pp.maint_id || '',
             purpose_note: pp.note || ''
         });
     });
@@ -548,6 +550,7 @@ function saveReq() {
               is_urgent: ($('#rUrgent').prop('checked') || $('#reqItemBody .i-urg:checked').length) ? 1 : 0,
               purpose_type: REQPP.type, purpose_order_id: REQPP.order_id || '',
               purpose_bom: REQPP.bom || '', purpose_d_id: REQPP.d_id || '', purpose_vehicle_id: REQPP.vehicle_id || '',
+              purpose_equip_kind: REQPP.equip_kind || '', purpose_equip_id: REQPP.equip_id || '', purpose_maint_id: REQPP.maint_id || '',
               purpose_note: REQPP.note || '',
               items: JSON.stringify(items), temp_att_ids: JSON.stringify(EDIT.tempAtts) };
     $('#btnSaveReq').prop('disabled', true);
@@ -674,11 +677,15 @@ $(document).on('click', '#btnRoleFeatSave', function () {
 /* ── 用途歸屬（單頭與逐列共用同一個選擇器） ── */
 // 成本要歸得了戶，訂單一律綁 order_track.Order_id、料號一律綁 d_setting.d_id，
 // 絕不存訂單號／料號字串（一個訂單號最多對到 25 列、料號字串有 159 個重複）。
-var PP_NEED_PICK = { ORDER: 1, BOM: 1, PART: 1, VEHICLE: 1 };
+var PP_NEED_PICK = { ORDER: 1, BOM: 1, PART: 1, VEHICLE: 1, EQUIP_MAINT: 1 };
+// 需要選「保養類別」的用途（值＝類別的適用範圍）
+var PP_MAINT = { VEHICLE: 'vehicle', EQUIP_MAINT: 'equip' };
+var PP_MAINT_ROWS = [];
 var PP_PICK_CFG = {
     ORDER: { label: '搜尋訂單（訂單號／料號／客戶）', hint: '一個訂單號可能有多列料號，請點到你要的那一列。' },
     BOM:   { label: '搜尋 BOM（BOM 單號／料號／客戶）', hint: '點選要歸屬的 BOM 單。' },
     PART:  { label: '搜尋料號（料號／圖號）', hint: '點選要歸屬的料號。' },
+    EQUIP_MAINT: { label: '搜尋設備（機台編號／名稱／量具編號，不打字＝列出全部）', hint: '機台來自機台設備一覽表，量具來自檢驗設備一覽表；點選要保養或維修的那一台。' },
     VEHICLE: { label: '搜尋車輛（車牌／車型，不打字＝列出全部）', hint: '點選是哪一台車；車子不在清單時，採購人員可在下方直接新增。' }
 };
 
@@ -715,7 +722,7 @@ function renderPpCell($tr) {
 function openPurpose(target) {
     PP.target = target;
     var cur = (target === 'req') ? REQPP : target.data('pp');
-    PP.cur = cur ? $.extend({}, cur) : { type: '', order_id: 0, bom: '', d_id: 0, vehicle_id: 0, note: '', label: '' };
+    PP.cur = cur ? $.extend({}, cur) : { type: '', order_id: 0, bom: '', d_id: 0, vehicle_id: 0, equip_kind: '', equip_id: 0, maint_id: 0, note: '', label: '' };
 
     var isReq = (target === 'req');
     $('#ppTitle').text(isReq ? '這筆採購是為了什麼？' : '這一項的用途（與單頭不同時才設）');
@@ -725,12 +732,18 @@ function openPurpose(target) {
     $.each((META && META.purpose_types) || {}, function (k, v) {
         opts += '<option value="' + esc(k) + '">' + esc(v) + '</option>';
     });
+    // label 是「對象｜保養類別」合成的；拆回來才能只改其中一邊
+    PP.cur.base = PP.cur.label || ''; PP.cur.maint_name = '';
+    if (PP.cur.maint_id && PP.cur.base.lastIndexOf('｜') >= 0) {
+        var ix = PP.cur.base.lastIndexOf('｜');
+        PP.cur.maint_name = PP.cur.base.slice(ix + 1); PP.cur.base = PP.cur.base.slice(0, ix);
+    }
     $('#ppType').html(opts).val(PP.cur.type || '');
     $('#ppNote').val(PP.cur.note || '');
     $('#ppKw').val(''); $('#ppList').empty();
     ppSyncType();
     openMask('mPurpose');
-    if (PP.cur.type === 'VEHICLE') ppSearch();
+    if (PP.cur.type === 'VEHICLE' || PP.cur.type === 'EQUIP_MAINT') ppSearch();
 }
 
 /** 依類別切換：要不要挑對象、要不要填說明 */
@@ -744,7 +757,8 @@ function ppSyncType() {
     }
     $('#ppVehAdd').toggle(t === 'VEHICLE' && !!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin)));
     // 只有「其他」需要文字說明，其餘類別的說明是選填備註
-    $('#ppNoteWrap').toggle(t === 'OTHER' || t === 'EQUIP' || t === 'STOCK');
+    $('#ppNoteWrap').toggle(t === 'OTHER' || t === 'TOOLING' || t === 'STOCK');
+    ppMaintSync(t);
     $('#ppNoteLabel').text(t === 'OTHER' ? '說明（必填）' : '說明（選填）');
     ppPreview();
 }
@@ -760,7 +774,7 @@ function ppPreview() {
 function ppSearch() {
     var t = $('#ppType').val() || '', kw = $.trim($('#ppKw').val() || '');
     if (!PP_NEED_PICK[t]) return;
-    if (!kw && t !== 'VEHICLE') { $('#ppList').empty(); return; }
+    if (!kw && t !== 'VEHICLE' && t !== 'EQUIP_MAINT') { $('#ppList').empty(); return; }
     var seq = ++ppSeq;
     $('#ppList').html('<div class="pp-row x">搜尋中…</div>');
     api('purpose_search', { type: t, kw: kw }).done(function (r) {
@@ -780,17 +794,18 @@ function ppSearch() {
 $(document).on('change', '#ppType', function () {
     // 換類別＝先前挑的對象作廢，免得殘留舊 ID
     PP.cur.type = $(this).val() || '';
-    PP.cur.order_id = 0; PP.cur.bom = ''; PP.cur.d_id = 0; PP.cur.vehicle_id = 0; PP.cur.label = '';
+    PP.cur.order_id = 0; PP.cur.bom = ''; PP.cur.d_id = 0; PP.cur.vehicle_id = 0; PP.cur.equip_kind = ''; PP.cur.equip_id = 0; PP.cur.maint_id = 0;
+    PP.cur.base = ''; PP.cur.maint_name = ''; PP.cur.label = '';
     $('#ppList').empty(); $('#ppKw').val('');
     ppSyncType();
-    if (PP.cur.type === 'VEHICLE') ppSearch();
+    if (PP.cur.type === 'VEHICLE' || PP.cur.type === 'EQUIP_MAINT') ppSearch();
 });
 // 即時搜尋：邊打邊找，不必按按鈕。300ms 去抖動，並丟棄比較舊的回應避免結果亂序
 var ppT = null, ppSeq = 0;
 $(document).on('input', '#ppKw', function () {
     clearTimeout(ppT);
     var kw = $.trim($(this).val() || '');
-    if (!kw && $('#ppType').val() !== 'VEHICLE') { $('#ppList').empty(); return; }
+    if (!kw && $('#ppType').val() !== 'VEHICLE' && $('#ppType').val() !== 'EQUIP_MAINT') { $('#ppList').empty(); return; }
     ppT = setTimeout(ppSearch, 300);
 });
 $(document).on('keydown', '#ppKw', function (e) {
@@ -804,7 +819,8 @@ $(document).on('click', '.pp-pick', function () {
     else if (t === 'BOM') PP.cur.bom = o.id;
     else if (t === 'PART') PP.cur.d_id = o.id;
     else if (t === 'VEHICLE') PP.cur.vehicle_id = o.id;
-    PP.cur.label = o.label;
+    else if (t === 'EQUIP_MAINT') { PP.cur.equip_id = o.id; PP.cur.equip_kind = o.kind; }
+    PP.cur.base = o.label; ppRelabel();
     $('.pp-pick').css('background', ''); $(this).css('background', '#F7E0BD');
     ppPreview();
 });
@@ -819,12 +835,59 @@ $(document).on('click', '#ppVehSave', function () {
             $('#ppKw').val(plate); ppSearch();
         }).fail(function (e) { $('#ppVehMsg').text(e).css('color', '#DD5138'); });
 });
+/* ── 保養類別（定期保養／維修…）：管理員預先建立，採購可增減 ── */
+function ppRelabel() {
+    var b = PP.cur.base || '';
+    PP.cur.label = b ? b + (PP.cur.maint_id && PP.cur.maint_name ? '｜' + PP.cur.maint_name : '') : '';
+    ppPreview();
+}
+function ppMaintSync(t) {
+    var scope = PP_MAINT[t];
+    $('#ppMaintWrap').toggle(!!scope);
+    if (!scope) return;
+    $('#ppMaintAdd').toggle(!!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin)));
+    api('maint_list', { scope: scope }).done(function (r) { PP_MAINT_ROWS = r.rows; ppMaintRender(); });
+}
+function ppMaintRender() {
+    var canEdit = !!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin));
+    var h = '';
+    PP_MAINT_ROWS.forEach(function (m) {
+        var on = String(m.maint_id) === String(PP.cur.maint_id);
+        h += '<span class="pq-purpose-tag pp-maint" data-id="' + m.maint_id + '" data-name="' + esc(m.maint_name) + '" style="cursor:pointer;margin:0 6px 6px 0;'
+           + (on ? '' : 'background:#F7E0BD;color:#6b4a2a;') + '">' + esc(m.maint_name)
+           + (canEdit ? ' <span class="pp-maint-off" title="停用這個類別" style="margin-left:4px;opacity:.7;">✕</span>' : '') + '</span>';
+    });
+    $('#ppMaintList').html(h || '<span class="hint">還沒有類別，請在下方新增</span>');
+}
+$(document).on('click', '.pp-maint', function () {
+    PP.cur.maint_id = parseInt($(this).data('id'), 10); PP.cur.maint_name = String($(this).data('name'));
+    ppMaintRender(); ppRelabel();
+});
+$(document).on('click', '.pp-maint-off', function (e) {
+    e.stopPropagation();
+    var $c = $(this).closest('.pp-maint');
+    if (!confirm('停用「' + $c.data('name') + '」？已經用過它的單據不受影響。')) return;
+    api('maint_save', { maint_id: $c.data('id'), is_active: 0 }, 'POST').done(function () {
+        if (String(PP.cur.maint_id) === String($c.data('id'))) { PP.cur.maint_id = 0; PP.cur.maint_name = ''; ppRelabel(); }
+        ppMaintSync($('#ppType').val());
+    }).fail(fail);
+});
+$(document).on('click', '#ppMaintNewBtn', function () {
+    var nm = $.trim($('#ppMaintNew').val() || '');
+    if (!nm) { $('#ppMaintMsg').text('請填類別名稱').css('color', '#DD5138'); return; }
+    api('maint_save', { maint_name: nm, scope: PP_MAINT[$('#ppType').val()] || 'both' }, 'POST').done(function (r) {
+        $('#ppMaintNew').val(''); $('#ppMaintMsg').text('');
+        PP.cur.maint_id = r.maint_id; PP.cur.maint_name = nm;
+        api('maint_list', { scope: PP_MAINT[$('#ppType').val()] }).done(function (rr) { PP_MAINT_ROWS = rr.rows; ppMaintRender(); ppRelabel(); });
+    }).fail(function (e) { $('#ppMaintMsg').text(e).css('color', '#DD5138'); });
+});
 $(document).on('input', '#ppNote', function () { PP.cur.note = $(this).val(); ppPreview(); });
 
 $(document).on('click', '#ppOk', function () {
     var t = $('#ppType').val() || '';
     if (PP.target === 'req' && !t) { alert('請選擇用途類別'); return; }
     if (PP_NEED_PICK[t] && !PP.cur.label) { alert('請在下方搜尋並點選要歸屬的對象'); return; }
+    if (PP_MAINT[t] && !PP.cur.maint_id) { alert('請選擇保養類別（例：定期保養、維修）'); return; }
     if (t === 'OTHER' && !$.trim($('#ppNote').val() || '')) { alert('選「其他」請簡單寫一下用途'); return; }
     PP.cur.type = t; PP.cur.note = $('#ppNote').val() || '';
     if (!t) {                                   // 品項列選「沿用單頭」
@@ -927,6 +990,7 @@ function renderDetail(q) {
         fld('用途', q.purpose_type
             ? '<b>' + esc(ppTypeName(q.purpose_type)) + '</b>' + (q.purpose_label ? '　' + esc(q.purpose_label) : '')
             : '<span class="hint">未指定</span>') +
+        (q.vehicle_mileage ? fld('里程數', esc(String(q.vehicle_mileage).replace(/\B(?=(\d{3})+(?!\d))/g, ',')) + ' 公里' + (q.vehicle_mileage_date ? '　(' + esc(q.vehicle_mileage_date.replace(/-/g, '.')) + ')' : '')) : '') +
         fld('申請人', esc(q.requester_name) + '／' + esc(q.dept_name || '')) +
         fld('申請日', String(q.Created_At || '').substr(0, 16)) + fld('希望到貨日', q.need_date || '—') +
         fld('廠商', q.masked_vendor ? '＊＊＊' : esc(q.vendor_name || '—')) +
@@ -1141,6 +1205,10 @@ function saveQuote() {
 /* ── 到貨 ─────────────────────────────────── */
 function openRecv() {
     $('#rcDate').val(META.today);
+    // 用途是公司車輛（單頭或任一品項）時，才出現里程數欄
+    var isVeh = !!CUR.purpose_vehicle_id || CUR.items.some(function (it) { return !!it.purpose_vehicle_id; });
+    $('#rcMileWrap').toggle(isVeh);
+    $('#rcMileage').val(CUR.vehicle_mileage || '');
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '';
     CUR.items.forEach(function (it) {
@@ -1452,7 +1520,9 @@ function saveRecv() {
     if (bad) { alert(bad); return; }
     if (!lines.length) { alert('請至少填一筆到貨數量'); return; }
     $('#btnSaveRecv').prop('disabled', true);
-    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), lines: JSON.stringify(lines) }, 'POST')
+    var mil = $.trim($('#rcMileage').val() || '');
+    if ($('#rcMileWrap').is(':visible') && mil !== '' && !/^\d{1,7}$/.test(mil)) { alert('里程數請填整數（公里），不確定可以留白'); return; }
+    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, lines: JSON.stringify(lines) }, 'POST')
     .done(function (r) {
         closeMask('mRecv'); reload(); loadBadges();
         alert(r.status === 'received' ? '已全數到貨' : '已登錄部分到貨');
@@ -1479,6 +1549,7 @@ function openSign() {
         fld('用途', q.purpose_type
             ? '<b>' + esc(ppTypeName(q.purpose_type)) + '</b>' + (q.purpose_label ? '　' + esc(q.purpose_label) : '')
             : '<span class="hint">未指定</span>') +
+        (q.vehicle_mileage ? fld('里程數', esc(String(q.vehicle_mileage).replace(/\B(?=(\d{3})+(?!\d))/g, ',')) + ' 公里' + (q.vehicle_mileage_date ? '　(' + esc(q.vehicle_mileage_date.replace(/-/g, '.')) + ')' : '')) : '') +
         fld('廠商', esc(q.vendor_name || '—')) +
         fld('含稅總額', '<b class="money" style="font-size:18px;color:#8A5A2B;">' + money(q.grand_total) + '</b>') +
         fld('關卡', '第 ' + (q.pending_level || 1) + ' 關 / 共 ' + q.need_levels + ' 關') + '</div></div>';
