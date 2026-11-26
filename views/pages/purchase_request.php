@@ -635,7 +635,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <table class="pq-table" id="recvTable">
                 <thead><tr><th>品名</th><th>規格</th><th style="width:13%;">採購料號</th><th>已到／應到</th><th style="width:8%;">本次到貨</th>
                     <th style="width:11%;">單價（未稅）</th>
-                    <th style="width:11%;">到貨處理</th><th style="width:14%;">入庫儲位／種類</th><th style="width:11%;">交付對象</th><th>備註</th></tr></thead>
+                    <th style="width:11%;">到貨處理</th><th style="width:14%;">入庫儲位／種類</th><th style="width:14%;">交付對象</th><th>備註</th></tr></thead>
                 <tbody id="recvBody"></tbody>
             </table>
         </div>
