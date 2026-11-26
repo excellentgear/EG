@@ -99,6 +99,8 @@ function acc_sheet_list_filter(): array {
         'status'   => trim((string)($s['status'] ?? 'all')),
         'bm_from'  => trim((string)($s['bm_from'] ?? '')),
         'bm_to'    => trim((string)($s['bm_to'] ?? '')),
+        'made_from' => trim((string)($s['made_from'] ?? '')),
+        'made_to'   => trim((string)($s['made_to'] ?? '')),
         'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
         'only_diff'=> !empty($s['only_diff']) && $s['only_diff'] !== '0',
         'only_open'=> !empty($s['only_open']) && $s['only_open'] !== '0',

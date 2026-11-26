@@ -922,6 +922,9 @@ function acc_sheet_list(PDO $db, array $f): array
     if (!empty($f['status']) && $f['status'] !== 'all') { $where[] = "s.status = ?"; $params[] = $f['status']; }
     if (!empty($f['bm_from'])) { $where[] = "s.billing_month >= ?"; $params[] = $f['bm_from']; }
     if (!empty($f['bm_to']))   { $where[] = "s.billing_month <= ?"; $params[] = $f['bm_to']; }
+    // 做帳月份＝實際做這份對帳的月份（確認鎖帳的月份，未確認則為最後暫存的月份），與「帳款月份」不同
+    if (preg_match('/^\d{4}-\d{2}$/', (string)($f['made_from'] ?? ''))) { $where[] = "DATE_FORMAT(COALESCE(s.confirmed_at, s.saved_at),'%Y-%m') >= ?"; $params[] = $f['made_from']; }
+    if (preg_match('/^\d{4}-\d{2}$/', (string)($f['made_to'] ?? '')))   { $where[] = "DATE_FORMAT(COALESCE(s.confirmed_at, s.saved_at),'%Y-%m') <= ?"; $params[] = $f['made_to']; }
     $kw = trim((string)($f['kw'] ?? ''));
     if ($kw !== '') {
         $where[] = "(s.party_name LIKE ? OR s.party_id LIKE ? OR s.saved_by_name LIKE ? OR s.confirmed_by_name LIKE ?)";

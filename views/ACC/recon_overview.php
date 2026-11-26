@@ -216,6 +216,8 @@ table.a-t tbody tr:hover{background:#FBF0DE;}
       <button id="btnThis">本月</button>
       <button id="btnPrev">上月</button>
       <button id="btnAllMonth" title="不限月份，看全部底稿">全部月份</button>
+      <label title="實際做這份對帳的月份（例如 11 月才做 9 月的帳，帳款月份＝9 月、做帳月份＝11 月）">做帳月份</label>
+      <input type="month" id="madeFrom" style="width:145px;"> ~ <input type="month" id="madeTo" style="width:145px;">
       <label>側別</label>
       <select id="side" style="width:120px;" <?= $lockSide ? 'disabled' : '' ?>>
 <?php if ($lockSide === ''): ?>
@@ -360,7 +362,7 @@ var LOCK_SIDE = <?= json_encode($lockSide) ?>;
 
 var rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = 'billing_month', sortDir = 'desc';
-var onlyDiff = false, onlyOpen = false;
+var onlyDiff = false, onlyOpen = true;   // 預設只看還沒對完的
 var CSRF = '', roTarget = null;
 
 var SIDE_LABEL = {ar:'應收', ap:'應付'};
@@ -380,12 +382,7 @@ $(document).on('click','.a-mask',function(e){ if(e.target===this) $(this).remove
 $('#btnRoleHelp').on('click',function(){ openMask('mkRole'); });
 function shortT(t){ return t ? String(t).substr(5,11) : ''; }   // MM-DD HH:MM
 
-/* 預設查上個月帳（月結對帳通常是結完上個月才對） */
-(function initMonth(){
-  var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1);
-  var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
-  $('#bmFrom').val(m); $('#bmTo').val(m);
-})();
+/* 預設不限月份：幾個月對一次帳、或晚幾個月才對的，沒對完的都要看得到；要縮小範圍再選帳款月份或做帳月份 */
 function setMonth(offset){
   var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+offset);
   var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
@@ -393,11 +390,12 @@ function setMonth(offset){
 }
 $('#btnThis').on('click',function(){ setMonth(0); });
 $('#btnPrev').on('click',function(){ setMonth(-1); });
-$('#btnAllMonth').on('click',function(){ $('#bmFrom').val(''); $('#bmTo').val(''); page=1; load(); });
+$('#btnAllMonth').on('click',function(){ $('#bmFrom,#bmTo,#madeFrom,#madeTo').val(''); page=1; load(); });
+$(function(){ if(onlyOpen) $("#btnOnlyOpen").css({background:'#B9793C', color:'#fff'}); });
 
 function filters(){
   return {side: LOCK_SIDE || $('#side').val(), status:$('#status').val(),
-          bm_from:$('#bmFrom').val(), bm_to:$('#bmTo').val(), kw:$('#kw').val(),
+          bm_from:$('#bmFrom').val(), bm_to:$('#bmTo').val(), made_from:$('#madeFrom').val(), made_to:$('#madeTo').val(), kw:$('#kw').val(),
           only_diff:onlyDiff?1:0, only_open:onlyOpen?1:0,
           sort:sortBy, dir:sortDir, per_page:perPage, page:page};
 }
@@ -502,7 +500,7 @@ $(document).on('click','#pgBtns button',function(){
 $('#perPage').on('change',function(){ perPage=parseInt(this.value,10)||20; page=1; load(); });
 $('#btnSearch').on('click',function(){ page=1; load(); });
 $('#kw').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); page=1; load(); } });
-$('#bmFrom,#bmTo,#side,#status').on('change',function(){ page=1; load(); });
+$('#bmFrom,#bmTo,#madeFrom,#madeTo,#side,#status').on('change',function(){ page=1; load(); });
 $('#kw').on('dblclick',function(){ if($(this).val()!==''){ $(this).val(''); page=1; load(); } });
 
 /* 這兩個是後端篩選（統計與分頁都會跟著變），不是只挑當頁 */
