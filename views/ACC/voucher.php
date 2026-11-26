@@ -410,14 +410,14 @@ function voucherPrintHtml(r){
   var SG=r.signs||{}, sgs='', hd='';
   Object.keys(SLOTS).forEach(function(k){ hd+='<td class="h">'+esc(SLOTS[k])+'</td>'; var g=SG[k]; sgs+='<td>'+(g?esc(g.name)+'<br><span style="font-size:11px;">'+dd(g.date)+'</span>':'')+'</td>'; });
   hd+='<td class="h">製單</td>'; sgs+='<td>'+esc(v.maker_name||v.created_by||'')+'</td>';
-  return '<!doctype html><html><head><meta charset="utf-8"><title>傳票 '+esc(v.voucher_no||'')+'</title><style>'
+  return '<!doctype html><html><head><meta charset="utf-8"><title>轉帳傳票 '+esc(v.voucher_no||'')+'</title><style>'
     +'@page{size:A4 portrait;margin:0}body{margin:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#222}'
     +'.sheet{box-sizing:border-box;width:210mm;min-height:297mm;padding:16mm 14mm}'
     +'h1{text-align:center;font-size:20px;margin:0}h2{text-align:center;font-size:17px;margin:4px 0 12px;letter-spacing:8px}'
     +'.meta{display:flex;flex-wrap:wrap;gap:4px 24px;font-size:13px;margin-bottom:8px}'
     +'table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}th,td{border:1px solid #444;padding:6px 8px;text-align:center}'
     +'td.r{text-align:right}tfoot td{font-weight:700}.sign td{height:56px}.sign td.h{height:auto;background:#f2ece2;font-size:12.5px;padding:3px}'
-    +'</style></head><body><div class="sheet"><h1>'+esc(COMPANY)+'</h1><h2>傳　票</h2>'
+    +'</style></head><body><div class="sheet"><h1>'+esc(COMPANY)+'</h1><h2>轉帳傳票</h2>'
     +'<div class="meta"><span>傳票號碼：<b>'+esc(v.voucher_no||'')+'</b></span><span>傳票日期：'+dd(v.voucher_date)+'</span><span>'+(v.side==='ap'?'廠商':'客戶')+'：'+esc(v.party_name)+'</span><span>帳款月份：'+esc(v.billing_month||'')+'</span></div>'
     +'<table><colgroup><col style="width:22%"><col style="width:38%"><col style="width:20%"><col style="width:20%"></colgroup><thead><tr><th>會計科目</th><th>科目名稱</th><th>借方金額</th><th>貸方金額</th></tr></thead><tbody>'+rows+'</tbody>'
     +'<tfoot><tr><td colspan="2" style="text-align:right;">合計</td><td class="r">'+nf2(jd)+'</td><td class="r">'+nf2(jc)+'</td></tr></tfoot></table>'
@@ -431,7 +431,7 @@ function printVoucher(id){
     f=document.createElement('iframe'); f.id='vPrintFrame'; f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
     document.body.appendChild(f);
     var doc=f.contentWindow.document; doc.open(); doc.write(voucherPrintHtml(r)); doc.close();
-    if(window.EGPrintLog) EGPrintLog.record({source:'acc_voucher', doc_kind:'form', doc_name:'傳票 '+(r.voucher.voucher_no||'')+' '+r.voucher.party_name, ref_table:'acc_voucher', ref_id:id});
+    if(window.EGPrintLog) EGPrintLog.record({source:'acc_voucher', doc_kind:'form', doc_name:'轉帳傳票 '+(r.voucher.voucher_no||'')+' '+r.voucher.party_name, ref_table:'acc_voucher', ref_id:id});
     setTimeout(function(){ f.contentWindow.focus(); f.contentWindow.print(); }, 250);
   },'json').fail(function(x){ failMsg(x,'讀取失敗'); });
 }
