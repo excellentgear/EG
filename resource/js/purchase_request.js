@@ -109,6 +109,11 @@ $(function () {
         $('#fPay,#fStatus').val('');
         $('#mCat,#pkCat,#bdFCat,#itCat,#amCat').html(optList(r.categories, 'category_id', 'category_name', '', '全部類別'));
         $('#itCat,#amCat,#bdCat').html(optList(r.categories, 'category_id', 'category_name', '', ''));
+        // 品項歸類的「用途類別」選單，以及採購品清單的篩選（類別之外多一組用途類別）
+        var po = '', pf = '<optgroup label="用途類別">';
+        $.each(r.purpose_types, function (k, v) { po += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; pf += '<option value="P:' + esc(k) + '">' + esc(v) + '</option>'; });
+        $('#itPurp').html('<option value="">— 請選擇 —</option>' + po);
+        $('#mCat').append(pf + '</optgroup>');
         $('#mTag,#pkTag,#bdFTag').html(optList(r.tags, 'tag_id', 'tag_name', '', '全部標籤'));
         $('#itUnit,#spUnit,#bdUnit').html(optList(r.units, 'unit_id', 'unit_name', '', '（未指定）'));
         $('#spLoc,#bdLoc').html(optList(r.locations, 'location_id', 'location_code', '', '（未指定）'));
@@ -1865,14 +1870,15 @@ function doSign(decision) {
 /* ── 採購品主檔 ───────────────────────────── */
 function loadItems() {
     $('#itemBody').html('<tr><td colspan="8" class="pq-empty">載入中…</td></tr>');
-    api('item_list', { kw: $('#mKw').val(), category_id: $('#mCat').val(), tag_id: $('#mTag').val(),
+    var mc = String($('#mCat').val() || '');
+    api('item_list', { kw: $('#mKw').val(), category_id: mc.indexOf('P:') === 0 ? '' : mc, purpose_type: mc.indexOf('P:') === 0 ? mc.substr(2) : '', tag_id: $('#mTag').val(),
                        page: MPAGE, page_size: MPS }).done(function (r) {
         if (!r.rows.length) { $('#itemBody').html('<tr><td colspan="8" class="pq-empty">尚無採購品，按「新增品項」建立</td></tr>'); }
         else {
             var h = '';
             r.rows.forEach(function (x) {
                 var tg = (x.tags || []).map(function (t) { return '<span class="tag-chip">' + esc(t.tag_name) + '</span>'; }).join('');
-                h += '<tr><td>' + esc(x.item_code) + '</td><td>' + esc(x.category_name) + '</td>' +
+                h += '<tr><td>' + esc(x.item_code) + '</td><td>' + (x.purpose_type ? '用途：' + esc(ppTypeName(x.purpose_type)) : esc(x.category_name)) + '</td>' +
                      '<td class="l"><a href="javascript:;" class="op-item" data-id="' + x.item_id + '">' + esc(x.item_name) + '</a></td>' +
                      '<td class="l">' + tg + '</td><td class="r">' + x.spec_cnt + '</td>' +
                      '<td class="r">' + nz(x.stock_qty) + '</td><td class="l">' + esc(x.default_vendor_name || '') + '</td>' +
@@ -1896,6 +1902,7 @@ function openItem(id) {
     $('#itTitle').text(id ? '編輯品項' : '新增品項');
     $('#itName,#itNote,#itVendor').val(''); $('#itDup').empty();
     $('#itCat').val(META.categories.length ? META.categories[0].category_id : '');
+    $('#itPurp').val(''); setItGroup('category');
     $('#itUnit').val(''); renderTagPick([]);
     $('#specSec').toggle(!!id);
     $('#specHint').text(id ? '' : '');
@@ -1903,6 +1910,7 @@ function openItem(id) {
     api('item_detail', { item_id: id }).done(function (r) {
         var it = r.item;
         $('#itCat').val(it.category_id); $('#itName').val(it.item_name);
+        if (it.purpose_type) { $('#itPurp').val(it.purpose_type); setItGroup('purpose'); } else setItGroup('category');
         $('#itUnit').val(it.default_unit_id || ''); $('#itNote').val(it.note || '');
         $('#itVendor').val(it.default_vendor_name || '').data('vid', it.default_vendor_id || '');
         ITEMEDIT.specs = it.specs || []; ITEMEDIT.attrs = it.attrs || [];
@@ -1951,11 +1959,22 @@ $(document).on('click', '.sp-del', function () {
     api('spec_delete', { spec_id: $(this).data('id') }, 'POST').done(function () { openItem(ITEMEDIT.id); }).fail(fail);
 });
 
+/** 歸類二選一：類別（庫存分類）或用途類別（只供採購這邊查詢，不是建立料號） */
+function setItGroup(g) {
+    $('input[name=itGroup][value=' + g + ']').prop('checked', true);
+    $('#itCat').toggle(g === 'category'); $('#itPurp').toggle(g === 'purpose');
+    $('#itGroupHint').text(g === 'purpose' ? '用途類別＝只在採購這邊方便查詢，不是建立料號，也不會產生庫存分類'
+                                           : '類別＝庫存分類');
+}
+$(document).on('change', 'input[name=itGroup]', function () { setItGroup(this.value); });
 function saveItem() {
     var name = $('#itName').val().trim();
     if (!name) { alert('請輸入品名'); return; }
+    var grp = $('input[name=itGroup]:checked').val() || 'category';
+    if (grp === 'purpose' && !$('#itPurp').val()) { alert('請選擇用途類別'); $('#itPurp').focus(); return; }
     var tags = $('.tg-pick:checked').map(function () { return parseInt(this.value, 10); }).get();
-    api('item_save', { item_id: ITEMEDIT.id, category_id: $('#itCat').val(), item_name: name,
+    api('item_save', { item_id: ITEMEDIT.id, group_by: grp, purpose_type: grp === 'purpose' ? $('#itPurp').val() : '',
+        category_id: grp === 'category' ? $('#itCat').val() : '', item_name: name,
         default_unit_id: $('#itUnit').val() || 0, default_vendor_name: $('#itVendor').val(),
         default_vendor_id: $('#itVendor').data('vid') || '', note: $('#itNote').val(),
         tag_ids: JSON.stringify(tags) }, 'POST').done(function (r) {

@@ -276,6 +276,11 @@ function purchase_ensure_schema(PDO $db): void
             $db->exec("UPDATE purchase_maint_type SET simple_form=1 WHERE maint_name='定期保養'");
         } catch (Throwable $e) { error_log('purchase ALTER maint simple_form: ' . $e->getMessage()); }
     }
+    // 採購品項可改用「用途類別」歸類（與庫存類別二選一，只供採購這邊查詢用，不是建立料號）
+    if (!$db->query("SHOW COLUMNS FROM purchase_item LIKE 'purpose_type'")->fetch()) {
+        try { $db->exec("ALTER TABLE purchase_item ADD COLUMN purpose_type VARCHAR(20) NULL COMMENT '歸在哪個用途類別（與庫存類別二選一，僅採購查詢用）'"); }
+        catch (Throwable $e) { error_log('purchase ALTER purchase_item.purpose_type: ' . $e->getMessage()); }
+    }
     // 申請日期（可補填過去日期＝補單）。舊單一次性以建立日回填
     if (!$db->query("SHOW COLUMNS FROM purchase_request LIKE 'apply_date'")->fetch()) {
         try {
@@ -773,6 +778,14 @@ function purchase_next_item_code(PDO $db, int $categoryId): string
     $last = (string)($st->fetchColumn() ?: '');
     $seq  = $last !== '' ? ((int)substr($last, strlen($code) + 1) + 1) : 1;
     return sprintf('%s-%04d', $code, $seq);
+}
+
+/** 用途類別歸類的品項沒有庫存類別，但資料表與入庫流程都需要一個類別：一律掛在「其他」（沒有就取第一個啟用的類別） */
+function purchase_fallback_category(PDO $db): int
+{
+    $id = $db->query("SELECT category_id FROM stock_item_categories WHERE is_active=1 AND category_name='其他' ORDER BY category_id LIMIT 1")->fetchColumn();
+    if (!$id) $id = $db->query("SELECT category_id FROM stock_item_categories WHERE is_active=1 ORDER BY sort_order, category_id LIMIT 1")->fetchColumn();
+    return (int)$id;
 }
 
 /** 規格編碼：品項碼-2位流水 */

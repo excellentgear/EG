@@ -727,7 +727,14 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div class="m-head"><span id="itTitle">新增品項</span><span class="m-close" onclick="closeMask('mItem')">✕</span></div>
     <div class="m-body">
         <div class="pq-grid">
-            <div class="pq-fld"><label>類別 <span style="color:#DD5138;">*</span></label><select id="itCat"></select></div>
+            <div class="pq-fld"><label>歸類（二選一） <span style="color:#DD5138;">*</span></label>
+                <div style="display:flex;gap:14px;margin-bottom:4px;">
+                    <label style="font-weight:normal;cursor:pointer;margin:0;"><input type="radio" name="itGroup" value="category" checked style="width:auto;margin:0 4px 0 0;">類別</label>
+                    <label style="font-weight:normal;cursor:pointer;margin:0;"><input type="radio" name="itGroup" value="purpose" style="width:auto;margin:0 4px 0 0;">用途類別</label>
+                </div>
+                <select id="itCat"></select>
+                <select id="itPurp" style="display:none;"></select>
+                <span class="hint" id="itGroupHint">類別＝庫存分類</span></div>
             <div class="pq-fld"><label>品名 <span style="color:#DD5138;">*</span></label>
                 <input type="text" id="itName" placeholder="例：鑽頭（尺寸請放在下方規格）" autocomplete="off">
                 <div id="itDup"></div></div>

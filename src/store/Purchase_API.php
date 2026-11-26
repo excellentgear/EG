@@ -291,6 +291,7 @@ case 'item_list': {
     $kw    = trim($_GET['kw'] ?? '');
     $catId = (int)($_GET['category_id'] ?? 0);
     $tagId = (int)($_GET['tag_id'] ?? 0);
+    $ptypeF = strtoupper(trim((string)($_GET['purpose_type'] ?? '')));
     $page  = max(1, (int)($_GET['page'] ?? 1));
     $ps    = in_array((int)($_GET['page_size'] ?? 20), [5, 10, 20, 50], true) ? (int)$_GET['page_size'] : 20;
     $where = ['i.is_active=1']; $bind = [];
@@ -301,7 +302,8 @@ case 'item_list': {
                       AND (s2.spec_text LIKE ? OR s2.spec_code LIKE ?)))";
         $lk = '%' . $kw . '%'; array_push($bind, $lk, $lk, $lk, $lk);
     }
-    if ($catId > 0) { $where[] = 'i.category_id=?'; $bind[] = $catId; }
+    if ($catId > 0) { $where[] = 'i.category_id=? AND i.purpose_type IS NULL'; $bind[] = $catId; }
+    if ($ptypeF !== '' && isset(PURCHASE_PURPOSE_TYPES[$ptypeF])) { $where[] = 'i.purpose_type=?'; $bind[] = $ptypeF; }
     if ($tagId > 0) { $where[] = 'EXISTS (SELECT 1 FROM purchase_item_tag t WHERE t.item_id=i.item_id AND t.tag_id=?)'; $bind[] = $tagId; }
     $w = implode(' AND ', $where);
 
@@ -382,19 +384,29 @@ case 'item_save': {
     $itemId = pint('item_id');
     $name   = pv('item_name');
     $catId  = pint('category_id');
-    if ($name === '' || $catId <= 0) jerr('請選擇類別並輸入品項名稱');
+    // 歸類二選一：「類別」（庫存類別）或「用途類別」（只供採購查詢，不是建立料號）
+    $byPurpose = (pv('group_by') === 'purpose');
+    $ptype = null;
+    if ($byPurpose) {
+        $ptype = strtoupper(pv('purpose_type'));
+        if (!isset(PURCHASE_PURPOSE_TYPES[$ptype])) jerr('請選擇用途類別');
+        $catId = purchase_fallback_category($db);   // 資料表與入庫流程需要一個類別，統一掛「其他」
+        if ($catId <= 0) jerr('找不到可用的庫存類別');
+    }
+    if ($name === '' || $catId <= 0) jerr($byPurpose ? '請輸入品項名稱' : '請選擇類別並輸入品項名稱');
     $tagIds = array_map('intval', pjson('tag_ids'));
     $db->beginTransaction();
     if ($itemId > 0) {
-        $db->prepare("UPDATE purchase_item SET category_id=?, item_name=?, default_unit_id=?, default_vendor_id=?,
+        $db->prepare("UPDATE purchase_item SET category_id=?, purpose_type=?, item_name=?, default_unit_id=?, default_vendor_id=?,
                       default_vendor_name=?, note=?, is_active=?, Modified_By=? WHERE item_id=?")
-           ->execute([$catId, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
+           ->execute([$catId, $ptype, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
                       pv('default_vendor_name') ?: null, pv('note') ?: null, pint('is_active', 1), $uid, $itemId]);
     } else {
-        $code = purchase_next_item_code($db, $catId);
-        $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, default_unit_id,
-                      default_vendor_id, default_vendor_name, note, Created_By) VALUES (?,?,?,?,?,?,?,?)")
-           ->execute([$code, $catId, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
+        // 用途類別歸類的品項用「PU」開頭的採購用編號，與庫存類別的編號分開
+        $code = purchase_next_item_code($db, $byPurpose ? 0 : $catId);
+        $db->prepare("INSERT INTO purchase_item (item_code, category_id, purpose_type, item_name, default_unit_id,
+                      default_vendor_id, default_vendor_name, note, Created_By) VALUES (?,?,?,?,?,?,?,?,?)")
+           ->execute([$code, $catId, $ptype, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
                       pv('default_vendor_name') ?: null, pv('note') ?: null, $uid]);
         $itemId = (int)$db->lastInsertId();
     }
