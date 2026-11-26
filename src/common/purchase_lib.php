@@ -29,7 +29,9 @@ require_once __DIR__ . '/delegate_lib.php';
 /** 稅別 */
 define('PURCHASE_TAX_TYPES', ['taxable' => '應稅5%', 'free' => '免稅', 'zero' => '零稅率']);
 /** 到貨處理方式 */
-define('PURCHASE_RECEIVE_MODES', ['stock' => '入庫待領', 'direct' => '直接交付請購人', 'expense' => '不列管(費用)']);
+define('PURCHASE_RECEIVE_MODES', ['stock' => '入庫待領', 'direct' => '直接交付請購人', 'expense' => '不列管(費用)',
+    // 買的是服務不是實物（定期保養、維修、校驗）：沒有東西要入庫或交付，只記「完成了」
+    'service' => '服務完成（保養／維修）']);
 /** 用途歸屬類別（申請人只需選這個，成本才歸得了戶）
  *  前三種要綁 ID：ORDER→order_track.Order_id、BOM→bom.bom、PART→d_setting.d_id
  *  後三種不綁單據：常備補貨／設備維修／其他，屬間接費用 */

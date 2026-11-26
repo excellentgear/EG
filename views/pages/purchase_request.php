@@ -578,6 +578,15 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <tbody id="recvBody"></tbody>
             </table>
         </div>
+        <div class="pq-sec" style="margin-top:8px;">
+            <h5>進貨單／送貨單（選填）</h5>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="file" id="rcAttFile" multiple>
+                <button class="pq-btn warm" id="rcAttGo" type="button"><i class="fa fa-upload"></i> 上傳</button>
+                <span class="hint" id="rcAttHint"></span>
+            </div>
+            <div id="rcAttList" style="margin-top:6px;"></div>
+        </div>
         <p class="hint" style="margin-top:6px;">沒有採購料號的品項無法入庫：請按該列「綁定料號」，把它綁到既有採購料號、或當場建一支新的（或把該列改成「不列管」）。</p>
     </div>
     <div class="m-foot">

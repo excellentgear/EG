@@ -988,7 +988,7 @@ function uploadAtt() {
 $(document).on('change', '#attFile', uploadAtt);
 function renderAtts(list, keep) {
     if (keep) EDIT.atts = list; else EDIT.atts = list.slice();
-    var types = { quote: '估價單', invoice: '發票', receipt: '收據', other: '其他' };
+    var types = { quote: '估價單', invoice: '發票', receipt: '收據', delivery: '進貨單', other: '其他' };
     var h = '';
     EDIT.atts.forEach(function (a) {
         h += '<span class="tag-chip">' + esc(types[a.att_type] || '') + '｜' +
@@ -1029,7 +1029,7 @@ function flowBar(q) {
 }
 function renderDetail(q) {
     $('#dtTitle').text('採購單 ' + q.req_no + '　' + (q.title || ''));
-    var types = { quote: '估價單', invoice: '發票', receipt: '收據', other: '其他' };
+    var types = { quote: '估價單', invoice: '發票', receipt: '收據', delivery: '進貨單', other: '其他' };
     var h = flowBar(q);
     h += '<div class="pq-sec"><div class="pq-grid" style="margin:0;">' +
         fld('狀態', pill(q.status) + (parseInt(q.is_urgent, 10) ? ' <span class="urg">急件</span>' : '')) +
@@ -1364,15 +1364,54 @@ function openRecv() {
             '<td><input type="text" class="rc-remark" style="width:100%;"></td></tr>';
     });
     $('#recvBody').html(h);
-    CUR.items.forEach(function (it, i) { $('#recvBody tr').eq(i).find('.rc-mode').val(it.receive_mode || 'stock'); });
+    CUR.items.forEach(function (it, i) {
+        // 用途是公司車輛／設備維修保養的品項，預設「服務完成」（買的是服務，沒有東西要入庫）；到貨時仍可改
+        var pt = it.purpose_type || CUR.purpose_type || '';
+        var m = it.receive_mode || 'stock';
+        if (m === 'stock' && (pt === 'VEHICLE' || pt === 'EQUIP_MAINT')) m = 'service';
+        $('#recvBody tr').eq(i).find('.rc-mode').val(m);
+    });
     toggleRecvCols();
+    $('#rcAttFile').val(''); $('#rcAttHint').text('選好檔案後按「上傳」；圖片／PDF／Office，單檔 20MB 內');
+    renderRcAtts();
     openMask('mRecv');
 }
 $(document).on('change', '.rc-mode', toggleRecvCols);
+/* 登錄到貨時上傳進貨單（送貨單）：直接存成這張單的附件，類別＝進貨單，與申請時的附件放在一起 */
+function renderRcAtts() {
+    var h = '';
+    (CUR.attachments || []).filter(function (a) { return a.att_type === 'delivery'; }).forEach(function (a) {
+        h += '<span class="tag-chip">進貨單｜<a href="' + esc(a.url) + '" target="_blank">' + esc(a.original_name || a.file_name) + '</a></span> ';
+    });
+    $('#rcAttList').html(h || '<span class="hint">尚未上傳</span>');
+}
+$(document).on('click', '#rcAttGo', function () {
+    var el = document.getElementById('rcAttFile');
+    var files = el && el.files ? Array.prototype.slice.call(el.files) : [];   // 送出時直讀 input.files，不靠 change 事件
+    if (!files.length) { $('#rcAttHint').text('請先選擇檔案').css('color', '#DD5138'); return; }
+    var done = 0, ok = 0, bad = [];
+    $('#rcAttGo').prop('disabled', true);
+    function fin() {
+        if (++done < files.length) return;
+        $('#rcAttGo').prop('disabled', false); el.value = ''; renderRcAtts();
+        $('#rcAttHint').text(bad.length ? '已上傳 ' + ok + ' 個；失敗：' + bad.join('、') : '已上傳 ' + ok + ' 個檔案')
+            .css('color', bad.length ? '#DD5138' : '');
+    }
+    files.forEach(function (file) {
+        var fd = new FormData();
+        fd.append('action', 'att_upload'); fd.append('req_id', CUR.req_id); fd.append('att_type', 'delivery'); fd.append('file', file);
+        $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+        .done(function (r) {
+            if (!r.ok) { bad.push(file.name + '（' + r.error + '）'); fin(); return; }
+            (CUR.attachments = CUR.attachments || []).push({ att_id: r.att_id, att_type: 'delivery', original_name: r.original_name, url: r.url });
+            ok++; fin();
+        }).fail(function () { bad.push(file.name); fin(); });
+    });
+});
 function toggleRecvCols() {
     $('#recvBody tr').each(function () {
         var m = $(this).find('.rc-mode').val();
-        $(this).find('.rc-loc').prop('disabled', m === 'expense');
+        $(this).find('.rc-loc').prop('disabled', m === 'expense' || m === 'service');
         $(this).find('.rc-recv').prop('disabled', m !== 'direct')
                .attr('placeholder', m === 'direct' ? '預設＝請購人' : '—');
     });

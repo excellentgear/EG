@@ -957,7 +957,7 @@ case 'req_save': {
         $simpleName = $sq->fetchColumn();
         if ($simpleName !== false) {
             $items = [['item_name' => $simpleName . '費用', 'spec_text' => mb_substr((string)$pp['label'], 0, 150),
-                       'qty' => 1, 'receive_mode' => 'expense']];
+                       'qty' => 1, 'receive_mode' => 'service']];
             $_POST['need_date'] = '';
         }
     }
@@ -1359,7 +1359,7 @@ case 'att_upload': {
         jerr('僅支援圖片／PDF／Office 檔');
     }
     if ((int)$_FILES['file']['size'] > 20 * 1024 * 1024) jerr('檔案不可超過 20MB');
-    $attType = in_array(pv('att_type', 'other'), ['quote', 'invoice', 'receipt', 'other'], true) ? pv('att_type', 'other') : 'other';
+    $attType = in_array(pv('att_type', 'other'), ['quote', 'invoice', 'receipt', 'delivery', 'other'], true) ? pv('att_type', 'other') : 'other';
 
     [$nas] = purchase_attach_dirs($db);
     $reqNo = '';
