@@ -553,7 +553,7 @@ case 'inv_einv_xlsx': {
         acc_out(['header' => $built['header'], 'rows' => $built['rows'],
                  'invoices' => $built['invoices'], 'range' => acc_einv_date_range($db), 'settings' => acc_einv_settings($db)]);
     }
-    acc_einv_send_xlsx($built, '電子發票匯入_' . str_replace('-', '', $d) . '_' . date('His') . '.xlsx');
+    acc_einv_send_xlsx($built, acc_einv_file_name($built));
 }
 
 case 'inv_einv_range': {

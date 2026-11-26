@@ -240,7 +240,7 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
                 $first = false;
             }
         }
-        $sum[] = ['invoice_id' => $iid, 'customer' => $v['customer_name'], 'order_no' => $orderBase,
+        $sum[] = ['invoice_id' => $iid, 'customer' => $v['customer_name'], 'customer_id' => $cid, 'billing_month' => (string)$v['billing_month'], 'order_no' => $orderBase,
                   'email' => $email, 'tax_id' => $v['tax_id'], 'rows' => count($lines), 'raw_rows' => $rawCnt,
                   'invoices_out' => count($chunks), 'mode' => $mode, 'pages' => $pages, 'over_pages' => $over,
                   'sales' => (float)$v['sales_amount'], 'tax' => (float)$v['tax_amount'],
@@ -250,6 +250,21 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
 }
 
 /** 輸出 xlsx 並結束（含 header） */
+/** 下載檔名：客戶中文名稱-客戶ID-西元年月（YYYYMM）；一次轉多家時以「○○等N家」表示 */
+function acc_einv_file_name(array $built): string
+{
+    $inv = $built['invoices'] ?? [];
+    if (!$inv) return '電子發票匯入_' . date('Ymd') . '.xlsx';
+    $first = $inv[0];
+    $names = array_values(array_unique(array_map(fn($x) => (string)$x['customer'], $inv)));
+    $name = $names[0] . (count($names) > 1 ? '等' . count($names) . '家' : '');
+    $cid = count($names) > 1 ? '' : (string)$first['customer_id'];
+    $ym = str_replace('-', '', (string)$first['billing_month']);
+    $base = implode('-', array_filter([$name, $cid, $ym], fn($t) => $t !== ''));
+    $base = preg_replace('~[\\/:*?"<>|]+~u', '', $base);
+    return ($base !== '' ? $base : '電子發票匯入') . '.xlsx';
+}
+
 function acc_einv_send_xlsx(array $built, string $fileName): void
 {
     require_once __DIR__ . '/../../vendor/autoload.php';
