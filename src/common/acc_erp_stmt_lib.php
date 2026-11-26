@@ -309,7 +309,36 @@ function acc_erp_stmt_recon_target(PDO $db, array $stash): array
     if (!$names || !$cnt) return ['success' => false, 'message' => '查不到客戶或帳款月份'];
     arsort($names); arsort($cnt);
     $party = (string)array_key_first($names); $bm = (string)array_key_first($cnt);
-    return ['success' => true, 'side' => 'ar', 'party_id' => $party, 'bm' => $bm,
+    return ['success' => true, 'token' => (string)($stash['token'] ?? ''), 'side' => 'ar', 'party_id' => $party, 'bm' => $bm,
             'their_total' => $stash['their_total'] ?? null,
             'multi_month' => count($cnt) > 1, 'multi_party' => count($names) > 1];
+}
+
+/**
+ * ERP 對帳單「已核對完」的明細：料號＋數量＋單價都與 ERP 相同（含剛依 ERP 同步完單價的）。
+ * 一律以資料庫「現在」的值對 ERP 值判定（不信前端），退貨單只認已一致的。回傳 ['IS-123','IR-45',…]，
+ * 對帳作業開啟時據此把對應列標成「已對到」。
+ */
+function acc_erp_stmt_checked_keys(PDO $db, array $stash): array
+{
+    $keys = [];
+    $isIds = [];
+    foreach ($stash['entries'] as $e) {
+        if (($e['kind'] ?? '') === 'return') {
+            if (($e['status'] ?? '') === 'same' && !empty($e['ir_id'])) $keys[] = 'IR-' . (int)$e['ir_id'];
+            continue;
+        }
+        if (!empty($e['is_id']) && in_array($e['status'], ['same', 'price'], true)) $isIds[(int)$e['is_id']] = $e;
+    }
+    foreach (array_chunk(array_keys($isIds), 500) as $part) {
+        $ph = implode(',', array_fill(0, count($part), '?'));
+        $st = $db->prepare("SELECT IS_id, Qty, Unit_price FROM is_list WHERE IS_id IN ($ph)");
+        $st->execute($part);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $e = $isIds[(int)$r['IS_id']];
+            if (abs(abs((float)$r['Qty']) - abs((float)$e['erp_qty'])) < 0.0001
+                && abs((float)$r['Unit_price'] - (float)$e['erp_price']) < 0.00005) $keys[] = 'IS-' . (int)$r['IS_id'];
+        }
+    }
+    return $keys;
 }

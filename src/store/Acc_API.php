@@ -645,6 +645,13 @@ case 'erp_stmt_recon_link': {
     acc_out($r);
 }
 
+case 'erp_stmt_keys': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
+    $stash = $_SESSION['acc_erp_stmt'][(string)($_POST['token'] ?? '')] ?? null;
+    if (!$stash) acc_err('ERP 對帳單比對結果已逾時（只保留最近 3 份），請回匯入頁重新上傳');
+    acc_out(['keys' => acc_erp_stmt_checked_keys($db, $stash)]);
+}
+
 case 'erp_stmt_apply': {
     require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);

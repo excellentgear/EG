@@ -53,15 +53,16 @@ $bmDefault  = ['ar' => acc_default_billing_month($db, 'ar'),
 
 /* 由對帳單總覽（recon_overview.php）帶參數直接開某一份：
    ?side=ap&party_id=RZ002A&bm=2026-05。沒帶參數就照原本的下拉流程走。 */
-$deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => ''];
+$deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => '', 'erp' => ''];
 if (isset($_GET['side']) || isset($_GET['party_id']) || isset($_GET['bm'])) {
     $deep['side']     = (($_GET['side'] ?? '') === 'ap') ? 'ap' : 'ar';
     $deep['party_id'] = trim((string)($_GET['party_id'] ?? ''));
     $bm = trim((string)($_GET['bm'] ?? ''));
     $deep['bm'] = preg_match('/^\d{4}-\d{2}$/', $bm) ? $bm : '';
     $th = trim((string)($_GET['their'] ?? ''));
-    $deep['their'] = is_numeric($th) ? $th : '';   // 由 ERP 對帳單匯入帶來的「對方紙本合計」
-    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => ''];
+    $deep['their'] = is_numeric($th) ? $th : '';
+    $deep['erp'] = preg_match('/^[a-f0-9]{10,40}$/', (string)($_GET['erp'] ?? '')) ? $_GET['erp'] : '';   // 由 ERP 對帳單匯入帶來的「對方紙本合計」
+    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => '', 'erp' => ''];
 }
 ?>
 <!DOCTYPE html>
@@ -1137,6 +1138,26 @@ function renderRange(){
   $('#rgHint').html(hint);
   $b.show();
 }
+/* 由 ERP 對帳單匯入帶來（?erp=token）：把與 ERP 數量／單價一致的明細標成「已對到」並暫存（只做一次）。
+   只標記、不鎖帳；已鎖帳的底稿不動。伺服器依資料庫現值判定，不信網址。 */
+var erpDone=false;
+function erpAutoCheck(){
+  if(erpDone || !DEEP.erp || !sheet || sheet.status==='confirmed' || !canEdit) return;
+  erpDone=true;
+  $.post(API+'?action=erp_stmt_keys',{token:DEEP.erp},function(r){
+    if(!r.ok){ toast(esc(r.error||'無法取得 ERP 核對結果'), true); return; }
+    var set={}; (r.keys||[]).forEach(function(k){ set[k]=1; });
+    var n=0;
+    lines.forEach(function(l){
+      if(l.src_type==='SPLIT'||l.src_type==='MANUAL') return;
+      if(set[l.src_type+'-'+(l.src_id||0)] && !l.checked){ l.checked=1; l.check_seq=++checkSeq; n++; }
+    });
+    if(!n){ toast('ERP 核對結果：沒有需要新標記的明細'); return; }
+    render();
+    toast('依 ERP 對帳單已標記 '+n+' 筆「已對到」，自動暫存中…');
+    $('#btnSave').trigger('click');
+  },'json').fail(function(){ toast('無法取得 ERP 核對結果', true); });
+}
 var sheetEdited=false;   // 使用者在底稿上動過東西（勾選／金額／拆分…）；區間自動重載時才需要先問
 $(document).on('input change click','#sheetBox',function(e){ if(!$(e.target).closest('#rangeBar').length) sheetEdited=true; });
 function rgReload(reset,auto){
@@ -1188,6 +1209,7 @@ function loadSheet(o){
     $('#btnReopen').toggle(P.canAdmin && sheet.status==='confirmed');
     render();
     renderSync(r.missing||[], r.stale||[]);
+    erpAutoCheck();
     RANGE = r.range || null; renderRange();
     renderContactHint(r.contact_hint);
     toast(r.from==='draft'

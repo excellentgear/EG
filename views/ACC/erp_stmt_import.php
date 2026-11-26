@@ -77,7 +77,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <div id="sumWarn"></div>
       <div class="a-bar" style="background:#fff7e8;">
         <button id="btnToRecon" class="btn-warm"><i class="fa fa-balance-scale"></i> 帶到對帳作業核對</button>
-        <span style="color:#8a6d45;font-size:13px;">自動開啟這家客戶、這個帳款月份的對帳底稿，並把 ERP 對帳單的「本期應收合計」填入「對方紙本合計」，核對無誤再按「確認正確」。建議先把單價／數量差異更新完再帶過去。</span>
+        <span style="color:#8a6d45;font-size:13px;">自動開啟這家客戶、這個帳款月份的對帳底稿，把 ERP 對帳單的「本期應收合計」填入「對方紙本合計」，並把與 ERP 一致的明細自動標成「已對到」後暫存；核對無誤再按「確認正確」。建議先把單價／數量差異更新完再帶過去。</span>
       </div>
       <div class="a-bar" style="background:var(--a-bg2);">
         <label>狀態</label>
@@ -255,7 +255,7 @@ $('#btnToRecon').on('click',function(){
     if((r.multi_party||r.multi_month) && !confirm('這份對帳單涵蓋'+(r.multi_party?'多個客戶名稱':'')+(r.multi_party&&r.multi_month?'、':'')+(r.multi_month?'多個帳款月份':'')
       +'，將以筆數最多的「'+r.party_id+'／'+r.bm+'」開啟。繼續？')) { if(w) w.close(); return; }
     var url='reconcile.php?side=ar&party_id='+encodeURIComponent(r.party_id)+'&bm='+encodeURIComponent(r.bm)
-      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total));
+      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total))+'&erp='+encodeURIComponent(r.token);
     if(w) w.location=url; else window.open(url,'_blank');
   },'json').fail(function(x){ $b.prop('disabled',false); if(w) w.close(); var m='無法帶入'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
   });
