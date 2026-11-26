@@ -3,6 +3,20 @@ session_start();
 
 include '../../src/common/DBConnection.php';
 include '../../src/common/_config.php';
+require_once '../../src/common/upload_list_perm_lib.php';
+
+// 依 ?but= 對應到功能，沒權限一律擋下（2026-11-26：全站／本站管理員、生管／業務／品管可逐項設定；沒登錄的舊匯入＝只有管理員）
+if (isset($_GET['but']) && isset($db)) {
+    $__ulpUid = (int)($_SESSION['id'] ?? 0);
+    $__ulpFeat = ulp_feature_of_but((string)$_GET['but']);
+    $__ulpOk = $__ulpFeat !== null ? ulp_can($db, $__ulpUid, $__ulpFeat) : ulp_is_admin(rf_load_user_features($db, $__ulpUid));
+    if (!$__ulpOk) {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo '沒有使用這個匯入功能的權限，請洽管理員（上傳 List →「權限設定」）。';
+        exit;
+    }
+}
 
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
@@ -33,7 +47,13 @@ if (!function_exists('recordUploadLog')) {
 }
 
 // 更新訂單列表 (ORDER_LIST)
-/* 【已移除】but=Order（ERP 未交訂單匯入 → order_list） * 2026-09-18 依使用者指示移除，避免之後誤用。 * 這支匯入最後一次執行是 2026-03-12，之後半年沒有再匯過；`order_list` 是「未交清單快照」 * 不是全量訂單（每一列都是 Qty=Open_Qty），KPI 的準時出貨率曾經吃它而算出假的高分。 * `order_list` 資料表本身保留（2026-01、02 的判定還讀得到），只是不再開放匯入。 * 對應的上傳表單同步從 Upload_List.php 移除。 */
+/* 【已移除】but=Order（ERP 未交訂單匯入 → order_list）
+ * 2026-09-18 依使用者指示移除，避免之後誤用。
+ * 這支匯入最後一次執行是 2026-03-12，之後半年沒有再匯過；`order_list` 是「未交清單快照」
+ * 不是全量訂單（每一列都是 Qty=Open_Qty），KPI 的準時出貨率曾經吃它而算出假的高分。
+ * `order_list` 資料表本身保留（2026-01、02 的判定還讀得到），只是不再開放匯入。
+ * 對應的上傳表單同步從 Upload_List.php 移除。
+ */
 // 更新報工_包含tg 2025.02.21 OK
 if ($_GET['but'] == 'reply_tg') {
     function quoteValue($value)

@@ -22,9 +22,16 @@ $__features = rf_load_user_features($db, (int)$id);
 $canClearIsList = rf_has_feature($__features, 'all') || rf_has_feature($__features, 'data_console_edit');
 // 「補資料」分頁（報價單 ERP 匯入、訂購單補資料）：僅系統管理員（使用者明確要求 2026-10-13）
 $isPageAdmin = rf_has_feature($__features, 'all');
+// 各身分可用的分頁／匯入功能（2026-11-26：全站管理員／本站管理員／生管／業務／品管，管理員可在「權限設定」調整）
+require_once '../../src/common/upload_list_perm_lib.php';
+$ulp = ulp_can_map($db, (int)$id);
+$canBackfill = !empty($ulp['tab_backfill']);
+$canIsDiff   = !empty($ulp['tab_isdiff']);
+$canErpTab   = !empty($ulp['tab_erp']);
+$ulpIsAdmin  = !empty($ulp['_admin']);
 // 「ERP 差異確認」分頁：已綁定的出貨單在 ERP 匯入時內容不同或找不到，待系統管理員決定（is_bind_lock_lib.php，2026-11-11）
 $isErpDiffPending = 0;
-if ($isPageAdmin) { try { $isErpDiffPending = (int)$db->query("SELECT COUNT(*) FROM is_list_erp_diff WHERE status='pending'")->fetchColumn(); } catch (Throwable $e) {} }
+if ($canIsDiff) { try { $isErpDiffPending = (int)$db->query("SELECT COUNT(*) FROM is_list_erp_diff WHERE status='pending'")->fetchColumn(); } catch (Throwable $e) {} }
 
 /* =====================================================================
  * 【待刪除清單 2026-07-28】以下 4 個舊上傳區塊已由 ERP 直接匯入取代，
@@ -308,19 +315,25 @@ function lastUpdateBadge($info, $color = '#555') {
                                 <div class="x_content">
                                     <p class="text-muted font-13 m-b-30">
                                     </p>
-                                    <?php if ($isPageAdmin): ?>
+                                    <?php if ($ulpIsAdmin): ?>
+                                    <div style="text-align:right;margin-bottom:6px"><button type="button" class="btn btn-default btn-xs" id="btnUlpPerm"><i class="fa fa-lock"></i> 權限設定</button></div>
+                                    <?php endif; ?>
+                                    <?php $ulpFirst = $canErpTab ? 'erp' : ($canBackfill ? 'bf' : 'diff'); ?>
+                                    <?php if (($canErpTab ? 1 : 0) + ($canBackfill ? 1 : 0) + ($canIsDiff ? 1 : 0) > 1): ?>
                                     <ul class="nav nav-tabs" id="uploadTabs" style="margin-bottom:12px">
-                                        <li class="active"><a href="#tabErpImport" data-toggle="tab">ERP 匯入</a></li>
-                                        <li><a href="#tabBackfill" data-toggle="tab">補資料 <small class="text-muted">(管理員)</small></a></li>
-                                        <li><a href="#tabIsDiff" data-toggle="tab" id="tabIsDiffLink">ERP 差異確認 <small class="text-muted">(管理員)</small><?php if ($isErpDiffPending > 0): ?> <span class="badge" id="iedBadge" style="background:#DD5138"><?= $isErpDiffPending ?></span><?php endif; ?></a></li>
+                                        <?php if ($canErpTab): ?><li class="active"><a href="#tabErpImport" data-toggle="tab">ERP 匯入</a></li><?php endif; ?>
+                                        <?php if ($canBackfill): ?><li<?= $ulpFirst === 'bf' ? ' class="active"' : '' ?>><a href="#tabBackfill" data-toggle="tab">補資料</a></li><?php endif; ?>
+                                        <?php if ($canIsDiff): ?><li<?= $ulpFirst === 'diff' ? ' class="active"' : '' ?>><a href="#tabIsDiff" data-toggle="tab" id="tabIsDiffLink">ERP 差異確認<?php if ($isErpDiffPending > 0): ?> <span class="badge" id="iedBadge" style="background:#DD5138"><?= $isErpDiffPending ?></span><?php endif; ?></a></li><?php endif; ?>
                                     </ul>
                                     <?php endif; ?>
                                     <div class="tab-content" style="border:0;padding:0">
-                                    <div class="tab-pane active" id="tabErpImport">
+                                    <?php if ($canErpTab): ?>
+                                    <div class="tab-pane<?= $ulpFirst === 'erp' ? ' active' : '' ?>" id="tabErpImport">
 
                                     <!-- 訂單未交(order-OK) 匯入已於 2026-09-18 移除：該匯入最後一次執行是 2026-03-12，資料是未交清單快照不是全量訂單，留著只會被誤用；_upload_For_List.php 的 but=Order 分支同步移除 -->
                                     
-                                    <!-- 上傳-BOM ERP直接匯入 (N.xlsx，2026-07-20新增，取代下方新BOM+新BOM製程兩步驟) -->
+                                    <?php if (!empty($ulp['f_bom'])): ?>
+<!-- 上傳-BOM ERP直接匯入 (N.xlsx，2026-07-20新增，取代下方新BOM+新BOM製程兩步驟) -->
                                     <div style="background:#e3f2fd;border:2px solid #64b5f6;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form id="form_bom_erp" action="_upload_For_List.php?but=BOM_ERP" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:0">
@@ -341,6 +354,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /淺藍底 -->
+<?php endif; ?>
 
                                     <!-- ============================================================
                                          【待刪除 2026-07-28】新 BOM(N-new_bom)　but=nb
@@ -407,7 +421,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-移轉紀錄 ERP直接匯入 (SupQuery原始檔，2026-07-20新增，取代上方S-OK兩步驟) -->
+                                    <?php if (!empty($ulp['f_transfer'])): ?>
+<!-- 上傳-移轉紀錄 ERP直接匯入 (SupQuery原始檔，2026-07-20新增，取代上方S-OK兩步驟) -->
                                     <div style="background:#f3e5f5;border:2px solid #ba68c8;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form id="form_transfer_erp" action="_upload_For_List.php?but=Transfer_ERP" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:0">
@@ -428,8 +443,10 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /淺紫底 -->
+<?php endif; ?>
 
-                                    <form action="_upload_For_List.php?but=nb_ok" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                    <?php if (!empty($ulp['f_closeout'])): ?>
+<form action="_upload_For_List.php?but=nb_ok" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">BOM 結案 ERP直接匯入<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
@@ -443,6 +460,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($bomNbOkLastUpdate) ?></div>
                                         </div>
                                     </form>
+<?php endif; ?>
 
                                     <!-- 上傳-報工_含TG(新增bom_ing) 2025.02 ok — 已隱藏 -->
                                     <form action="_upload_For_List.php?but=reply_tg" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
@@ -459,7 +477,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-出貨單 ERP直接匯入 (is_list) -->
+                                    <?php if (!empty($ulp['f_is'])): ?>
+<!-- 上傳-出貨單 ERP直接匯入 (is_list) -->
                                     <div style="background:#e9f5ee;border:2px solid #81c784;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form id="form_is_list_erp" action="_upload_For_List.php?but=IS_List_ERP" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:0">
@@ -480,6 +499,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /霧綠底 -->
+<?php endif; ?>
 
                                     <?php if ($canClearIsList): ?>
                                     <!-- 出貨單清除資料（危險操作）：僅系統管理員或「資料急救台」管理員(data_console_edit)可見，需操作確認密碼 -->
@@ -499,7 +519,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                     </div><!-- /淺紅底 -->
                                     <?php endif; ?>
 
-                                    <!-- 上傳-退貨單 ERP直接匯入 (ir_track) -->
+                                    <?php if (!empty($ulp['f_ir'])): ?>
+<!-- 上傳-退貨單 ERP直接匯入 (ir_track) -->
                                     <div style="background:#fce4ec;border:2px solid #f48fb1;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form id="form_ir_list_erp" action="_upload_For_List.php?but=IR_List_ERP" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:0">
@@ -520,6 +541,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /粉紅底 -->
+<?php endif; ?>
 
                                     <!-- 報價單 ERP直接匯入 已移到「補資料」分頁（管理員專用） -->
 
@@ -560,7 +582,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-加工單價 ERP原始檔直接匯入 (transfer_log_raw) -->
+                                    <?php if (!empty($ulp['f_price'])): ?>
+<!-- 上傳-加工單價 ERP原始檔直接匯入 (transfer_log_raw) -->
                                     <div style="background:#e8eaf6;border:2px solid #7986cb;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form action="_upload_For_List.php?but=transfer_log_raw" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:0">
@@ -581,11 +604,13 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /藍紫底 -->
+<?php endif; ?>
 
-                                    <?php include __DIR__ . '/_bom_attach_upload_ui.php'; ?>
+                                    <?php if (!empty($ulp['f_attach'])) { include __DIR__ . '/_bom_attach_upload_ui.php'; } ?>
                                     </div><!-- /tabErpImport -->
-<?php if ($isPageAdmin): ?>
-                                    <div class="tab-pane" id="tabBackfill">
+<?php endif; ?>
+<?php if ($canBackfill): ?>
+                                    <div class="tab-pane<?= $ulpFirst === 'bf' ? ' active' : '' ?>" id="tabBackfill">
                                     <!-- 上傳-報價單 ERP直接匯入 (quotation_list，只新增不覆蓋既有單號，補建舊資料用) -->
                                     <div style="background:#F7E0BD;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form id="form_quotation_erp" action="_upload_For_List.php?but=Quotation_ERP_Preview" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
@@ -1019,7 +1044,9 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
                                     </div><!-- /tabBackfill -->
-                                    <div class="tab-pane" id="tabIsDiff">
+<?php endif; ?>
+<?php if ($canIsDiff): ?>
+                                    <div class="tab-pane<?= $ulpFirst === 'diff' ? ' active' : '' ?>" id="tabIsDiff">
                                         <div style="background:#F7E0BD;border:1px solid #F0A24B;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:13px;color:#5a3a10;">
                                             <b>已綁定出貨單的 ERP 差異</b>：出貨單一旦綁定訂單／製令／退貨／專案／對帳（人工或系統自動），ERP 出貨單匯入就<b>不會刪除、也不會覆蓋</b>它，出貨單 ID 不變，綁定才找得到。
                                             匯入時若 ERP 的內容和系統裡的不同，或 ERP 檔案裡找不到這筆，會列在這裡：請逐欄勾選要採用 ERP 新內容的欄位後按「套用勾選的欄位」，或按「保留原資料」。
@@ -1896,7 +1923,7 @@ $(document).ready(function() {
 });
 </script>
 
-<?php if ($isPageAdmin): ?>
+<?php if ($canIsDiff): ?>
 <script>
 /* 「ERP 差異確認」分頁（2026-11-11）：已綁定出貨單的 ERP 差異逐欄決定，後端 src/store/IsErpDiff_API.php */
 (function () {
@@ -2109,5 +2136,64 @@ $(document).ready(function() {
 </div>
 <?php endif; ?>
 
+<?php if ($ulpIsAdmin): ?>
+<div class="modal fade" id="ulpPermModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:640px;max-width:96%"><div class="modal-content">
+        <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:12px 15px">
+            <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1">&times;</button>
+            <h4 class="modal-title"><strong>上傳 List 權限設定</strong></h4>
+        </div>
+        <div class="modal-body" style="padding:15px">
+            <p class="text-muted" style="font-size:12px">全站管理員、本站管理員（角色「上傳List本站管理員」）一律全開。勾選的身分才能看到該分頁／使用該匯入功能；身分依「組織角色綁定」的生管／業務／品管部門判定（含下轄與兼任）。改完按「儲存」立即生效。</p>
+            <div id="ulpPermBody">載入中…</div>
+            <div id="ulpPermMsg" style="font-size:12px;margin-top:6px"></div>
+        </div>
+        <div class="modal-footer" style="padding:10px 15px">
+            <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+            <button type="button" class="btn btn-warning" id="btnUlpSave">儲存</button>
+        </div>
+    </div></div>
+</div>
+<script>
+(function () {
+    var API = '../../src/store/UploadListPerm_API.php', CSRF = '';
+    function render(r) {
+        CSRF = r.csrf;
+        var h = '<table class="table table-condensed table-bordered" style="font-size:13px;margin:0"><thead><tr><th>分頁／功能</th>';
+        r.groups.forEach(function (g) { h += '<th style="width:70px;text-align:center">' + g.label + '</th>'; });
+        h += '</tr></thead><tbody>';
+        var lastType = '';
+        r.features.forEach(function (f) {
+            if (f.type !== lastType) {
+                h += '<tr style="background:#F7E0BD"><td colspan="' + (r.groups.length + 1) + '"><b>' + (f.type === 'tab' ? '分頁' : 'ERP 匯入分頁內的功能') + '</b></td></tr>';
+                lastType = f.type;
+            }
+            h += '<tr><td' + (f.type === 'func' ? ' style="padding-left:20px"' : '') + '>' + f.label + '</td>';
+            r.groups.forEach(function (g) {
+                var on = (r.access[f.key] || []).indexOf(g.key) >= 0;
+                h += '<td style="text-align:center"><input type="checkbox" class="ulp-cb" data-f="' + f.key + '" data-g="' + g.key + '"' + (on ? ' checked' : '') + '></td>';
+            });
+            h += '</tr>';
+        });
+        $('#ulpPermBody').html(h + '</tbody></table>');
+    }
+    $('#btnUlpPerm').on('click', function () {
+        $('#ulpPermMsg').text('');
+        $('#ulpPermModal').modal('show');
+        $.getJSON(API, { action: 'get' }, render).fail(function (x) { $('#ulpPermBody').text((x.responseJSON && x.responseJSON.msg) || '載入失敗'); });
+    });
+    $('#btnUlpSave').on('click', function () {
+        var acc = {};
+        $('.ulp-cb').each(function () {
+            var f = $(this).data('f'); acc[f] = acc[f] || [];
+            if (this.checked) acc[f].push($(this).data('g'));
+        });
+        $.post(API + '?action=save', { csrf: CSRF, access: JSON.stringify(acc) }, function (r) {
+            $('#ulpPermMsg').css('color', r.ok ? '#2e7d32' : '#DD5138').text(r.ok ? '已儲存；使用者重新整理頁面後生效。' : (r.msg || '儲存失敗'));
+        }, 'json').fail(function () { $('#ulpPermMsg').css('color', '#DD5138').text('儲存失敗'); });
+    });
+})();
+</script>
+<?php endif; ?>
 </body>
 </html>

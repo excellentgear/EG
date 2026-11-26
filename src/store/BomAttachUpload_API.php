@@ -20,6 +20,8 @@ if (!isset($_SESSION['userName'])) { http_response_code(401); echo json_encode([
 require_once __DIR__ . '/../common/DBConnection.php';
 $db = (new DBConnection())->getPDO();
 require_once __DIR__ . '/../common/bom_dir_lib.php';
+require_once __DIR__ . '/../common/upload_list_perm_lib.php';
+if (!ulp_can($db, (int)($_SESSION['id'] ?? 0), 'f_attach')) { http_response_code(403); echo json_encode(['ok' => false, 'msg' => '沒有 BOM 附件上傳的權限']); exit; }
 
 const BAU_EXTS = ['pdf', 'jpg', 'jpeg', 'png'];
 const BAU_MAX_BYTES = 50 * 1024 * 1024;

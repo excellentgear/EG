@@ -20,7 +20,8 @@ function oeiOut(array $a) { echo json_encode($a, JSON_UNESCAPED_UNICODE); exit; 
 
 $uid = (int)($_SESSION['id'] ?? 0);
 if (!$uid) { http_response_code(401); oeiOut(['ok' => false, 'error' => '尚未登入']); }
-if (!rf_has_feature(rf_load_user_features($db, $uid), 'all')) { http_response_code(403); oeiOut(['ok' => false, 'error' => '僅管理員可使用']); }
+require_once __DIR__ . '/../common/upload_list_perm_lib.php';
+if (!ulp_can($db, $uid, 'tab_backfill')) { http_response_code(403); oeiOut(['ok' => false, 'error' => '僅管理員可使用']); }
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); oeiOut(['ok' => false, 'error' => '方法不允許']); }
 oei_ensure_schema($db);
 

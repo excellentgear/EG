@@ -17,7 +17,8 @@ $uid = (int)($_SESSION['id'] ?? 0);
 if (!$uid) iedOut(['ok' => false, 'error' => '未登入或連線已逾時，請重新整理頁面'], 401);
 $db = (new DBConnection())->getPDO();
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-if (!rf_has_feature(rf_load_user_features($db, $uid), 'all')) iedOut(['ok' => false, 'error' => '只有系統管理員可以處理 ERP 差異'], 403);
+require_once __DIR__ . '/../common/upload_list_perm_lib.php';
+if (!ulp_can($db, $uid, 'tab_isdiff')) iedOut(['ok' => false, 'error' => '只有系統管理員可以處理 ERP 差異'], 403);
 
 if (empty($_SESSION['ied_csrf'])) $_SESSION['ied_csrf'] = bin2hex(random_bytes(16));
 $action = (string)($_REQUEST['action'] ?? '');
