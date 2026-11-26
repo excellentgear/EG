@@ -238,6 +238,7 @@ function acc_erp_stmt_apply(PDO $db, array $stash, array $isIds, string $userNam
             $seen[$id] = 1;
             $label = $e['no'] . ' ' . $e['site_part'];
             if (isset($vMap['IS-' . $id]))   { $skip[] = $label . '：已有傳票，不可修改'; continue; }
+            if (acc_sheet_locked_src($db, 'IS', $id)) { $skip[] = $label . '：所屬對帳單已確認鎖帳，不可修改'; continue; }
             $inv = $invMap['IS-' . $id] ?? null;
             if ($inv && $inv['status'] !== 'draft') { $skip[] = $label . '：發票已轉出／開立，不可修改'; continue; }
             $sel->execute([$id]);

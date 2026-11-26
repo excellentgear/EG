@@ -229,16 +229,36 @@ function upd(){
   $('#btnApply').prop('disabled', n===0);
 }
 $('#fStatus,#fKw').on('input change',render);
+// 只更新 Qty／Unit_price，不碰任何綁定（訂單／製令／報價對應）；數量不同的可能牽動綁定分配，不自動改
+function autoSyncPrice(done){
+  var idx=[], ids=[];
+  ENT.forEach(function(e,i){ if(canPick(e)&&e.status==='price'){ idx.push(i); ids.push(e.is_id); } });
+  if(!ids.length){ done(0,[]); return; }
+  $.post(API+'?action=erp_stmt_apply',{csrf:CSRF,token:TOKEN,is_ids:JSON.stringify(ids)},function(r){
+    if(!r.ok){ toast(esc(r.error||'同步單價失敗'), true); done(-1,[]); return; }
+    idx.forEach(function(i){
+      var e=ENT[i], sk=(r.skipped||[]).some(function(s){ return s.indexOf(e.no+' '+e.site_part)===0; });
+      if(!sk){ e.status='same'; e.site_price=e.erp_price; }
+    });
+    SEL={}; render(); done(r.updated||0, r.skipped||[]);
+  },'json').fail(function(){ toast('同步單價失敗', true); done(-1,[]); });
+}
 $('#btnToRecon').on('click',function(){
   var $b=$(this).prop('disabled',true);
+  var w=window.open('','_blank');   // 先在點擊當下開好分頁，免得非同步回來後被彈出視窗封鎖擋掉
+  autoSyncPrice(function(n,sk){
+  if(n<0){ $b.prop('disabled',false); if(w) w.close(); return; }
+  if(n>0||sk.length) toast('已先依 ERP 同步 '+n+' 筆單價差異'+(sk.length?'；略過 '+sk.length+' 筆（已鎖定）':''), false);
   $.post(API+'?action=erp_stmt_recon_link',{token:TOKEN},function(r){
     $b.prop('disabled',false);
-    if(!r.ok){ toast(esc(r.error||'無法帶入'), true); return; }
+    if(!r.ok){ toast(esc(r.error||'無法帶入'), true); if(w) w.close(); return; }
     if((r.multi_party||r.multi_month) && !confirm('這份對帳單涵蓋'+(r.multi_party?'多個客戶名稱':'')+(r.multi_party&&r.multi_month?'、':'')+(r.multi_month?'多個帳款月份':'')
-      +'，將以筆數最多的「'+r.party_id+'／'+r.bm+'」開啟。繼續？')) return;
-    window.open('reconcile.php?side=ar&party_id='+encodeURIComponent(r.party_id)+'&bm='+encodeURIComponent(r.bm)
-      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total)),'_blank');
-  },'json').fail(function(x){ $b.prop('disabled',false); var m='無法帶入'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+      +'，將以筆數最多的「'+r.party_id+'／'+r.bm+'」開啟。繼續？')) { if(w) w.close(); return; }
+    var url='reconcile.php?side=ar&party_id='+encodeURIComponent(r.party_id)+'&bm='+encodeURIComponent(r.bm)
+      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total));
+    if(w) w.location=url; else window.open(url,'_blank');
+  },'json').fail(function(x){ $b.prop('disabled',false); if(w) w.close(); var m='無法帶入'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+  });
 });
 $(document).on('change','.ck',function(){
   var i=$(this).closest('tr').data('i');
