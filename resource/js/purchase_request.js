@@ -422,7 +422,7 @@ function openReq(id) {
             $('#rUrgent').prop('checked', false);   // 品項載入後再依「是否全部急件」回推
             if (q.purpose_type) {
                 REQPP = { type: q.purpose_type, order_id: q.purpose_order_id || 0, bom: q.purpose_bom || '',
-                          d_id: q.purpose_d_id || 0, note: q.purpose_note || '', label: q.purpose_label || '' };
+                          d_id: q.purpose_d_id || 0, vehicle_id: q.purpose_vehicle_id || 0, note: q.purpose_note || '', label: q.purpose_label || '' };
             }
             renderReqPurpose();
             q.items.forEach(function (it) {
@@ -492,7 +492,7 @@ function addItemRow(spec, prefill) {
         }
         if (prefill.purpose_type) {
             $tr.data('pp', { type: prefill.purpose_type, order_id: prefill.purpose_order_id || 0,
-                             bom: prefill.purpose_bom || '', d_id: prefill.purpose_d_id || 0,
+                             bom: prefill.purpose_bom || '', d_id: prefill.purpose_d_id || 0, vehicle_id: prefill.purpose_vehicle_id || 0,
                              note: prefill.purpose_note || '', label: prefill.purpose_label || '' });
         }
         if (!spec) { $tr.find('.i-name').val(prefill.item_name || ''); $tr.find('.i-spec').val(prefill.spec_text || '');
@@ -529,6 +529,7 @@ function collectItems() {
             purpose_order_id: pp.order_id || '',
             purpose_bom: pp.bom || '',
             purpose_d_id: pp.d_id || '',
+            purpose_vehicle_id: pp.vehicle_id || '',
             purpose_note: pp.note || ''
         });
     });
@@ -546,7 +547,7 @@ function saveReq() {
               // 單頭急件＝任一項急件（列表與通知看單頭這個旗標）
               is_urgent: ($('#rUrgent').prop('checked') || $('#reqItemBody .i-urg:checked').length) ? 1 : 0,
               purpose_type: REQPP.type, purpose_order_id: REQPP.order_id || '',
-              purpose_bom: REQPP.bom || '', purpose_d_id: REQPP.d_id || '',
+              purpose_bom: REQPP.bom || '', purpose_d_id: REQPP.d_id || '', purpose_vehicle_id: REQPP.vehicle_id || '',
               purpose_note: REQPP.note || '',
               items: JSON.stringify(items), temp_att_ids: JSON.stringify(EDIT.tempAtts) };
     $('#btnSaveReq').prop('disabled', true);
@@ -673,11 +674,12 @@ $(document).on('click', '#btnRoleFeatSave', function () {
 /* ── 用途歸屬（單頭與逐列共用同一個選擇器） ── */
 // 成本要歸得了戶，訂單一律綁 order_track.Order_id、料號一律綁 d_setting.d_id，
 // 絕不存訂單號／料號字串（一個訂單號最多對到 25 列、料號字串有 159 個重複）。
-var PP_NEED_PICK = { ORDER: 1, BOM: 1, PART: 1 };
+var PP_NEED_PICK = { ORDER: 1, BOM: 1, PART: 1, VEHICLE: 1 };
 var PP_PICK_CFG = {
     ORDER: { label: '搜尋訂單（訂單號／料號／客戶）', hint: '一個訂單號可能有多列料號，請點到你要的那一列。' },
     BOM:   { label: '搜尋 BOM（BOM 單號／料號／客戶）', hint: '點選要歸屬的 BOM 單。' },
-    PART:  { label: '搜尋料號（料號／圖號）', hint: '點選要歸屬的料號。' }
+    PART:  { label: '搜尋料號（料號／圖號）', hint: '點選要歸屬的料號。' },
+    VEHICLE: { label: '搜尋車輛（車牌／車型，不打字＝列出全部）', hint: '點選是哪一台車；車子不在清單時，採購人員可在下方直接新增。' }
 };
 
 function ppTypeName(t) { return (META && META.purpose_types && META.purpose_types[t]) || t || ''; }
@@ -713,7 +715,7 @@ function renderPpCell($tr) {
 function openPurpose(target) {
     PP.target = target;
     var cur = (target === 'req') ? REQPP : target.data('pp');
-    PP.cur = cur ? $.extend({}, cur) : { type: '', order_id: 0, bom: '', d_id: 0, note: '', label: '' };
+    PP.cur = cur ? $.extend({}, cur) : { type: '', order_id: 0, bom: '', d_id: 0, vehicle_id: 0, note: '', label: '' };
 
     var isReq = (target === 'req');
     $('#ppTitle').text(isReq ? '這筆採購是為了什麼？' : '這一項的用途（與單頭不同時才設）');
@@ -728,6 +730,7 @@ function openPurpose(target) {
     $('#ppKw').val(''); $('#ppList').empty();
     ppSyncType();
     openMask('mPurpose');
+    if (PP.cur.type === 'VEHICLE') ppSearch();
 }
 
 /** 依類別切換：要不要挑對象、要不要填說明 */
@@ -739,6 +742,7 @@ function ppSyncType() {
         $('#ppKwLabel').text(PP_PICK_CFG[t].label);
         $('#ppPickHint').text(PP_PICK_CFG[t].hint);
     }
+    $('#ppVehAdd').toggle(t === 'VEHICLE' && !!(META && META.perms && (META.perms.canBuy || META.perms.canAdmin)));
     // 只有「其他」需要文字說明，其餘類別的說明是選填備註
     $('#ppNoteWrap').toggle(t === 'OTHER' || t === 'EQUIP' || t === 'STOCK');
     $('#ppNoteLabel').text(t === 'OTHER' ? '說明（必填）' : '說明（選填）');
@@ -756,7 +760,7 @@ function ppPreview() {
 function ppSearch() {
     var t = $('#ppType').val() || '', kw = $.trim($('#ppKw').val() || '');
     if (!PP_NEED_PICK[t]) return;
-    if (!kw) { $('#ppList').empty(); return; }
+    if (!kw && t !== 'VEHICLE') { $('#ppList').empty(); return; }
     var seq = ++ppSeq;
     $('#ppList').html('<div class="pp-row x">搜尋中…</div>');
     api('purpose_search', { type: t, kw: kw }).done(function (r) {
@@ -776,16 +780,17 @@ function ppSearch() {
 $(document).on('change', '#ppType', function () {
     // 換類別＝先前挑的對象作廢，免得殘留舊 ID
     PP.cur.type = $(this).val() || '';
-    PP.cur.order_id = 0; PP.cur.bom = ''; PP.cur.d_id = 0; PP.cur.label = '';
+    PP.cur.order_id = 0; PP.cur.bom = ''; PP.cur.d_id = 0; PP.cur.vehicle_id = 0; PP.cur.label = '';
     $('#ppList').empty(); $('#ppKw').val('');
     ppSyncType();
+    if (PP.cur.type === 'VEHICLE') ppSearch();
 });
 // 即時搜尋：邊打邊找，不必按按鈕。300ms 去抖動，並丟棄比較舊的回應避免結果亂序
 var ppT = null, ppSeq = 0;
 $(document).on('input', '#ppKw', function () {
     clearTimeout(ppT);
     var kw = $.trim($(this).val() || '');
-    if (!kw) { $('#ppList').empty(); return; }
+    if (!kw && $('#ppType').val() !== 'VEHICLE') { $('#ppList').empty(); return; }
     ppT = setTimeout(ppSearch, 300);
 });
 $(document).on('keydown', '#ppKw', function (e) {
@@ -798,9 +803,21 @@ $(document).on('click', '.pp-pick', function () {
     if (t === 'ORDER') PP.cur.order_id = o.id;
     else if (t === 'BOM') PP.cur.bom = o.id;
     else if (t === 'PART') PP.cur.d_id = o.id;
+    else if (t === 'VEHICLE') PP.cur.vehicle_id = o.id;
     PP.cur.label = o.label;
     $('.pp-pick').css('background', ''); $(this).css('background', '#F7E0BD');
     ppPreview();
+});
+// 車子不在清單時，採購／管理員直接新增（車牌必填；保管人只是開去開回，不維護主檔）
+$(document).on('click', '#ppVehSave', function () {
+    var plate = $.trim($('#ppVehPlate').val() || '');
+    if (!plate) { $('#ppVehMsg').text('請填車牌').css('color', '#DD5138'); return; }
+    api('vehicle_save', { plate_no: plate, vehicle_name: $('#ppVehName').val() || '', fuel_card_no: $('#ppVehCard').val() || '' }, 'POST')
+        .done(function () {
+            $('#ppVehPlate,#ppVehName,#ppVehCard').val('');
+            $('#ppVehMsg').text('已新增 ' + plate).css('color', '#7a5a3a');
+            $('#ppKw').val(plate); ppSearch();
+        }).fail(function (e) { $('#ppVehMsg').text(e).css('color', '#DD5138'); });
 });
 $(document).on('input', '#ppNote', function () { PP.cur.note = $(this).val(); ppPreview(); });
 

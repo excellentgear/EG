@@ -462,6 +462,16 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             </div>
             <div id="ppList"></div>
             <p class="hint" style="margin-top:4px;" id="ppPickHint"></p>
+            <div id="ppVehAdd" style="display:none;margin-top:8px;padding:8px 10px;border:1px dashed #E2C58F;border-radius:4px;">
+                <div class="hint" style="margin-bottom:6px;">新增車輛</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <input type="text" id="ppVehPlate" placeholder="車牌（必填）" style="width:120px;" autocomplete="off">
+                    <input type="text" id="ppVehName" placeholder="車型／稱呼" style="width:140px;" autocomplete="off">
+                    <input type="text" id="ppVehCard" placeholder="車隊卡號（選填）" style="width:150px;" autocomplete="off">
+                    <button class="pq-btn warm" id="ppVehSave" type="button"><i class="fa fa-plus"></i> 新增</button>
+                </div>
+                <div id="ppVehMsg" class="hint" style="margin-top:4px;"></div>
+            </div>
         </div>
         <div class="pq-fld" id="ppNoteWrap" style="display:none;margin-top:10px;">
             <label id="ppNoteLabel">說明</label>

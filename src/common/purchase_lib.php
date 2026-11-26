@@ -39,6 +39,7 @@ define('PURCHASE_PURPOSE_TYPES', [
     'PART'  => '料號',
     'STOCK' => '常備品補貨',
     'EQUIP' => '設備維修／治工具',
+    'VEHICLE' => '公司車輛',
     'OTHER' => '其他',
 ]);
 /** 本模組的功能碼（角色可自訂名稱＋自己勾要哪些功能，存 role_features）
@@ -237,6 +238,25 @@ function purchase_ensure_schema(PDO $db): void
         Created_At TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         KEY idx_req (req_id), KEY idx_status (status)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='採購單附件(估價單/發票/收據)'");
+
+    // ── 公司車輛主檔＋用途綁定欄位（用途選「公司車輛」時綁 vehicle_id）──
+    $db->exec("CREATE TABLE IF NOT EXISTS purchase_vehicle (
+        vehicle_id INT AUTO_INCREMENT PRIMARY KEY,
+        plate_no VARCHAR(20) NOT NULL COMMENT '車牌',
+        vehicle_name VARCHAR(60) NULL COMMENT '車型／稱呼',
+        fuel_card_no VARCHAR(40) NULL COMMENT '車隊卡號(選填)',
+        keeper_name VARCHAR(40) NULL COMMENT '保管人(選填)',
+        is_active TINYINT NOT NULL DEFAULT 1,
+        Created_At TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_plate (plate_no)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='採購用：公司車輛主檔'");
+    foreach (['purchase_request', 'purchase_request_item'] as $vt) {
+        $hv = $db->query("SHOW COLUMNS FROM $vt LIKE 'purpose_vehicle_id'")->fetch();
+        if (!$hv) {
+            try { $db->exec("ALTER TABLE $vt ADD COLUMN purpose_vehicle_id INT NULL COMMENT '用途=公司車輛時的車輛ID(purchase_vehicle)'"); }
+            catch (Throwable $e) { error_log('purchase_vehicle ALTER ' . $vt . ': ' . $e->getMessage()); }
+        }
+    }
 
     // ── 庫存主表加欄位：區分採購品（與 d_setting_id 二擇一）──
     foreach ([
@@ -705,10 +725,10 @@ function purchase_purpose_normalize(PDO $db, array $src): array
 {
     $type = strtoupper(trim((string)($src['purpose_type'] ?? '')));
     if ($type === '' || !isset(PURCHASE_PURPOSE_TYPES[$type])) {
-        return ['type' => null, 'order_id' => null, 'bom' => null, 'd_id' => null, 'note' => null, 'label' => null];
+        return ['type' => null, 'order_id' => null, 'bom' => null, 'd_id' => null, 'note' => null, 'label' => null, 'vehicle_id' => null];
     }
     $out = ['type' => $type, 'order_id' => null, 'bom' => null, 'd_id' => null,
-            'note' => trim((string)($src['purpose_note'] ?? '')) ?: null, 'label' => null];
+            'note' => trim((string)($src['purpose_note'] ?? '')) ?: null, 'label' => null, 'vehicle_id' => null];
 
     if ($type === 'ORDER') {
         $oid = (int)($src['purpose_order_id'] ?? 0);
@@ -739,6 +759,16 @@ function purchase_purpose_normalize(PDO $db, array $src): array
         if (!$r) throw new RuntimeException('找不到該料號，請重新選擇');
         $out['d_id'] = $did;
         $out['label'] = (string)$r['D_Setting_Id'];
+    } elseif ($type === 'VEHICLE') {
+        // 車輛一律綁 purchase_vehicle.vehicle_id；顯示名稱由主檔重建（車牌日後可能換）
+        $vid = (int)($src['purpose_vehicle_id'] ?? 0);
+        if ($vid <= 0) throw new RuntimeException('用途選「公司車輛」時，請指定是哪一台車');
+        $st = $db->prepare("SELECT plate_no, vehicle_name FROM purchase_vehicle WHERE vehicle_id=?");
+        $st->execute([$vid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) throw new RuntimeException('找不到該車輛，請重新選擇');
+        $out['vehicle_id'] = $vid;
+        $out['label'] = $r['plate_no'] . ($r['vehicle_name'] !== null && $r['vehicle_name'] !== '' ? '（' . $r['vehicle_name'] . '）' : '');
     } else {
         // STOCK / EQUIP / OTHER：不綁單據，label 就用類別名（OTHER 另接自由說明）
         $out['label'] = PURCHASE_PURPOSE_TYPES[$type]
@@ -757,6 +787,7 @@ function purchase_purpose_effective(array $item, array $req): array
         'order_id' => $s['purpose_order_id'] ?? null,
         'bom'   => $s['purpose_bom'] ?? null,
         'd_id'  => $s['purpose_d_id'] ?? null,
+        'vehicle_id' => $s['purpose_vehicle_id'] ?? null,
         'note'  => $s['purpose_note'] ?? null,
         'label' => $s['purpose_label'] ?? null,
         'from'  => $useItem ? 'item' : 'req',

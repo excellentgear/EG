@@ -585,7 +585,7 @@ case 'role_matrix': {
 case 'purpose_search': {
     $type = strtoupper(trim($_GET['type'] ?? ''));
     $kw   = trim($_GET['kw'] ?? '');
-    if ($kw === '') jout(['rows' => []]);
+    if ($kw === '' && $type !== 'VEHICLE') jout(['rows' => []]);   // 車輛只有幾台，空白關鍵字＝列全部
     $rows = [];
 
     if ($type === 'ORDER') {
@@ -625,6 +625,19 @@ case 'purpose_search': {
                          . ($r['Client_Name'] !== null && $r['Client_Name'] !== '' ? '（' . $r['Client_Name'] . '）' : ''),
             ];
         }
+    } elseif ($type === 'VEHICLE') {
+        $lk = '%' . $kw . '%';
+        $st = $db->prepare("SELECT vehicle_id, plate_no, vehicle_name, fuel_card_no, keeper_name
+                            FROM purchase_vehicle WHERE is_active=1 AND (plate_no LIKE ? OR vehicle_name LIKE ?)
+                            ORDER BY plate_no LIMIT 100");
+        $st->execute([$lk, $lk]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $rows[] = [
+                'id' => (int)$r['vehicle_id'], 'main' => $r['plate_no'], 'sub' => (string)$r['vehicle_name'],
+                'extra' => trim(($r['keeper_name'] ? '保管：' . $r['keeper_name'] : '') . ($r['fuel_card_no'] ? '　車隊卡：' . $r['fuel_card_no'] : '')),
+                'label' => $r['plate_no'] . ($r['vehicle_name'] !== null && $r['vehicle_name'] !== '' ? '（' . $r['vehicle_name'] . '）' : ''),
+            ];
+        }
     } elseif ($type === 'PART') {
         // 料號字串有重複，一律回 d_setting.d_id 主鍵
         $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Customer_Id
@@ -651,6 +664,34 @@ case 'purpose_search': {
 /* ============================================================
  * 申請單
  * ============================================================ */
+case 'vehicle_save': {
+    // 車輛主檔：採購與管理員可新增／改／停用（保管人只是開去開回，不維護主檔）
+    if (!($perms['canBuy'] || $perms['canAdmin'])) jerr('無維護車輛的權限', 403);
+    $vid   = pint('vehicle_id');
+    $plate = strtoupper(preg_replace('/\s+/u', '', pv('plate_no')));
+    if ($plate === '') jerr('請填車牌');
+    $dup = $db->prepare("SELECT vehicle_id FROM purchase_vehicle WHERE plate_no=? AND vehicle_id<>?");
+    $dup->execute([$plate, $vid]);
+    if ($dup->fetchColumn()) jerr('這個車牌已經建過了');
+    $vals = [$plate, pv('vehicle_name') ?: null, pv('fuel_card_no') ?: null, pv('keeper_name') ?: null];
+    if ($vid > 0) {
+        $act = isset($_POST['is_active']) ? (pint('is_active') ? 1 : 0) : null;
+        $db->prepare("UPDATE purchase_vehicle SET plate_no=?, vehicle_name=?, fuel_card_no=?, keeper_name=?"
+                     . ($act === null ? '' : ', is_active=' . $act) . " WHERE vehicle_id=?")
+           ->execute(array_merge($vals, [$vid]));
+    } else {
+        $db->prepare("INSERT INTO purchase_vehicle (plate_no, vehicle_name, fuel_card_no, keeper_name) VALUES (?,?,?,?)")
+           ->execute($vals);
+        $vid = (int)$db->lastInsertId();
+    }
+    jout(['vehicle_id' => $vid]);
+}
+case 'vehicle_list': {
+    $rows = $db->query("SELECT vehicle_id, plate_no, vehicle_name, fuel_card_no, keeper_name, is_active
+                        FROM purchase_vehicle ORDER BY is_active DESC, plate_no")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['rows' => $rows]);
+}
+
 case 'req_list':
 case 'req_export': {
     purchase_purge_expired_temp($db);
@@ -870,30 +911,30 @@ case 'req_save': {
                           : '只有申請人本人可以修改申請內容；採購請在「詢價／填入實際金額」頁登錄實際採購內容', 403);
         }
         $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?,
-                      purpose_type=?, purpose_order_id=?, purpose_bom=?, purpose_d_id=?, purpose_note=?, purpose_label=?,
+                      purpose_type=?, purpose_order_id=?, purpose_bom=?, purpose_d_id=?, purpose_vehicle_id=?, purpose_note=?, purpose_label=?,
                       is_urgent=?, Modified_By=? WHERE req_id=?")
            ->execute([$title, pdate('need_date'), pv('reason') ?: null,
-                      $pp['type'], $pp['order_id'], $pp['bom'], $pp['d_id'], $pp['note'], $pp['label'],
+                      $pp['type'], $pp['order_id'], $pp['bom'], $pp['d_id'], $pp['vehicle_id'], $pp['note'], $pp['label'],
                       $urgent, $uid, $reqId]);
         $db->prepare("DELETE FROM purchase_request_item WHERE req_id=? AND qty_received=0")->execute([$reqId]);
         $reqNo = $req['req_no'];
     } else {
         $reqNo = purchase_next_req_no($db);
         $db->prepare("INSERT INTO purchase_request (req_no, title, dept_id, dept_name, requester_id, requester_name,
-                      need_date, reason, purpose_type, purpose_order_id, purpose_bom, purpose_d_id, purpose_note,
+                      need_date, reason, purpose_type, purpose_order_id, purpose_bom, purpose_d_id, purpose_vehicle_id, purpose_note,
                       purpose_label, is_urgent, status, Created_By)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'submitted', ?)")
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'submitted', ?)")
            ->execute([$reqNo, $title, $u['dept_id'], $u['dept_name'], $uid, $uname,
                       pdate('need_date'), pv('reason') ?: null,
-                      $pp['type'], $pp['order_id'], $pp['bom'], $pp['d_id'], $pp['note'], $pp['label'],
+                      $pp['type'], $pp['order_id'], $pp['bom'], $pp['d_id'], $pp['vehicle_id'], $pp['note'], $pp['label'],
                       $urgent, $uid]);
         $reqId = (int)$db->lastInsertId();
     }
 
     $ins = $db->prepare("INSERT INTO purchase_request_item (req_id, spec_id, item_name, spec_text, category_id,
                          unit_id, qty_requested, est_price, receive_mode, location_id, remark, is_urgent, sort_order,
-                         purpose_type, purpose_order_id, purpose_bom, purpose_d_id, purpose_note, purpose_label)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                         purpose_type, purpose_order_id, purpose_bom, purpose_d_id, purpose_vehicle_id, purpose_note, purpose_label)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     $sort = 0;
     foreach ($items as $i => $it) {
         $specId = (int)($it['spec_id'] ?? 0) ?: null;
@@ -913,7 +954,7 @@ case 'req_save': {
             // 急件可以只勾其中幾項；沒送逐列值時（舊版前端）沿用單頭
             isset($it['is_urgent']) ? ((int)$it['is_urgent'] ? 1 : 0) : $urgent, $sort++,
             $ip['type'] ?? null, $ip['order_id'] ?? null, $ip['bom'] ?? null,
-            $ip['d_id'] ?? null, $ip['note'] ?? null, $ip['label'] ?? null,
+            $ip['d_id'] ?? null, $ip['vehicle_id'] ?? null, $ip['note'] ?? null, $ip['label'] ?? null,
         ]);
     }
     // 單頭急件旗標＝任一項急件（列表、通知都看這個），一律由品項回推才不會兩邊不一致
