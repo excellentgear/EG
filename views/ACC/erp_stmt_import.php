@@ -253,8 +253,9 @@ $('#btnToRecon').on('click',function(){
   $.post(API+'?action=erp_stmt_recon_link',{token:TOKEN},function(r){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'無法帶入'), true); if(w) w.close(); return; }
-    if((r.multi_party||r.multi_month) && !confirm('這份對帳單涵蓋'+(r.multi_party?'多個客戶名稱':'')+(r.multi_party&&r.multi_month?'、':'')+(r.multi_month?'多個帳款月份':'')
-      +'，將以筆數最多的「'+r.party_id+'／'+r.bm+'」開啟。繼續？')) { if(w) w.close(); return; }
+    // 注意：此時已先開了空白分頁（成為前景分頁），本頁的 confirm() 會被瀏覽器直接抑制並回 false，所以只用提示，不再詢問
+    if(r.multi_party||r.multi_month) toast('這份對帳單涵蓋'+(r.multi_party?'多個客戶名稱':'')+(r.multi_party&&r.multi_month?'、':'')+(r.multi_month?'多個帳款月份':'')
+      +'，已以筆數最多的「'+esc(r.party_id)+'／'+esc(r.bm)+'」開啟', false);
     var url='reconcile.php?side=ar&party_id='+encodeURIComponent(r.party_id)+'&bm='+encodeURIComponent(r.bm)
       +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total))+'&erp='+encodeURIComponent(r.token);
     if(w) w.location=url; else window.open(url,'_blank');
