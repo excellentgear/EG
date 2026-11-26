@@ -59,6 +59,20 @@ function acc_voucher_ensure(PDO $db): void
         KEY idx_v (voucher_id),
         CONSTRAINT fk_voucher_line FOREIGN KEY (voucher_id) REFERENCES acc_voucher(voucher_id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='傳票分錄（會計科目）'");
+    // 科目分類（資產負債表／損益表用）：代號前兩碼；1~3 開頭＝資產負債表、4~9 開頭＝損益表
+    $db->exec("CREATE TABLE IF NOT EXISTS acc_account_category (
+        code VARCHAR(4) NOT NULL PRIMARY KEY,
+        name VARCHAR(60) NOT NULL,
+        note VARCHAR(200) NULL,
+        sort_order INT NOT NULL DEFAULT 0
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計科目分類（前兩碼）'");
+    $acols = [];
+    foreach ($db->query("SHOW COLUMNS FROM acc_account")->fetchAll(PDO::FETCH_ASSOC) as $c) $acols[$c['Field']] = 1;
+    foreach (['category'    => "VARCHAR(4) NULL COMMENT '類別（acc_account_category.code）'",
+              'summary'     => "VARCHAR(200) NULL COMMENT '彙總摘要'",
+              'parent_code' => "VARCHAR(12) NULL COMMENT '所屬科目'",
+              'note'        => "VARCHAR(200) NULL COMMENT '備註'"] as $col => $def)
+        if (!isset($acols[$col])) $db->exec("ALTER TABLE acc_account ADD COLUMN $col $def");
     foreach (acc_vch_acct_defaults() as $d)
         $db->prepare("INSERT IGNORE INTO acc_account (code, name) VALUES (?,?)")->execute([$d[0], $d[1]]);
     $db->exec("CREATE TABLE IF NOT EXISTS acc_voucher_item (
@@ -320,17 +334,17 @@ function acc_vch_acct_defaults(): array
     return [
         'ar_recv' => ['1144000', '應收帳款', 'D'],
         'ar_tax'  => ['2281000', '銷項稅額', 'C'],
-        'ar_rev'  => ['4111000', '銷貨收入', 'C'],
-        'ap_pay'  => ['2171000', '應付帳款', 'C'],
-        'ap_tax'  => ['1191000', '進項稅額', 'D'],
-        'ap_exp'  => ['5111000', '進貨／加工費', 'D'],
+        'ar_rev'  => ['4101000', '銷貨收入', 'C'],
+        'ap_pay'  => ['2144000', '應付帳款', 'C'],
+        'ap_tax'  => ['1281000', '進項稅額', 'D'],
+        'ap_exp'  => ['5201000', '進貨', 'D'],
     ];
 }
 
 function acc_vch_acct_labels(): array
 {
     return ['ar_recv' => '應收：應收帳款（借方）', 'ar_tax' => '應收：銷項稅額（貸方）', 'ar_rev' => '應收：銷貨收入（貸方）',
-            'ap_pay' => '應付：應付帳款（貸方）', 'ap_tax' => '應付：進項稅額（借方）', 'ap_exp' => '應付：進貨／加工費（借方）'];
+            'ap_pay' => '應付：應付帳款（貸方）', 'ap_tax' => '應付：進項稅額（借方）', 'ap_exp' => '應付：進貨（借方）'];
 }
 
 /** 取得目前設定的科目：['ar_recv' => ['code'=>,'name'=>], …] */
@@ -382,7 +396,7 @@ function acc_vch_account_upsert(PDO $db, string $code, string $name): void
 function acc_vch_accounts(PDO $db, bool $all = false): array
 {
     acc_voucher_ensure($db);
-    $rows = $db->query("SELECT code, name, active FROM acc_account " . ($all ? '' : 'WHERE active=1 ') . "ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT code, name, active, category, summary, parent_code, note FROM acc_account " . ($all ? '' : 'WHERE active=1 ') . "ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) $r['side'] = acc_vch_side_of_code($r['code']);
     return $rows;
 }
@@ -391,15 +405,61 @@ function acc_vch_accounts(PDO $db, bool $all = false): array
 function acc_vch_accounts_save(PDO $db, array $rows): array
 {
     acc_voucher_ensure($db);
-    $st = $db->prepare("INSERT INTO acc_account (code, name, active) VALUES (?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name), active=VALUES(active)");
+    $st = $db->prepare("INSERT INTO acc_account (code, name, active, category, summary, parent_code, note) VALUES (?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE name=VALUES(name), active=VALUES(active), category=VALUES(category), summary=VALUES(summary), parent_code=VALUES(parent_code), note=VALUES(note)");
     foreach ($rows as $i => $r) {
         $code = trim((string)($r['code'] ?? '')); $name = trim((string)($r['name'] ?? ''));
         $n = $i + 1;
         if (!preg_match('/^\d{4,10}$/', $code)) return ['success' => false, 'message' => "第 {$n} 列：科目代號須為 4~10 位數字"];
         if ($name === '' || mb_strlen($name) > 60) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：請填科目名稱（60 字內）"];
-        $st->execute([$code, $name, !empty($r['active']) ? 1 : 0]);
+        $sum = trim((string)($r['summary'] ?? '')); $note = trim((string)($r['note'] ?? ''));
+        if (mb_strlen($sum) > 200 || mb_strlen($note) > 200) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：摘要／備註請在 200 字內"];
+        $cat = substr($code, 0, 2);   // 類別一律依代號前兩碼（與 111.xlsx 相同）
+        $par = trim((string)($r['parent_code'] ?? ''));
+        if ($par !== '' && !preg_match('/^\d{4,10}$/', $par)) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：所屬科目須為 4~10 位數字"];
+        $st->execute([$code, $name, !empty($r['active']) ? 1 : 0, $cat, $sum ?: null, $par ?: null, $note ?: null]);
     }
     return ['success' => true, 'message' => '已儲存科目表'];
+}
+
+/** 科目分類（前兩碼）清單，附各分類底下的科目數與所屬報表 */
+function acc_vch_categories(PDO $db): array
+{
+    acc_voucher_ensure($db);
+    $rows = $db->query("SELECT c.code, c.name, c.note, (SELECT COUNT(*) FROM acc_account a WHERE a.category=c.code) AS n
+                        FROM acc_account_category c ORDER BY c.code")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['n'] = (int)$r['n']; $r['stmt'] = in_array(substr($r['code'], 0, 1), ['1', '2', '3'], true) ? 'BS' : 'IS'; }
+    return $rows;
+}
+
+/** 科目分類維護：新增／改名／改備註（代號不可改）；$delete 內的代號要刪除（底下還有科目就擋下） */
+function acc_vch_categories_save(PDO $db, array $rows, array $delete = []): array
+{
+    acc_voucher_ensure($db);
+    foreach ($delete as $code) {
+        $code = trim((string)$code);
+        $q = $db->prepare("SELECT COUNT(*) FROM acc_account WHERE category=?"); $q->execute([$code]);
+        if ((int)$q->fetchColumn() > 0) return ['success' => false, 'message' => "分類 {$code} 底下還有科目，不能刪除（可改名）"];
+    }
+    $db->beginTransaction();
+    try {
+        $st = $db->prepare("INSERT INTO acc_account_category (code,name,note,sort_order) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name), note=VALUES(note)");
+        foreach ($rows as $i => $r) {
+            $code = trim((string)($r['code'] ?? '')); $name = trim((string)($r['name'] ?? '')); $note = trim((string)($r['note'] ?? ''));
+            $n = $i + 1;
+            if (!preg_match('/^\d{2}$/', $code)) throw new RuntimeException("第 {$n} 列：分類代號須為 2 位數字");
+            if ($name === '' || mb_strlen($name) > 60) throw new RuntimeException("第 {$n} 列（{$code}）：請填分類名稱（60 字內）");
+            if (mb_strlen($note) > 200) throw new RuntimeException("第 {$n} 列（{$code}）：備註請在 200 字內");
+            $st->execute([$code, $name, $note ?: null, (int)$code]);
+        }
+        $dl = $db->prepare("DELETE FROM acc_account_category WHERE code=?");
+        foreach ($delete as $code) $dl->execute([trim((string)$code)]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => $e->getMessage()];
+    }
+    return ['success' => true, 'message' => '已儲存科目分類'];
 }
 
 /** 登入帳號 → 人員姓名（顯示用）；查不到就原樣回傳 */

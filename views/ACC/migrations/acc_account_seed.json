@@ -1,0 +1,3035 @@
+{
+"accounts": [
+{
+"code": "1101000",
+"name": "現金",
+"category": "11",
+"summary": "1",
+"parent": "1101000",
+"note": ""
+},
+{
+"code": "1102000",
+"name": "銀行存款",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102001",
+"name": "玉山銀行",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102100",
+"name": "華南乙存款",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102200",
+"name": "華南甲存款",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102300",
+"name": "新光銀行",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102301",
+"name": "新光銀行(乙)",
+"category": "11",
+"summary": "",
+"parent": "1102300",
+"note": ""
+},
+{
+"code": "1102302",
+"name": "新光銀行(甲)",
+"category": "11",
+"summary": "",
+"parent": "1102300",
+"note": ""
+},
+{
+"code": "1102401",
+"name": "合作金庫乙存",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102500",
+"name": "華南銀行",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102501",
+"name": "華南林雅婷(乙)",
+"category": "11",
+"summary": "",
+"parent": "1102500",
+"note": ""
+},
+{
+"code": "1102502",
+"name": "華南林雅婷(甲)",
+"category": "11",
+"summary": "",
+"parent": "1102500",
+"note": ""
+},
+{
+"code": "1102503",
+"name": "華南陳敏男(乙)",
+"category": "11",
+"summary": "",
+"parent": "1102500",
+"note": ""
+},
+{
+"code": "1102504",
+"name": "華南廖智超(乙)",
+"category": "11",
+"summary": "",
+"parent": "1102500",
+"note": ""
+},
+{
+"code": "1102505",
+"name": "華南外匯銀",
+"category": "11",
+"summary": "",
+"parent": "1102500",
+"note": ""
+},
+{
+"code": "1102600",
+"name": "台新銀行",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102601",
+"name": "台新銀乙存",
+"category": "11",
+"summary": "",
+"parent": "1102600",
+"note": ""
+},
+{
+"code": "1102602",
+"name": "台新銀行-陳俊宏美金(",
+"category": "11",
+"summary": "",
+"parent": "1102600",
+"note": ""
+},
+{
+"code": "1102603",
+"name": "中國信託銀行",
+"category": "11",
+"summary": "",
+"parent": "1102600",
+"note": ""
+},
+{
+"code": "1102700",
+"name": "兆豐商業銀行存款",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102701",
+"name": "兆豐商業銀行存款",
+"category": "11",
+"summary": "",
+"parent": "1102700",
+"note": ""
+},
+{
+"code": "1102702",
+"name": "兆豐CHF存款",
+"category": "11",
+"summary": "",
+"parent": "1102700",
+"note": ""
+},
+{
+"code": "1102703",
+"name": "兆豐EUR存款",
+"category": "11",
+"summary": "",
+"parent": "1102700",
+"note": ""
+},
+{
+"code": "1102704",
+"name": "兆豐USD存款",
+"category": "11",
+"summary": "",
+"parent": "1102700",
+"note": ""
+},
+{
+"code": "1102705",
+"name": "兆豐JPY存款",
+"category": "11",
+"summary": "",
+"parent": "1102700",
+"note": ""
+},
+{
+"code": "1102800",
+"name": "台灣中小企銀",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1102801",
+"name": "台灣中小企銀(撥貸款)",
+"category": "11",
+"summary": "",
+"parent": "1102800",
+"note": ""
+},
+{
+"code": "1102802",
+"name": "台灣中小企銀",
+"category": "11",
+"summary": "",
+"parent": "1102800",
+"note": ""
+},
+{
+"code": "1102803",
+"name": "台灣中小企銀甲存",
+"category": "11",
+"summary": "",
+"parent": "1102800",
+"note": ""
+},
+{
+"code": "1102804",
+"name": "台灣中小企銀外幣",
+"category": "11",
+"summary": "",
+"parent": "1102800",
+"note": ""
+},
+{
+"code": "1102805",
+"name": "台灣中小企銀壽險",
+"category": "11",
+"summary": "",
+"parent": "1102800",
+"note": ""
+},
+{
+"code": "1102900",
+"name": "彰化綜合銀行",
+"category": "11",
+"summary": "",
+"parent": "1102000",
+"note": ""
+},
+{
+"code": "1105000",
+"name": "零用金",
+"category": "11",
+"summary": "",
+"parent": "1105000",
+"note": ""
+},
+{
+"code": "1141000",
+"name": "應收票據",
+"category": "11",
+"summary": "",
+"parent": "1141000",
+"note": ""
+},
+{
+"code": "1142000",
+"name": "貼現應收票據",
+"category": "11",
+"summary": "",
+"parent": "1142000",
+"note": ""
+},
+{
+"code": "1144000",
+"name": "應收帳款",
+"category": "11",
+"summary": "",
+"parent": "1144000",
+"note": ""
+},
+{
+"code": "1145000",
+"name": "備抵呆帳-應收帳款",
+"category": "11",
+"summary": "",
+"parent": "1145000",
+"note": ""
+},
+{
+"code": "1148000",
+"name": "應收退稅款",
+"category": "11",
+"summary": "",
+"parent": "1148000",
+"note": ""
+},
+{
+"code": "1149000",
+"name": "留抵稅額",
+"category": "11",
+"summary": "",
+"parent": "1149000",
+"note": ""
+},
+{
+"code": "1178000",
+"name": "其他應收款",
+"category": "11",
+"summary": "",
+"parent": "1178000",
+"note": ""
+},
+{
+"code": "1179000",
+"name": "備抵呆帳-其他應收款",
+"category": "11",
+"summary": "",
+"parent": "1179000",
+"note": ""
+},
+{
+"code": "1201000",
+"name": "商品存貨",
+"category": "12",
+"summary": "",
+"parent": "1201000",
+"note": ""
+},
+{
+"code": "1205000",
+"name": "在途商品",
+"category": "12",
+"summary": "",
+"parent": "1205000",
+"note": ""
+},
+{
+"code": "1211000",
+"name": "存貨",
+"category": "12",
+"summary": "",
+"parent": "1211000",
+"note": ""
+},
+{
+"code": "1216000",
+"name": "副產品",
+"category": "12",
+"summary": "",
+"parent": "1216000",
+"note": ""
+},
+{
+"code": "1218000",
+"name": "半成品",
+"category": "12",
+"summary": "",
+"parent": "1218000",
+"note": ""
+},
+{
+"code": "1220000",
+"name": "在製品",
+"category": "12",
+"summary": "",
+"parent": "1220000",
+"note": ""
+},
+{
+"code": "1226000",
+"name": "原料",
+"category": "12",
+"summary": "",
+"parent": "1226000",
+"note": ""
+},
+{
+"code": "1227000",
+"name": "物料",
+"category": "12",
+"summary": "",
+"parent": "1227000",
+"note": ""
+},
+{
+"code": "1228000",
+"name": "燃料",
+"category": "12",
+"summary": "",
+"parent": "1228000",
+"note": ""
+},
+{
+"code": "1229000",
+"name": "在途材料",
+"category": "12",
+"summary": "",
+"parent": "1229000",
+"note": ""
+},
+{
+"code": "1231000",
+"name": "寄銷品",
+"category": "12",
+"summary": "",
+"parent": "1231000",
+"note": ""
+},
+{
+"code": "1232000",
+"name": "備低存貨跌價損失",
+"category": "12",
+"summary": "",
+"parent": "1232000",
+"note": ""
+},
+{
+"code": "1251000",
+"name": "預付貨款",
+"category": "12",
+"summary": "",
+"parent": "1251000",
+"note": ""
+},
+{
+"code": "1252000",
+"name": "用品盤存",
+"category": "12",
+"summary": "",
+"parent": "1252000",
+"note": ""
+},
+{
+"code": "1253000",
+"name": "預付費用",
+"category": "12",
+"summary": "",
+"parent": "1253000",
+"note": ""
+},
+{
+"code": "1257000",
+"name": "預付稅款",
+"category": "12",
+"summary": "",
+"parent": "1257000",
+"note": ""
+},
+{
+"code": "1259000",
+"name": "其他預付款",
+"category": "12",
+"summary": "",
+"parent": "1259000",
+"note": ""
+},
+{
+"code": "1281000",
+"name": "進項稅額",
+"category": "12",
+"summary": "",
+"parent": "1281000",
+"note": ""
+},
+{
+"code": "1289000",
+"name": "其他流動資產",
+"category": "12",
+"summary": "",
+"parent": "1289000",
+"note": ""
+},
+{
+"code": "1401000",
+"name": "償債基金",
+"category": "14",
+"summary": "",
+"parent": "1401000",
+"note": ""
+},
+{
+"code": "1402000",
+"name": "職工福利基金",
+"category": "14",
+"summary": "",
+"parent": "1402000",
+"note": ""
+},
+{
+"code": "1403000",
+"name": "改良及擴充基金",
+"category": "14",
+"summary": "",
+"parent": "1403000",
+"note": ""
+},
+{
+"code": "1404000",
+"name": "退休基金",
+"category": "14",
+"summary": "專戶95290129帳號58689095290129",
+"parent": "1404000",
+"note": ""
+},
+{
+"code": "1429000",
+"name": "其他基金",
+"category": "14",
+"summary": "",
+"parent": "1429000",
+"note": ""
+},
+{
+"code": "1441000",
+"name": "長期股權投資",
+"category": "14",
+"summary": "",
+"parent": "1441000",
+"note": ""
+},
+{
+"code": "1442000",
+"name": "備抵長期投資損失",
+"category": "14",
+"summary": "",
+"parent": "1442000",
+"note": ""
+},
+{
+"code": "1444000",
+"name": "長期債券投資",
+"category": "14",
+"summary": "",
+"parent": "1444000",
+"note": ""
+},
+{
+"code": "1457000",
+"name": "其他長期投資",
+"category": "14",
+"summary": "",
+"parent": "1457000",
+"note": ""
+},
+{
+"code": "1461000",
+"name": "長期應收票據",
+"category": "14",
+"summary": "",
+"parent": "1461000",
+"note": ""
+},
+{
+"code": "1463000",
+"name": "備抵呆帳-長期應收款",
+"category": "14",
+"summary": "",
+"parent": "1463000",
+"note": ""
+},
+{
+"code": "1464000",
+"name": "長期應收款",
+"category": "14",
+"summary": "",
+"parent": "1464000",
+"note": ""
+},
+{
+"code": "1465000",
+"name": "備抵呆帳-長期應收款",
+"category": "14",
+"summary": "",
+"parent": "1465000",
+"note": ""
+},
+{
+"code": "1501000",
+"name": "土地",
+"category": "15",
+"summary": "",
+"parent": "1501000",
+"note": ""
+},
+{
+"code": "1511000",
+"name": "土地改良物",
+"category": "15",
+"summary": "",
+"parent": "1511000",
+"note": ""
+},
+{
+"code": "1512000",
+"name": "累計折舊-土地改良物",
+"category": "15",
+"summary": "",
+"parent": "1512000",
+"note": ""
+},
+{
+"code": "1521000",
+"name": "房屋及建築",
+"category": "15",
+"summary": "",
+"parent": "1521000",
+"note": ""
+},
+{
+"code": "1522000",
+"name": "累計折舊-房屋及建築",
+"category": "15",
+"summary": "",
+"parent": "1522000",
+"note": ""
+},
+{
+"code": "1531000",
+"name": "機械設備",
+"category": "15",
+"summary": "",
+"parent": "1531000",
+"note": ""
+},
+{
+"code": "1532000",
+"name": "累計折舊-機械設備",
+"category": "15",
+"summary": "",
+"parent": "1532000",
+"note": ""
+},
+{
+"code": "1536000",
+"name": "儀器設備",
+"category": "15",
+"summary": "",
+"parent": "1536000",
+"note": ""
+},
+{
+"code": "1537000",
+"name": "累計折舊-儀器設備",
+"category": "15",
+"summary": "",
+"parent": "1537000",
+"note": ""
+},
+{
+"code": "1538000",
+"name": "試驗設備",
+"category": "15",
+"summary": "",
+"parent": "1538000",
+"note": ""
+},
+{
+"code": "1539000",
+"name": "累計折舊-試驗設備",
+"category": "15",
+"summary": "",
+"parent": "1539000",
+"note": ""
+},
+{
+"code": "1541000",
+"name": "交通及運輸設備",
+"category": "15",
+"summary": "",
+"parent": "1541000",
+"note": ""
+},
+{
+"code": "1542000",
+"name": "累計折舊-交通及運輸",
+"category": "15",
+"summary": "",
+"parent": "1542000",
+"note": ""
+},
+{
+"code": "1551000",
+"name": "其他設備",
+"category": "15",
+"summary": "",
+"parent": "1551000",
+"note": ""
+},
+{
+"code": "1552000",
+"name": "累計折舊-其他設備",
+"category": "15",
+"summary": "",
+"parent": "1552000",
+"note": ""
+},
+{
+"code": "1571000",
+"name": "未完工程",
+"category": "15",
+"summary": "",
+"parent": "1571000",
+"note": ""
+},
+{
+"code": "1578000",
+"name": "預付購置設備款",
+"category": "15",
+"summary": "",
+"parent": "1578000",
+"note": ""
+},
+{
+"code": "1591000",
+"name": "租賃資產",
+"category": "15",
+"summary": "",
+"parent": "1591000",
+"note": ""
+},
+{
+"code": "1592000",
+"name": "累計折舊-租賃資產",
+"category": "15",
+"summary": "",
+"parent": "1592000",
+"note": ""
+},
+{
+"code": "1603000",
+"name": "天然資源",
+"category": "16",
+"summary": "",
+"parent": "1603000",
+"note": ""
+},
+{
+"code": "1604000",
+"name": "累計折耗-天然資源",
+"category": "16",
+"summary": "",
+"parent": "1604000",
+"note": ""
+},
+{
+"code": "1701000",
+"name": "商標權",
+"category": "17",
+"summary": "",
+"parent": "1701000",
+"note": ""
+},
+{
+"code": "1702000",
+"name": "專利權",
+"category": "17",
+"summary": "",
+"parent": "1702000",
+"note": ""
+},
+{
+"code": "1703000",
+"name": "特許權",
+"category": "17",
+"summary": "",
+"parent": "1703000",
+"note": ""
+},
+{
+"code": "1704000",
+"name": "著作權",
+"category": "17",
+"summary": "",
+"parent": "1704000",
+"note": ""
+},
+{
+"code": "1705000",
+"name": "典權權益",
+"category": "17",
+"summary": "",
+"parent": "1705000",
+"note": ""
+},
+{
+"code": "1707000",
+"name": "商譽",
+"category": "17",
+"summary": "",
+"parent": "1707000",
+"note": ""
+},
+{
+"code": "1709000",
+"name": "租賃權益",
+"category": "17",
+"summary": "",
+"parent": "1709000",
+"note": ""
+},
+{
+"code": "1801000",
+"name": "閒置資產",
+"category": "18",
+"summary": "",
+"parent": "1801000",
+"note": ""
+},
+{
+"code": "1802000",
+"name": "累計折舊-閒置資產",
+"category": "18",
+"summary": "",
+"parent": "1802000",
+"note": ""
+},
+{
+"code": "1808000",
+"name": "其他非營業資產",
+"category": "18",
+"summary": "",
+"parent": "1808000",
+"note": ""
+},
+{
+"code": "1809000",
+"name": "累計折舊-非營業資產",
+"category": "18",
+"summary": "",
+"parent": "1809000",
+"note": ""
+},
+{
+"code": "1821000",
+"name": "存出保證金",
+"category": "18",
+"summary": "",
+"parent": "1821000",
+"note": ""
+},
+{
+"code": "1822000",
+"name": "催收款項",
+"category": "18",
+"summary": "",
+"parent": "1822000",
+"note": ""
+},
+{
+"code": "1823000",
+"name": "備抵呆帳-催收款項",
+"category": "18",
+"summary": "",
+"parent": "1823000",
+"note": ""
+},
+{
+"code": "1824000",
+"name": "代付款",
+"category": "18",
+"summary": "",
+"parent": "1824000",
+"note": ""
+},
+{
+"code": "1824001",
+"name": "代付租金",
+"category": "18",
+"summary": "",
+"parent": "1824000",
+"note": ""
+},
+{
+"code": "1824002",
+"name": "法院扣薪",
+"category": "18",
+"summary": "",
+"parent": "1824000",
+"note": "陳喬惠法院扣薪"
+},
+{
+"code": "1825000",
+"name": "暫付款",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825001",
+"name": "暫付款-A",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825002",
+"name": "暫付款-陳連發",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825003",
+"name": "暫付款-賴元隆",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825004",
+"name": "暫付款-王中彥",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825005",
+"name": "暫付款-林映谷",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825006",
+"name": "暫付款-楊國松",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825007",
+"name": "暫付款-陳軒偉",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1825008",
+"name": "邱冠宏",
+"category": "18",
+"summary": "",
+"parent": "1825000",
+"note": ""
+},
+{
+"code": "1827000",
+"name": "內部往來",
+"category": "18",
+"summary": "",
+"parent": "1827000",
+"note": ""
+},
+{
+"code": "1829000",
+"name": "其他什項資產",
+"category": "18",
+"summary": "",
+"parent": "1829000",
+"note": ""
+},
+{
+"code": "1829001",
+"name": "台企銀美金壽險",
+"category": "18",
+"summary": "",
+"parent": "1829000",
+"note": ""
+},
+{
+"code": "1829002",
+"name": "台新銀美金壽險",
+"category": "18",
+"summary": "",
+"parent": "1829000",
+"note": ""
+},
+{
+"code": "1841000",
+"name": "開辦費",
+"category": "18",
+"summary": "",
+"parent": "1841000",
+"note": ""
+},
+{
+"code": "1845000",
+"name": "技術合作費",
+"category": "18",
+"summary": "",
+"parent": "1845000",
+"note": ""
+},
+{
+"code": "1847000",
+"name": "遞延兌換損失",
+"category": "18",
+"summary": "",
+"parent": "1847000",
+"note": ""
+},
+{
+"code": "1848000",
+"name": "買賣遠匯折價",
+"category": "18",
+"summary": "",
+"parent": "1848000",
+"note": ""
+},
+{
+"code": "1851000",
+"name": "債券發行費用",
+"category": "18",
+"summary": "",
+"parent": "1851000",
+"note": ""
+},
+{
+"code": "1853000",
+"name": "遞延所得稅",
+"category": "18",
+"summary": "",
+"parent": "1853000",
+"note": ""
+},
+{
+"code": "1854000",
+"name": "權利金",
+"category": "18",
+"summary": "",
+"parent": "1854000",
+"note": ""
+},
+{
+"code": "1855000",
+"name": "電腦軟體開發費",
+"category": "18",
+"summary": "",
+"parent": "1855000",
+"note": ""
+},
+{
+"code": "1856000",
+"name": "預支薪資",
+"category": "18",
+"summary": "",
+"parent": "1856000",
+"note": ""
+},
+{
+"code": "1856001",
+"name": "邱冠宏預支薪資",
+"category": "18",
+"summary": "",
+"parent": "1856000",
+"note": ""
+},
+{
+"code": "1856002",
+"name": "游玉鳳預支薪資",
+"category": "18",
+"summary": "",
+"parent": "1856000",
+"note": ""
+},
+{
+"code": "1856003",
+"name": "林佩宜預支薪資",
+"category": "18",
+"summary": "",
+"parent": "1856000",
+"note": ""
+},
+{
+"code": "1856004",
+"name": "陳喬惠預支薪資",
+"category": "18",
+"summary": "",
+"parent": "1856000",
+"note": ""
+},
+{
+"code": "1856005",
+"name": "預支薪資",
+"category": "18",
+"summary": "",
+"parent": "1856000",
+"note": ""
+},
+{
+"code": "1859000",
+"name": "其他遞延費用",
+"category": "18",
+"summary": "",
+"parent": "1859000",
+"note": ""
+},
+{
+"code": "1863000",
+"name": "保管品",
+"category": "18",
+"summary": "",
+"parent": "1863000",
+"note": ""
+},
+{
+"code": "1864000",
+"name": "保證品",
+"category": "18",
+"summary": "",
+"parent": "1864000",
+"note": ""
+},
+{
+"code": "1873000",
+"name": "應收保證票據",
+"category": "18",
+"summary": "",
+"parent": "1873000",
+"note": ""
+},
+{
+"code": "1874000",
+"name": "存出保證票據",
+"category": "18",
+"summary": "",
+"parent": "1874000",
+"note": ""
+},
+{
+"code": "1885000",
+"name": "承銷品",
+"category": "18",
+"summary": "",
+"parent": "1885000",
+"note": ""
+},
+{
+"code": "2101000",
+"name": "銀行透支",
+"category": "21",
+"summary": "",
+"parent": "2101000",
+"note": ""
+},
+{
+"code": "2102000",
+"name": "銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102001",
+"name": "中國信託銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102002",
+"name": "華南銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102003",
+"name": "彰化銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102004",
+"name": "台灣中小企銀銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102005",
+"name": "兆豐商銀借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102006",
+"name": "合作金庫銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102007",
+"name": "台新銀行借款",
+"category": "21",
+"summary": "",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2102008",
+"name": "玉山銀行借款",
+"category": "21",
+"summary": "玉山300K/$79332  玉山240K  玉山960K",
+"parent": "2102000",
+"note": ""
+},
+{
+"code": "2103000",
+"name": "應付商業本票",
+"category": "21",
+"summary": "",
+"parent": "2103000",
+"note": ""
+},
+{
+"code": "2104000",
+"name": "應付商業本票折價",
+"category": "21",
+"summary": "",
+"parent": "2104000",
+"note": ""
+},
+{
+"code": "2109000",
+"name": "其他短期借款",
+"category": "21",
+"summary": "",
+"parent": "2109000",
+"note": ""
+},
+{
+"code": "2141000",
+"name": "應付票據",
+"category": "21",
+"summary": "",
+"parent": "2141000",
+"note": ""
+},
+{
+"code": "2144000",
+"name": "應付帳款",
+"category": "21",
+"summary": "",
+"parent": "2144000",
+"note": ""
+},
+{
+"code": "2147000",
+"name": "應付費用",
+"category": "21",
+"summary": "",
+"parent": "2147000",
+"note": ""
+},
+{
+"code": "2148000",
+"name": "應付所得稅",
+"category": "21",
+"summary": "",
+"parent": "2148000",
+"note": ""
+},
+{
+"code": "2149000",
+"name": "應付其他稅捐",
+"category": "21",
+"summary": "",
+"parent": "2149000",
+"note": ""
+},
+{
+"code": "2150000",
+"name": "暫估應付機料款",
+"category": "21",
+"summary": "",
+"parent": "2150000",
+"note": ""
+},
+{
+"code": "2154000",
+"name": "應付股利",
+"category": "21",
+"summary": "",
+"parent": "2154000",
+"note": ""
+},
+{
+"code": "2155000",
+"name": "應付薪資",
+"category": "21",
+"summary": "",
+"parent": "2155000",
+"note": ""
+},
+{
+"code": "2156000",
+"name": "應付獎金",
+"category": "21",
+"summary": "",
+"parent": "2156000",
+"note": ""
+},
+{
+"code": "2173000",
+"name": "應收遠匯款-外幣",
+"category": "21",
+"summary": "",
+"parent": "2173000",
+"note": ""
+},
+{
+"code": "2175000",
+"name": "應付遠匯款-外幣",
+"category": "21",
+"summary": "",
+"parent": "2175000",
+"note": ""
+},
+{
+"code": "2176000",
+"name": "應收出售遠匯款",
+"category": "21",
+"summary": "",
+"parent": "2176000",
+"note": ""
+},
+{
+"code": "2178000",
+"name": "其他應付款",
+"category": "21",
+"summary": "",
+"parent": "2178000",
+"note": ""
+},
+{
+"code": "2251000",
+"name": "預收貨款",
+"category": "22",
+"summary": "",
+"parent": "2251000",
+"note": ""
+},
+{
+"code": "2253000",
+"name": "預收收入",
+"category": "22",
+"summary": "",
+"parent": "2253000",
+"note": ""
+},
+{
+"code": "2254000",
+"name": "預收稅額",
+"category": "22",
+"summary": "",
+"parent": "2254000",
+"note": ""
+},
+{
+"code": "2259000",
+"name": "其他預收款",
+"category": "22",
+"summary": "",
+"parent": "2259000",
+"note": ""
+},
+{
+"code": "2281000",
+"name": "銷項稅額",
+"category": "22",
+"summary": "",
+"parent": "2281000",
+"note": ""
+},
+{
+"code": "2289000",
+"name": "其他流動負債",
+"category": "22",
+"summary": "",
+"parent": "2289000",
+"note": ""
+},
+{
+"code": "2501000",
+"name": "應付公司債券",
+"category": "25",
+"summary": "",
+"parent": "2501000",
+"note": ""
+},
+{
+"code": "2502000",
+"name": "應付債券溢價",
+"category": "25",
+"summary": "",
+"parent": "2502000",
+"note": ""
+},
+{
+"code": "2503000",
+"name": "應付債券折價",
+"category": "25",
+"summary": "",
+"parent": "2503000",
+"note": ""
+},
+{
+"code": "2504000",
+"name": "長期借款",
+"category": "25",
+"summary": "",
+"parent": "2504000",
+"note": ""
+},
+{
+"code": "2504001",
+"name": "台壽保資融長期借款",
+"category": "25",
+"summary": "",
+"parent": "2504000",
+"note": ""
+},
+{
+"code": "2504002",
+"name": "中租迪和長期借款",
+"category": "25",
+"summary": "",
+"parent": "2504000",
+"note": ""
+},
+{
+"code": "2504003",
+"name": "台新大安租賃長期借款",
+"category": "25",
+"summary": "",
+"parent": "2504000",
+"note": ""
+},
+{
+"code": "2505000",
+"name": "長期應付款",
+"category": "25",
+"summary": "",
+"parent": "2505000",
+"note": ""
+},
+{
+"code": "2506000",
+"name": "應付分期帳款",
+"category": "25",
+"summary": "",
+"parent": "2506000",
+"note": ""
+},
+{
+"code": "2509000",
+"name": "應付租賃負債",
+"category": "25",
+"summary": "",
+"parent": "2509000",
+"note": ""
+},
+{
+"code": "2519000",
+"name": "其他長期負債",
+"category": "25",
+"summary": "",
+"parent": "2519000",
+"note": ""
+},
+{
+"code": "2804000",
+"name": "兌換損失準備",
+"category": "28",
+"summary": "",
+"parent": "2804000",
+"note": ""
+},
+{
+"code": "2807000",
+"name": "外銷損失準備",
+"category": "28",
+"summary": "",
+"parent": "2807000",
+"note": ""
+},
+{
+"code": "2818000",
+"name": "退休及離職金準備",
+"category": "28",
+"summary": "",
+"parent": "2818000",
+"note": ""
+},
+{
+"code": "2821000",
+"name": "存入保證金",
+"category": "28",
+"summary": "",
+"parent": "2821000",
+"note": ""
+},
+{
+"code": "2823000",
+"name": "土地增值稅負債",
+"category": "28",
+"summary": "",
+"parent": "2823000",
+"note": ""
+},
+{
+"code": "2824000",
+"name": "代收款",
+"category": "28",
+"summary": "",
+"parent": "2824000",
+"note": ""
+},
+{
+"code": "2824100",
+"name": "代收勞保",
+"category": "28",
+"summary": "",
+"parent": "2824000",
+"note": ""
+},
+{
+"code": "2824200",
+"name": "代收健保",
+"category": "28",
+"summary": "",
+"parent": "2824000",
+"note": ""
+},
+{
+"code": "2824300",
+"name": "代收租金",
+"category": "28",
+"summary": "",
+"parent": "2824000",
+"note": ""
+},
+{
+"code": "2824400",
+"name": "代收勞退",
+"category": "28",
+"summary": "",
+"parent": "2824000",
+"note": ""
+},
+{
+"code": "2825000",
+"name": "暫收款",
+"category": "28",
+"summary": "",
+"parent": "2825000",
+"note": ""
+},
+{
+"code": "2827000",
+"name": "內部往來",
+"category": "28",
+"summary": "",
+"parent": "2827000",
+"note": ""
+},
+{
+"code": "2829000",
+"name": "其他什項負債",
+"category": "28",
+"summary": "",
+"parent": "2829000",
+"note": ""
+},
+{
+"code": "2838000",
+"name": "遞延應付所得稅",
+"category": "28",
+"summary": "",
+"parent": "2838000",
+"note": ""
+},
+{
+"code": "2839000",
+"name": "遞延所得稅抵減",
+"category": "28",
+"summary": "",
+"parent": "2839000",
+"note": ""
+},
+{
+"code": "2847000",
+"name": "遞延兌換利益",
+"category": "28",
+"summary": "",
+"parent": "2847000",
+"note": ""
+},
+{
+"code": "2848000",
+"name": "買賣遠匯溢價",
+"category": "28",
+"summary": "",
+"parent": "2848000",
+"note": ""
+},
+{
+"code": "2849000",
+"name": "其他遞延收入",
+"category": "28",
+"summary": "",
+"parent": "2849000",
+"note": ""
+},
+{
+"code": "2863000",
+"name": "應付保管品",
+"category": "28",
+"summary": "",
+"parent": "2863000",
+"note": ""
+},
+{
+"code": "2864000",
+"name": "存入保證品",
+"category": "28",
+"summary": "",
+"parent": "2864000",
+"note": ""
+},
+{
+"code": "2873000",
+"name": "存入保證票據",
+"category": "28",
+"summary": "",
+"parent": "2873000",
+"note": ""
+},
+{
+"code": "2874000",
+"name": "應付保證票據",
+"category": "28",
+"summary": "",
+"parent": "2874000",
+"note": ""
+},
+{
+"code": "2885000",
+"name": "應付承銷款",
+"category": "28",
+"summary": "",
+"parent": "2885000",
+"note": ""
+},
+{
+"code": "3101000",
+"name": "股本",
+"category": "31",
+"summary": "",
+"parent": "3101000",
+"note": ""
+},
+{
+"code": "3109000",
+"name": "預收股本",
+"category": "31",
+"summary": "",
+"parent": "3109000",
+"note": ""
+},
+{
+"code": "3201000",
+"name": "股本溢價",
+"category": "32",
+"summary": "",
+"parent": "3201000",
+"note": ""
+},
+{
+"code": "3203000",
+"name": "土地重估增值準備",
+"category": "32",
+"summary": "",
+"parent": "3203000",
+"note": ""
+},
+{
+"code": "3204000",
+"name": "固定資產漲價補償準備",
+"category": "32",
+"summary": "",
+"parent": "3204000",
+"note": ""
+},
+{
+"code": "3205000",
+"name": "資產增值準備",
+"category": "32",
+"summary": "",
+"parent": "3205000",
+"note": ""
+},
+{
+"code": "3209000",
+"name": "其他資本公積",
+"category": "32",
+"summary": "",
+"parent": "3209000",
+"note": ""
+},
+{
+"code": "3301000",
+"name": "法定公積",
+"category": "33",
+"summary": "",
+"parent": "3301000",
+"note": ""
+},
+{
+"code": "3302000",
+"name": "特別公積",
+"category": "33",
+"summary": "",
+"parent": "3302000",
+"note": ""
+},
+{
+"code": "3311000",
+"name": "累積盈虧",
+"category": "33",
+"summary": "",
+"parent": "3311000",
+"note": ""
+},
+{
+"code": "3317000",
+"name": "前期損益",
+"category": "33",
+"summary": "",
+"parent": "3317000",
+"note": ""
+},
+{
+"code": "3318000",
+"name": "累積盈虧調整",
+"category": "33",
+"summary": "",
+"parent": "3318000",
+"note": ""
+},
+{
+"code": "3319000",
+"name": "本期損益",
+"category": "33",
+"summary": "",
+"parent": "3319000",
+"note": ""
+},
+{
+"code": "4101000",
+"name": "銷貨收入",
+"category": "41",
+"summary": "",
+"parent": "4101000",
+"note": ""
+},
+{
+"code": "4102000",
+"name": "銷貨退回",
+"category": "41",
+"summary": "",
+"parent": "4102000",
+"note": ""
+},
+{
+"code": "4103000",
+"name": "銷貨折讓",
+"category": "41",
+"summary": "",
+"parent": "4103000",
+"note": ""
+},
+{
+"code": "4203000",
+"name": "加工收入",
+"category": "42",
+"summary": "",
+"parent": "4203000",
+"note": ""
+},
+{
+"code": "4205000",
+"name": "勞務收入",
+"category": "42",
+"summary": "",
+"parent": "4205000",
+"note": ""
+},
+{
+"code": "4301000",
+"name": "業務收入",
+"category": "43",
+"summary": "",
+"parent": "4301000",
+"note": ""
+},
+{
+"code": "4302000",
+"name": "業務折讓",
+"category": "43",
+"summary": "",
+"parent": "4302000",
+"note": ""
+},
+{
+"code": "4609000",
+"name": "其他營業收入",
+"category": "46",
+"summary": "",
+"parent": "4609000",
+"note": ""
+},
+{
+"code": "4609001",
+"name": "應收帳款溢收款",
+"category": "46",
+"summary": "",
+"parent": "4609000",
+"note": ""
+},
+{
+"code": "5101000",
+"name": "銷貨成本",
+"category": "51",
+"summary": "",
+"parent": "5101000",
+"note": ""
+},
+{
+"code": "5102000",
+"name": "盤存轉存貨",
+"category": "51",
+"summary": "",
+"parent": "5102000",
+"note": ""
+},
+{
+"code": "5103000",
+"name": "期初存貨",
+"category": "51",
+"summary": "",
+"parent": "5103000",
+"note": ""
+},
+{
+"code": "5104000",
+"name": "期末存貨",
+"category": "51",
+"summary": "",
+"parent": "5104000",
+"note": ""
+},
+{
+"code": "5201000",
+"name": "進貨",
+"category": "52",
+"summary": "",
+"parent": "5201000",
+"note": ""
+},
+{
+"code": "5203000",
+"name": "進貨退出",
+"category": "52",
+"summary": "",
+"parent": "5203000",
+"note": ""
+},
+{
+"code": "5204000",
+"name": "進貨折讓",
+"category": "52",
+"summary": "",
+"parent": "5204000",
+"note": ""
+},
+{
+"code": "5301000",
+"name": "進料",
+"category": "53",
+"summary": "",
+"parent": "5301000",
+"note": ""
+},
+{
+"code": "5303000",
+"name": "進料退出",
+"category": "53",
+"summary": "",
+"parent": "5303000",
+"note": ""
+},
+{
+"code": "5304000",
+"name": "進料折讓",
+"category": "53",
+"summary": "",
+"parent": "5304000",
+"note": ""
+},
+{
+"code": "5401000",
+"name": "直接人工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401001",
+"name": "車床加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401002",
+"name": "銑床加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401003",
+"name": "滾齒加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401004",
+"name": "熱處理加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401005",
+"name": "研磨加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401006",
+"name": "其他委外加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401007",
+"name": "插齒加工",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": ""
+},
+{
+"code": "5401008",
+"name": "刀具磨銳",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": "滾刀、插齒刀…等等"
+},
+{
+"code": "5401009",
+"name": "刀具表面處理",
+"category": "54",
+"summary": "",
+"parent": "5401000",
+"note": "滾刀、插齒刀…等等"
+},
+{
+"code": "5500000",
+"name": "製造費用",
+"category": "55",
+"summary": "",
+"parent": "5500000",
+"note": ""
+},
+{
+"code": "5605000",
+"name": "勞務成本",
+"category": "56",
+"summary": "",
+"parent": "5605000",
+"note": ""
+},
+{
+"code": "5701000",
+"name": "業務成本",
+"category": "57",
+"summary": "",
+"parent": "5701000",
+"note": ""
+},
+{
+"code": "5901000",
+"name": "其他營業成本",
+"category": "59",
+"summary": "",
+"parent": "5901000",
+"note": ""
+},
+{
+"code": "6100000",
+"name": "推銷費用",
+"category": "61",
+"summary": "",
+"parent": "6100000",
+"note": ""
+},
+{
+"code": "6200000",
+"name": "管理及總務費用",
+"category": "62",
+"summary": "",
+"parent": "6200000",
+"note": ""
+},
+{
+"code": "6200001",
+"name": "公司管理經營費用",
+"category": "62",
+"summary": "",
+"parent": "6200000",
+"note": ""
+},
+{
+"code": "6201000",
+"name": "薪資費用",
+"category": "62",
+"summary": "月份薪資費用",
+"parent": "6201000",
+"note": ""
+},
+{
+"code": "6201001",
+"name": "薪資費用",
+"category": "62",
+"summary": "",
+"parent": "6201000",
+"note": ""
+},
+{
+"code": "6201002",
+"name": "主管/職務加級費用",
+"category": "62",
+"summary": "",
+"parent": "6201000",
+"note": ""
+},
+{
+"code": "6201003",
+"name": "契約費用",
+"category": "62",
+"summary": "",
+"parent": "6201000",
+"note": ""
+},
+{
+"code": "6201004",
+"name": "非經常性薪資",
+"category": "62",
+"summary": "",
+"parent": "6201000",
+"note": ""
+},
+{
+"code": "6202000",
+"name": "租金費用",
+"category": "62",
+"summary": "",
+"parent": "6202000",
+"note": ""
+},
+{
+"code": "6203000",
+"name": "文具用品",
+"category": "62",
+"summary": "",
+"parent": "6203000",
+"note": ""
+},
+{
+"code": "6204000",
+"name": "旅費",
+"category": "62",
+"summary": "",
+"parent": "6204000",
+"note": ""
+},
+{
+"code": "6205000",
+"name": "運費",
+"category": "62",
+"summary": "",
+"parent": "6205000",
+"note": ""
+},
+{
+"code": "6206000",
+"name": "郵電費",
+"category": "62",
+"summary": "發票郵資",
+"parent": "6206000",
+"note": ""
+},
+{
+"code": "6207000",
+"name": "修繕費",
+"category": "62",
+"summary": "",
+"parent": "6207000",
+"note": ""
+},
+{
+"code": "6208000",
+"name": "廣告費",
+"category": "62",
+"summary": "",
+"parent": "6208000",
+"note": ""
+},
+{
+"code": "6209000",
+"name": "水電費",
+"category": "62",
+"summary": "85水4F294577377+81/4F294577398+162/4F294577005",
+"parent": "6209000",
+"note": ""
+},
+{
+"code": "6210000",
+"name": "保險費",
+"category": "62",
+"summary": "",
+"parent": "6210000",
+"note": ""
+},
+{
+"code": "6211000",
+"name": "交際費",
+"category": "62",
+"summary": "",
+"parent": "6211000",
+"note": ""
+},
+{
+"code": "6212000",
+"name": "捐贈",
+"category": "62",
+"summary": "",
+"parent": "6212000",
+"note": ""
+},
+{
+"code": "6213000",
+"name": "稅捐",
+"category": "62",
+"summary": "",
+"parent": "6213000",
+"note": ""
+},
+{
+"code": "6214000",
+"name": "呆帳損失",
+"category": "62",
+"summary": "",
+"parent": "6214000",
+"note": ""
+},
+{
+"code": "6215000",
+"name": "折舊及折耗",
+"category": "62",
+"summary": "",
+"parent": "6215000",
+"note": ""
+},
+{
+"code": "6216000",
+"name": "各項攤銷",
+"category": "62",
+"summary": "",
+"parent": "6216000",
+"note": ""
+},
+{
+"code": "6217000",
+"name": "交通費",
+"category": "62",
+"summary": "RDR1919 1977P2 7935SM BRR7550 BES2093NKZ193BVX2016",
+"parent": "6217000",
+"note": ""
+},
+{
+"code": "6218000",
+"name": "伙食費",
+"category": "62",
+"summary": "",
+"parent": "6218000",
+"note": ""
+},
+{
+"code": "6219000",
+"name": "職工福利",
+"category": "62",
+"summary": "",
+"parent": "6219000",
+"note": ""
+},
+{
+"code": "6220000",
+"name": "研究實驗費",
+"category": "62",
+"summary": "",
+"parent": "6220000",
+"note": ""
+},
+{
+"code": "6221000",
+"name": "佣金",
+"category": "62",
+"summary": "",
+"parent": "6221000",
+"note": ""
+},
+{
+"code": "6222000",
+"name": "職業訓練費",
+"category": "62",
+"summary": "",
+"parent": "6222000",
+"note": ""
+},
+{
+"code": "6223000",
+"name": "勞務費",
+"category": "62",
+"summary": "記帳費 增資代辦費",
+"parent": "6223000",
+"note": ""
+},
+{
+"code": "6224000",
+"name": "燃料費",
+"category": "62",
+"summary": "",
+"parent": "6224000",
+"note": ""
+},
+{
+"code": "6225000",
+"name": "團體會費",
+"category": "62",
+"summary": "",
+"parent": "6225000",
+"note": "台灣機械公會會費/台中機械公會會費"
+},
+{
+"code": "6226000",
+"name": "書報雜誌",
+"category": "62",
+"summary": "",
+"parent": "6226000",
+"note": ""
+},
+{
+"code": "6227000",
+"name": "權利金",
+"category": "62",
+"summary": "",
+"parent": "6227000",
+"note": ""
+},
+{
+"code": "6228000",
+"name": "印刷費",
+"category": "62",
+"summary": "",
+"parent": "6228000",
+"note": ""
+},
+{
+"code": "6229000",
+"name": "加班費",
+"category": "62",
+"summary": "",
+"parent": "6229000",
+"note": ""
+},
+{
+"code": "6229001",
+"name": "加班費",
+"category": "62",
+"summary": "",
+"parent": "6229000",
+"note": ""
+},
+{
+"code": "6229002",
+"name": "加班費-假日",
+"category": "62",
+"summary": "",
+"parent": "6229000",
+"note": ""
+},
+{
+"code": "6230000",
+"name": "三節/年終/未休假獎金",
+"category": "62",
+"summary": "",
+"parent": "6230000",
+"note": ""
+},
+{
+"code": "6231000",
+"name": "勞保",
+"category": "62",
+"summary": "",
+"parent": "6231000",
+"note": ""
+},
+{
+"code": "6232000",
+"name": "勞退",
+"category": "62",
+"summary": "",
+"parent": "6232000",
+"note": ""
+},
+{
+"code": "6233000",
+"name": "健保",
+"category": "62",
+"summary": "",
+"parent": "6233000",
+"note": ""
+},
+{
+"code": "6235000",
+"name": "電腦及周邊軟體",
+"category": "62",
+"summary": "",
+"parent": "6235000",
+"note": ""
+},
+{
+"code": "6236000",
+"name": "搬運費",
+"category": "62",
+"summary": "",
+"parent": "6236000",
+"note": ""
+},
+{
+"code": "6237000",
+"name": "會議費",
+"category": "62",
+"summary": "",
+"parent": "6237000",
+"note": ""
+},
+{
+"code": "6238000",
+"name": "出口費用",
+"category": "62",
+"summary": "",
+"parent": "6238000",
+"note": ""
+},
+{
+"code": "6239000",
+"name": "關稅費",
+"category": "62",
+"summary": "",
+"parent": "6239000",
+"note": ""
+},
+{
+"code": "6240000",
+"name": "包裝費",
+"category": "62",
+"summary": "",
+"parent": "6240000",
+"note": ""
+},
+{
+"code": "6241000",
+"name": "快遞費",
+"category": "62",
+"summary": "",
+"parent": "6241000",
+"note": ""
+},
+{
+"code": "6242000",
+"name": "組裝費",
+"category": "62",
+"summary": "",
+"parent": "6242000",
+"note": ""
+},
+{
+"code": "6243000",
+"name": "服務費",
+"category": "62",
+"summary": "",
+"parent": "6243000",
+"note": ""
+},
+{
+"code": "6244000",
+"name": "改裝費",
+"category": "62",
+"summary": "",
+"parent": "6244000",
+"note": ""
+},
+{
+"code": "6245000",
+"name": "加工費",
+"category": "62",
+"summary": "",
+"parent": "6245000",
+"note": ""
+},
+{
+"code": "6246000",
+"name": "消耗品",
+"category": "62",
+"summary": "",
+"parent": "6246000",
+"note": ""
+},
+{
+"code": "6247000",
+"name": "雜項購置",
+"category": "62",
+"summary": "",
+"parent": "6247000",
+"note": ""
+},
+{
+"code": "6248000",
+"name": "員工宿舍",
+"category": "62",
+"summary": "",
+"parent": "6248000",
+"note": ""
+},
+{
+"code": "6249000",
+"name": "其他費用",
+"category": "62",
+"summary": "",
+"parent": "6249000",
+"note": ""
+},
+{
+"code": "6249100",
+"name": "制造什費",
+"category": "62",
+"summary": "",
+"parent": "6249000",
+"note": ""
+},
+{
+"code": "6249101",
+"name": "校正費用",
+"category": "62",
+"summary": "",
+"parent": "6249100",
+"note": ""
+},
+{
+"code": "6249102",
+"name": "未定義2",
+"category": "62",
+"summary": "",
+"parent": "6249100",
+"note": ""
+},
+{
+"code": "6249103",
+"name": "未定義3",
+"category": "62",
+"summary": "",
+"parent": "6249100",
+"note": ""
+},
+{
+"code": "6249104",
+"name": "未定義4",
+"category": "62",
+"summary": "",
+"parent": "6249100",
+"note": ""
+},
+{
+"code": "6249105",
+"name": "未定義5",
+"category": "62",
+"summary": "",
+"parent": "6249100",
+"note": ""
+},
+{
+"code": "6250000",
+"name": "銀行手續費",
+"category": "62",
+"summary": "",
+"parent": "6250000",
+"note": ""
+},
+{
+"code": "6260000",
+"name": "雜費",
+"category": "62",
+"summary": "",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260001",
+"name": "就業安定費",
+"category": "62",
+"summary": "就業安定費",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260002",
+"name": "清潔用品",
+"category": "62",
+"summary": "清潔用品",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260003",
+"name": "校正費用",
+"category": "62",
+"summary": "校正機台量具",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260004",
+"name": "廢棄物處理費",
+"category": "62",
+"summary": "廢棄物處理費",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260005",
+"name": "看診費用",
+"category": "62",
+"summary": "看診費用",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260006",
+"name": "車輛檢驗費",
+"category": "62",
+"summary": "車輛檢驗費",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260007",
+"name": "進項銷項雜費",
+"category": "62",
+"summary": "",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "6260008",
+"name": "罰款損失費用",
+"category": "62",
+"summary": "罰款損失費用",
+"parent": "6260000",
+"note": ""
+},
+{
+"code": "7101000",
+"name": "利息收入",
+"category": "71",
+"summary": "",
+"parent": "7101000",
+"note": ""
+},
+{
+"code": "7102000",
+"name": "兌換利益",
+"category": "71",
+"summary": "",
+"parent": "7102000",
+"note": ""
+},
+{
+"code": "7103000",
+"name": "租賃收入",
+"category": "71",
+"summary": "",
+"parent": "7103000",
+"note": ""
+},
+{
+"code": "7104000",
+"name": "佣金收入",
+"category": "71",
+"summary": "",
+"parent": "7104000",
+"note": ""
+},
+{
+"code": "7105000",
+"name": "投資利益",
+"category": "71",
+"summary": "",
+"parent": "7105000",
+"note": ""
+},
+{
+"code": "7111000",
+"name": "財產交易利益",
+"category": "71",
+"summary": "",
+"parent": "7111000",
+"note": ""
+},
+{
+"code": "7112000",
+"name": "盤存盈餘",
+"category": "71",
+"summary": "",
+"parent": "7112000",
+"note": ""
+},
+{
+"code": "7119000",
+"name": "權利金收入",
+"category": "71",
+"summary": "",
+"parent": "7119000",
+"note": ""
+},
+{
+"code": "7121000",
+"name": "出售下腳及廢料收入",
+"category": "71",
+"summary": "",
+"parent": "7121000",
+"note": ""
+},
+{
+"code": "7122000",
+"name": "賠償收入",
+"category": "71",
+"summary": "",
+"parent": "7122000",
+"note": ""
+},
+{
+"code": "7124000",
+"name": "政府補助收入",
+"category": "71",
+"summary": "",
+"parent": "7124000",
+"note": ""
+},
+{
+"code": "7129000",
+"name": "什項收入",
+"category": "71",
+"summary": "",
+"parent": "7129000",
+"note": ""
+},
+{
+"code": "7301000",
+"name": "利息費用",
+"category": "73",
+"summary": "",
+"parent": "7301000",
+"note": ""
+},
+{
+"code": "7302000",
+"name": "兌換損失",
+"category": "73",
+"summary": "",
+"parent": "7302000",
+"note": ""
+},
+{
+"code": "7303000",
+"name": "災害損失",
+"category": "73",
+"summary": "",
+"parent": "7303000",
+"note": ""
+},
+{
+"code": "7305000",
+"name": "投資損失",
+"category": "73",
+"summary": "",
+"parent": "7305000",
+"note": ""
+},
+{
+"code": "7311000",
+"name": "財產交易損失",
+"category": "73",
+"summary": "",
+"parent": "7311000",
+"note": ""
+},
+{
+"code": "7312000",
+"name": "盤存損失",
+"category": "73",
+"summary": "",
+"parent": "7312000",
+"note": ""
+},
+{
+"code": "7314000",
+"name": "賠償損失",
+"category": "73",
+"summary": "",
+"parent": "7314000",
+"note": ""
+},
+{
+"code": "7315000",
+"name": "存貨跌價損失",
+"category": "73",
+"summary": "",
+"parent": "7315000",
+"note": ""
+},
+{
+"code": "7321000",
+"name": "外銷損失",
+"category": "73",
+"summary": "",
+"parent": "7321000",
+"note": ""
+},
+{
+"code": "7322000",
+"name": "停工損失",
+"category": "73",
+"summary": "",
+"parent": "7322000",
+"note": ""
+},
+{
+"code": "7327000",
+"name": "出售材料損失",
+"category": "73",
+"summary": "",
+"parent": "7327000",
+"note": ""
+},
+{
+"code": "7328000",
+"name": "有價證券跌價損失",
+"category": "73",
+"summary": "",
+"parent": "7328000",
+"note": ""
+},
+{
+"code": "7329000",
+"name": "什項支出",
+"category": "73",
+"summary": "",
+"parent": "7329000",
+"note": ""
+},
+{
+"code": "8101000",
+"name": "所得稅費用",
+"category": "81",
+"summary": "",
+"parent": "8101000",
+"note": ""
+},
+{
+"code": "9101000",
+"name": "停業前營業損益",
+"category": "91",
+"summary": "",
+"parent": "9101000",
+"note": ""
+},
+{
+"code": "9111000",
+"name": "停業後處分損益",
+"category": "91",
+"summary": "",
+"parent": "9111000",
+"note": ""
+},
+{
+"code": "9201000",
+"name": "非常損益",
+"category": "92",
+"summary": "",
+"parent": "9201000",
+"note": ""
+}
+],
+"categories": [
+{
+"code": "11",
+"name": "速動資產",
+"note": ""
+},
+{
+"code": "12",
+"name": "流動資產",
+"note": ""
+},
+{
+"code": "14",
+"name": "基金及長期投資",
+"note": ""
+},
+{
+"code": "15",
+"name": "固定資產",
+"note": ""
+},
+{
+"code": "16",
+"name": "遞耗資產",
+"note": ""
+},
+{
+"code": "17",
+"name": "無形資產",
+"note": ""
+},
+{
+"code": "18",
+"name": "其它資產",
+"note": ""
+},
+{
+"code": "21",
+"name": "流動負債(速動)",
+"note": ""
+},
+{
+"code": "22",
+"name": "流動負債",
+"note": ""
+},
+{
+"code": "25",
+"name": "長期負債",
+"note": ""
+},
+{
+"code": "28",
+"name": "其它負債",
+"note": ""
+},
+{
+"code": "31",
+"name": "股本",
+"note": ""
+},
+{
+"code": "32",
+"name": "資本公積",
+"note": ""
+},
+{
+"code": "33",
+"name": "保留盈餘",
+"note": ""
+},
+{
+"code": "41",
+"name": "營業收入",
+"note": ""
+},
+{
+"code": "42",
+"name": "勞務收入",
+"note": ""
+},
+{
+"code": "43",
+"name": "業務收入",
+"note": ""
+},
+{
+"code": "46",
+"name": "其它營業收入",
+"note": ""
+},
+{
+"code": "51",
+"name": "營業成本",
+"note": ""
+},
+{
+"code": "52",
+"name": "進貨",
+"note": ""
+},
+{
+"code": "53",
+"name": "製造成本",
+"note": ""
+},
+{
+"code": "54",
+"name": "人工成本",
+"note": ""
+},
+{
+"code": "55",
+"name": "製造費用",
+"note": ""
+},
+{
+"code": "56",
+"name": "勞務成本",
+"note": ""
+},
+{
+"code": "57",
+"name": "業務成本",
+"note": ""
+},
+{
+"code": "59",
+"name": "其它營業成本",
+"note": ""
+},
+{
+"code": "61",
+"name": "推銷費用",
+"note": ""
+},
+{
+"code": "62",
+"name": "管理及總務費用",
+"note": ""
+},
+{
+"code": "71",
+"name": "營業外收入",
+"note": ""
+},
+{
+"code": "73",
+"name": "營業外費用",
+"note": ""
+},
+{
+"code": "81",
+"name": "所得稅",
+"note": ""
+},
+{
+"code": "91",
+"name": "停業損益",
+"note": ""
+},
+{
+"code": "92",
+"name": "非常損益",
+"note": ""
+}
+]
+}

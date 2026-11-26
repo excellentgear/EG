@@ -789,7 +789,7 @@ case 'vch_update': {
 case 'vch_accounts': {
     require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
     acc_voucher_ensure($db);
-    acc_out(['accounts' => acc_vch_accounts($db), 'all_accounts' => acc_vch_accounts($db, true), 'cfg' => acc_vch_acct_cfg($db), 'labels' => acc_vch_acct_labels(),
+    acc_out(['accounts' => acc_vch_accounts($db), 'all_accounts' => acc_vch_accounts($db, true), 'categories' => acc_vch_categories($db), 'cfg' => acc_vch_acct_cfg($db), 'labels' => acc_vch_acct_labels(),
              'slots' => acc_vch_sign_slots(), 'tax_rate' => acc_tax_rate($db), 'me' => (string)($u['user_cname'] ?? ($_SESSION['userName'] ?? '')),
              'company' => (string)$db->query("SELECT COALESCE(NULLIF(customer_full,''),customer) FROM customer_list WHERE is_own_company=1 ORDER BY customer_id LIMIT 1")->fetchColumn()]);
 }
@@ -801,9 +801,24 @@ case 'vch_accounts_save': {
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
     if (!is_array($rows) || !$rows) acc_err('沒有要儲存的科目');
-    foreach ($rows as &$rw) if (isset($rw['name'])) $rw['name'] = acc_u8((string)$rw['name']);
+    foreach ($rows as &$rw) foreach (['name', 'summary', 'note'] as $f) if (isset($rw[$f])) $rw[$f] = acc_u8((string)$rw[$f]);
     unset($rw);
     $r = acc_vch_accounts_save($db, $rows);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_categories_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    $del  = json_decode((string)($_POST['del'] ?? '[]'), true);
+    if (!is_array($rows) || !is_array($del)) acc_err('資料格式錯誤');
+    foreach ($rows as &$rw) foreach (['name', 'note'] as $f) if (isset($rw[$f])) $rw[$f] = acc_u8((string)$rw[$f]);
+    unset($rw);
+    $r = acc_vch_categories_save($db, $rows, $del);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }
