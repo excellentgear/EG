@@ -88,7 +88,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <div id="vBox" style="display:none;">
         <div class="a-bar" style="background:var(--a-bg2);">
           <label>傳票日期<span style="color:#DD5138;">＊</span></label><input type="date" id="vDate">
-          <label>ERP傳票號碼<span style="color:#DD5138;">＊</span></label><input type="text" id="vNo" maxlength="12" class="vno-in" autocomplete="off" data-eg-hint="完整 V-1151126001；也可只輸入 MMDD＋流水3碼（1126001）或 民國年MMDD流水3碼，自動補 V- 與民國年">
+          <label>ERP傳票號碼<span style="color:#DD5138;">＊</span></label><input type="text" id="vNo" maxlength="12" class="vno-in" autocomplete="off" data-eg-hint="完整 V-1151126001；只輸入 1~3 碼＝流水號（年月日取自傳票日期）；也可只輸入 MMDD＋流水3碼（1126001）或 民國年MMDD流水3碼，自動補 V- 與民國年">
           <span id="vNoErr" style="color:#DD5138;font-size:12.5px;"></span>
           <label>備註</label><input type="text" id="vNote" maxlength="200" style="width:200px;">
           <button id="btnVAll">全選可開立</button><button id="btnVNone">清除</button>
@@ -294,8 +294,10 @@ function nf2(n){ return Number(n||0).toLocaleString('en-US',{minimumFractionDigi
 function normNo(v, date){
   v=$.trim(String(v||'')).toUpperCase();
   if(/^\d{10}$/.test(v)) return 'V-'+v;
-  var m=/^(\d{4})-\d{2}-\d{2}$/.exec(date||'');
+  var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(date||'');
   if(/^\d{7}$/.test(v) && m) return 'V-'+('00'+(+m[1]-1911)).slice(-3)+v;
+  /* 只輸入 1~3 碼＝流水號：民國年與 MMDD 取自傳票日期 */
+  if(/^\d{1,3}$/.test(v) && m) return 'V-'+('00'+(+m[1]-1911)).slice(-3)+m[2]+m[3]+('00'+v).slice(-3);
   return v;
 }
 function noCheck(no, date){
