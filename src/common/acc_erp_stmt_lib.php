@@ -122,6 +122,26 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $site[$r['IS_number']][] = $r;
         }
     }
+    // 退貨單：ERP 對帳單裡數量／金額為負、或單號是 IR 開頭的明細。網頁退貨單每天由 ERP 同步，
+    // 所以只「比對」不更新（entry.kind='return'，沒有 is_id，更新動作碰不到）。
+    $retNos = [];
+    foreach ($lines as $l) if ($l['qty'] < 0 || $l['amount'] < 0 || preg_match('/^IR/i', (string)$l['no'])) $retNos[$l['no']] = 1;
+    $retNos = array_keys($retNos);
+    $siteRet = [];
+    for ($o = 0; $o < count($retNos); $o += 500) {
+        $part = array_slice($retNos, $o, 500);
+        $ph = implode(',', array_fill(0, count($part), '?'));
+        $st = $db->prepare("SELECT it.IR_id, it.IR_no, it.d_id, it.Qty, it.Unit_price, it.Client_name,
+                                   DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d
+                            FROM ir_track it LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
+                            WHERE it.IR_no IN ($ph) AND COALESCE(rt.is_note,0) = 0 ORDER BY it.IR_id");
+        $st->execute($part);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $siteRet[$r['IR_no']][] = ['IS_id' => null, 'IR_id' => (int)$r['IR_id'], 'Product_id' => $r['d_id'],
+                'Qty' => -(float)$r['Qty'], 'Unit_price' => $r['Unit_price'], 'Client_name' => $r['Client_name'],
+                'd' => $r['d'], 'bind_locked' => 0, '_ret' => 1];
+        }
+    }
     $invMap = acc_invoiced_src_map($db);
     $vMap = function_exists('acc_voucher_src_map') ? acc_voucher_src_map($db) : [];
 
@@ -143,7 +163,8 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
     };
 
     foreach ($group as $no => $erpLines) {
-        $srows = $site[$no] ?? [];
+        $isRet = in_array($no, $retNos, true);
+        $srows = $isRet ? ($siteRet[$no] ?? []) : ($site[$no] ?? []);
         $usedS = []; $usedE = [];
         // 每一條 ERP 明細可對應的網頁列（依料號開頭）
         $cand = [];
@@ -151,14 +172,15 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
             foreach ($srows as $si => $s)
                 if ($startsWith($e['spec'], trim((string)$s['Product_id']))) $cand[$ei][] = $si;
         }
-        $emit = function (string $status, int $ei, ?int $si, string $lock = '') use (&$entries, &$sum, $erpLines, $srows, $no) {
+        $emit = function (string $status, int $ei, ?int $si, string $lock = '') use (&$entries, &$sum, $erpLines, $srows, $no, $isRet) {
             $e = $ei >= 0 ? $erpLines[$ei] : null;
             $s = $si !== null ? $srows[$si] : null;
             $entries[] = [
                 'no' => $no, 'status' => $status,
                 'erp_row' => $e['row'] ?? null, 'erp_date' => $e['date'] ?? '', 'erp_spec' => $e['spec'] ?? '',
                 'erp_qty' => $e['qty'] ?? null, 'erp_price' => $e['price'] ?? null, 'erp_amount' => $e['amount'] ?? null,
-                'is_id' => $s ? (int)$s['IS_id'] : null, 'site_part' => $s['Product_id'] ?? '',
+                'kind' => $isRet ? 'return' : 'ship', 'ir_id' => ($s && $isRet) ? (int)$s['IR_id'] : null,
+                'is_id' => ($s && !$isRet) ? (int)$s['IS_id'] : null, 'site_part' => $s['Product_id'] ?? '',
                 'site_client' => $s['Client_name'] ?? '', 'site_date' => $s['d'] ?? '',
                 'site_qty' => $s ? (float)$s['Qty'] : null, 'site_price' => $s ? (float)$s['Unit_price'] : null,
                 'lock' => $lock,
@@ -171,12 +193,12 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
                 foreach ($cand[$ei] ?? [] as $si) {
                     if (isset($usedS[$si])) continue;
                     $s = $srows[$si];
-                    if ($needQty && abs((float)$s['Qty'] - $e['qty']) > 0.0001) continue;
+                    if ($needQty && abs(abs((float)$s['Qty']) - abs($e['qty'])) > 0.0001) continue;
                     if ($needPrice && abs((float)$s['Unit_price'] - $e['price']) > 0.00005) continue;
                     $usedS[$si] = 1; $usedE[$ei] = 1;
-                    $differ = (abs((float)$s['Qty'] - $e['qty']) > 0.0001) ? 'qty'
+                    $differ = (abs(abs((float)$s['Qty']) - abs($e['qty'])) > 0.0001) ? 'qty'
                             : ((abs((float)$s['Unit_price'] - $e['price']) > 0.00005) ? 'price' : 'same');
-                    $lock = $differ === 'same' ? '' : $lockOf($s);
+                    $lock = ($differ === 'same' || !empty($s['_ret'])) ? '' : $lockOf($s);
                     $emit($differ, $ei, $si, $lock);
                     break;
                 }

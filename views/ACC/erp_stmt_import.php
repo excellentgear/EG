@@ -86,6 +86,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
           <option value="site_only">ERP 沒有（網頁有）</option>
           <option value="locked">已鎖定</option>
           <option value="same">一致</option>
+          <option value="return">只看退貨單</option>
         </select>
         <input type="text" id="fKw" placeholder="搜尋單號／料號" style="width:170px;">
         <button id="btnSelPrice">勾選全部單價差異</button>
@@ -115,6 +116,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <h5>對應方式</h5>用「出貨單號＋料號＋數量」對應，單價不納入對應條件（業務常在對帳時改單價）。同一張出貨單裡同料號同數量出現多筆時，優先配對單價相同的，其餘依序配對。
     <h5>狀態說明</h5>
     <b>一致</b>：不需處理。<b>單價不同</b>：料號與數量相同、單價不同，預設可勾選更新。<b>數量不同</b>：只有料號對得上，數量（與單價）都不同，請確認後再勾選。<b>網頁查無</b>：ERP 有、網頁找不到這張出貨單或料號，只提示，請到出貨單補登。<b>ERP 沒有</b>：網頁有、ERP 對帳單沒有，只提示。<b>已鎖定</b>：已有傳票，或發票已轉出／開立，不可修改。
+    <h5>退貨單</h5>對帳單裡數量／金額為負、或單號 IR 開頭的明細視為退貨，會跟網頁退貨單（依單號＋料號＋數量）核對並標「退貨」。退貨單每天由 ERP 自動同步，所以這裡<b>只核對、不更新</b>；若顯示「網頁查無」，代表同步可能漏掉那筆退貨。
     <h5>注意</h5>更新只改出貨明細的數量與單價；若該筆還在「草稿發票」中，草稿發票的金額會同步更新。每次更新都會留下紀錄（舊值→新值）。
     <h5>權限</h5>檢閱可上傳比對（不需寫入），更新需「會計登錄」以上。
   </div>
@@ -164,6 +166,7 @@ $('#btnUpload').on('click',function(){
       +'<div><span class="n bad">'+nf(s.erp_only)+'</span> <span class="l">網頁查無</span></div>'
       +'<div><span class="n">'+nf(s.site_only)+'</span> <span class="l">ERP沒有</span></div>'
       +'<div><span class="n">'+nf(s.locked)+'</span> <span class="l">已鎖定</span></div>'
+      +'<div><span class="n">'+nf((r.entries||[]).filter(function(e){return e.kind==='return';}).length)+'</span> <span class="l">退貨列（僅核對）</span></div>'
       +'<div class="sel">已選 <b id="selN">0</b> 筆</div>');
     var w='';
     if(r.declared_total!=null && Math.abs(r.declared_total-r.lines_amount)>0.5)
@@ -182,26 +185,30 @@ function visible(){
   var f=$('#fStatus').val(), kw=($('#fKw').val()||'').trim().toLowerCase();
   return ENT.map(function(e,i){ e._i=i; return e; }).filter(function(e){
     var st=e.lock?'locked':e.status;
-    if(f==='diff'){ if(st==='same') return false; }
+    if(f==='return'){ if(e.kind!=='return') return false; }
+    else if(f==='diff'){ if(st==='same') return false; }
     else if(f!=='all' && st!==f) return false;
     if(kw && (e.no+' '+e.erp_spec+' '+e.site_part).toLowerCase().indexOf(kw)<0) return false;
     return true;
   });
 }
-function canPick(e){ return !e.lock && (e.status==='price'||e.status==='qty') && e.is_id; }
+function canPick(e){ return e.kind!=='return' && !e.lock && (e.status==='price'||e.status==='qty') && e.is_id; }
 function render(){
   var list=visible(), h='';
   if(!list.length) h='<tr><td colspan="11" style="padding:22px;color:#8a6d45;">沒有符合條件的資料</td></tr>';
   list.forEach(function(e){
     var st=e.lock?'locked':e.status;
     var diff=(e.erp_amount!=null && e.site_qty!=null)? (e.erp_amount - e.site_qty*e.site_price) : null;
-    var qchg=(e.erp_qty!=null && e.site_qty!=null && e.erp_qty!==e.site_qty);
+    var qchg=(e.erp_qty!=null && e.site_qty!=null && Math.abs(e.erp_qty)!==Math.abs(e.site_qty));
     var pchg=(e.erp_price!=null && e.site_price!=null && Math.abs(e.erp_price-e.site_price)>0.00005);
     var note=e.lock?esc(e.lock):(st==='erp_only'?'網頁沒有這張出貨單／料號，請補登':(st==='site_only'?'ERP 對帳單沒有這筆':(st==='qty'?'數量不同，請確認':'')));
+    if(e.kind==='return'){
+      note='退貨單：網頁每日自動同步，此處僅核對不更新'+(st==='erp_only'?'（網頁查無這筆退貨，請確認同步是否漏掉）':(st==='site_only'?'（網頁有、ERP 對帳單沒有）':(st==='same'?'':'（請回退貨單確認）')));
+    }
     h+='<tr data-i="'+e._i+'" class="'+(SEL[e._i]?'on':'')+'">'
       +'<td>'+(canPick(e)?'<input type="checkbox" class="ck"'+(SEL[e._i]?' checked':'')+'>':'')+'</td>'
       +'<td><span class="pill st-'+st+'">'+ST[st]+'</span></td>'
-      +'<td>'+esc(e.no)+'</td><td>'+esc(e.erp_date||e.site_date)+'</td>'
+      +'<td>'+(e.kind==='return'?'<span class="pill st-site_only" style="margin-right:4px;">退貨</span>':'')+esc(e.no)+'</td><td>'+esc(e.erp_date||e.site_date)+'</td>'
       +'<td class="l">'+esc(e.erp_spec||e.site_part)+'</td>'
       +'<td class="r'+(qchg?' chg':'')+'">'+(e.erp_qty==null?'':nf(e.erp_qty))+'</td>'
       +'<td class="r">'+(e.site_qty==null?'':nf(e.site_qty))+'</td>'
