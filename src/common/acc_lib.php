@@ -711,8 +711,11 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
     }
     foreach ($all as $l) if (!empty($l['split_parent']) && !empty($keep[(int)$l['split_parent']])) $keep[(int)$l['line_id']] = true;
     if (!$keep) return ['success' => false, 'message' => '沒有任何已勾選（已對到）的明細，不能確認鎖帳'];
-    $lines = []; $drop = [];
-    foreach ($all as $l) { if (!empty($keep[(int)$l['line_id']])) $lines[] = $l; else $drop[] = (int)$l['line_id']; }
+    $lines = []; $drop = []; $dropSrc = [];
+    foreach ($all as $l) {
+        if (!empty($keep[(int)$l['line_id']])) $lines[] = $l;
+        else { $drop[] = (int)$l['line_id']; if (in_array(strtoupper((string)$l['src_type']), ['IS', 'IR'], true) && (int)$l['src_id'] > 0) $dropSrc[] = [strtoupper((string)$l['src_type']), (int)$l['src_id']]; }
+    }
     $unchecked = count($drop);
 
     try {
@@ -730,6 +733,28 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
             $tax = round($net * acc_tax_rate($db));
             $db->prepare("UPDATE acc_recon_sheet SET our_total=?, tax_amount=?, total_amount=? WHERE sheet_id=?")->execute([$net, $tax, $net + $tax, $sheetId]);
             $s['our_total'] = $net; $s['tax_amount'] = $tax; $s['total_amount'] = $net + $tax;
+        }
+        // 應收：這個客戶、這個月的「草稿發票」裡含有沒對到（被移出）的憑證，一併從草稿拿掉並重算（已轉出／已開立的發票不動）
+        $invFix = 0;
+        if ($dropSrc && (string)$s['side'] === 'ar') {
+            $qi = $db->prepare("SELECT i.invoice_id FROM acc_invoice i JOIN acc_invoice_item it ON it.invoice_id=i.invoice_id
+                                 WHERE i.status='draft' AND i.customer_name=? AND i.billing_month=? AND it.src_type=? AND it.src_id=? LIMIT 1");
+            $touched = [];
+            foreach ($dropSrc as [$t, $sid]) {
+                $qi->execute([$s['party_id'], $s['billing_month'], $t, $sid]);
+                $iid = (int)$qi->fetchColumn();
+                if ($iid <= 0) continue;
+                $db->prepare("DELETE FROM acc_invoice_item WHERE invoice_id=? AND src_type=? AND src_id=?")->execute([$iid, $t, $sid]);
+                $touched[$iid] = 1; $invFix++;
+            }
+            foreach (array_keys($touched) as $iid) {
+                $tq = $db->prepare("SELECT COALESCE(SUM(amount),0), COUNT(*) FROM acc_invoice_item WHERE invoice_id=?");
+                $tq->execute([$iid]);
+                [$net, $cnt] = array_map('floatval', $tq->fetch(PDO::FETCH_NUM));
+                if ($cnt <= 0) { $db->prepare("DELETE FROM acc_invoice WHERE invoice_id=? AND status='draft'")->execute([$iid]); continue; }
+                $tax = round($net * acc_tax_rate($db));
+                $db->prepare("UPDATE acc_invoice SET sales_amount=?, tax_amount=?, total_amount=? WHERE invoice_id=? AND status='draft'")->execute([$net, $tax, $net + $tax, $iid]);
+            }
         }
         $db->prepare("UPDATE acc_recon_sheet SET status='confirmed', confirmed_by=?, confirmed_by_name=?,
                       confirmed_at=NOW() WHERE sheet_id=?")
@@ -765,7 +790,8 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
 
     return ['success' => true, 'locked' => count($lines), 'unchecked' => $unchecked,
             'message' => '已確認鎖帳，' . count($lines) . ' 筆憑證標記為已對完'
-                       . ($unchecked ? "；未勾選的 {$unchecked} 筆沒有鎖定，已移出這份對帳單，之後仍可對帳" : '')];
+                       . ($unchecked ? "；未勾選的 {$unchecked} 筆沒有鎖定，已移出這份對帳單，之後仍可對帳" : '')
+                       . (!empty($invFix) ? "；並已從草稿發票移除 {$invFix} 筆未對到的明細" : '')];
 }
 
 /** 退回重對（僅會計管理員；權限在 API 層檢查） */
@@ -2502,6 +2528,16 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
 
     $cust = acc_customer_by_name($db);                  // 含別名
 
+    /* 這個帳款月份若客戶已有「已確認鎖帳」的對帳單，只能開立對帳單裡有的憑證（未對到的不開、留待下次對帳） */
+    $confSet = [];
+    try {
+        $cq = $db->prepare("SELECT s.party_id, l.src_type, l.src_id FROM acc_recon_line l
+                             JOIN acc_recon_sheet s ON s.sheet_id = l.sheet_id
+                             WHERE s.side='ar' AND s.status='confirmed' AND s.billing_month=? AND l.src_id>0");
+        $cq->execute([$bm]);
+        foreach ($cq->fetchAll(PDO::FETCH_ASSOC) as $cr) $confSet[$cr['party_id']][strtoupper($cr['src_type']) . '-' . (int)$cr['src_id']] = true;
+    } catch (Throwable $e) {}
+
     $groups = [];
     $touch = function (string $name) use (&$groups, $cust, $bm) {
         if (isset($groups[$name])) return;
@@ -2540,6 +2576,7 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         }
         if ($b !== $bm) continue;
         if (isset($used['IS-' . (int)$r['IS_id']])) continue;      // 已開過發票
+        if (isset($confSet[$name]) && !isset($confSet[$name]['IS-' . (int)$r['IS_id']])) continue;   // 已鎖帳的對帳單沒有這筆
 
         $touch($name);
         $groups[$name]['items'][] = [
@@ -2573,6 +2610,7 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         }
         if ($b !== $bm) continue;
         if (isset($used['IR-' . (int)$r['IR_id']])) continue;
+        if (isset($confSet[$name]) && !isset($confSet[$name]['IR-' . (int)$r['IR_id']])) continue;
 
         $touch($name);
         $groups[$name]['items'][] = [
