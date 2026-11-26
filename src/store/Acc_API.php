@@ -1739,6 +1739,17 @@ case 'sheet_confirm': {
     acc_out($r);
 }
 
+/* 應付：鎖帳後登錄廠商發票號碼／日期 */
+case 'sheet_vendor_inv': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    acc_recon_guard($perms, 'TLOG');
+    $r = acc_sheet_vendor_inv_save($db, (int)($_POST['sheet_id'] ?? 0),
+                                   (string)($_POST['inv_no'] ?? ''), (string)($_POST['inv_date'] ?? ''));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
 /* 退回重對（僅會計管理員） */
 case 'sheet_reopen': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);

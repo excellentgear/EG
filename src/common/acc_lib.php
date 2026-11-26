@@ -283,6 +283,12 @@ function acc_ensure_schema(PDO $db): void
             KEY idx_alias_cust (customer_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-客戶簡稱別名（出貨單簡稱對不到主檔時的對照）'");
 
+        foreach (['vendor_inv_no' => "VARCHAR(30) DEFAULT NULL COMMENT '廠商開來的發票號碼(應付)'",
+                  'vendor_inv_date' => "DATE DEFAULT NULL COMMENT '廠商發票日期(應付)'"] as $col => $def) {
+            $q = $db->prepare("SHOW COLUMNS FROM acc_recon_sheet LIKE ?"); $q->execute([$col]);
+            if (!$q->fetch()) $db->exec("ALTER TABLE acc_recon_sheet ADD COLUMN $col $def");
+        }
+
         $done = true;
     } catch (Throwable $e) {
         error_log('acc_ensure_schema 失敗: ' . $e->getMessage());
@@ -706,6 +712,24 @@ function acc_sheet_save(PDO $db, array $sheet, array $lines, ?array $user): arra
 
     return ['success' => true, 'sheet_id' => $sid, 'totals' => $t,
             'message' => '已暫存對帳進度（' . count($lines) . ' 列）'];
+}
+
+/** 應付對帳單鎖帳後登錄廠商開來的發票號碼／日期 */
+function acc_sheet_vendor_inv_save(PDO $db, int $sheetId, string $invNo, string $invDate): array
+{
+    acc_ensure_schema($db);
+    $invNo = strtoupper(trim($invNo));
+    if (!preg_match('/^[A-Z]{2}-?\d{8}$/', $invNo)) return ['success' => false, 'message' => '發票號碼格式應為 2 碼英文＋8 碼數字（如 AB-12345678）'];
+    if (strlen($invNo) === 10) $invNo = substr($invNo, 0, 2) . '-' . substr($invNo, 2);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $invDate) || !strtotime($invDate)) return ['success' => false, 'message' => '發票日期格式錯誤'];
+    $st = $db->prepare("SELECT side,status FROM acc_recon_sheet WHERE sheet_id=? LIMIT 1");
+    $st->execute([$sheetId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return ['success' => false, 'message' => '找不到對帳單'];
+    if ($r['side'] !== 'ap') return ['success' => false, 'message' => '只有應付對帳單可登錄廠商發票'];
+    if ($r['status'] !== 'confirmed') return ['success' => false, 'message' => '請先確認鎖帳後再登錄廠商發票'];
+    $db->prepare("UPDATE acc_recon_sheet SET vendor_inv_no=?, vendor_inv_date=? WHERE sheet_id=?")->execute([$invNo, $invDate, $sheetId]);
+    return ['success' => true, 'vendor_inv_no' => $invNo, 'message' => '已登錄廠商發票 ' . $invNo];
 }
 
 /** 確認正確 → 鎖帳。涵蓋的憑證一併標為已對完，並寫稽核。 */

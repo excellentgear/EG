@@ -466,6 +466,7 @@ table.ot tr.lock{color:#a08a6a;}
         <div><span class="n" id="stTotal">—</span> <span class="l">含稅</span></div>
       </div>
       <div id="noteBox"></div>
+      <div id="vinvBox" style="display:none;"></div>
       <div id="syncBox"></div>
 
       <div class="a-bar" style="background:var(--a-bg2);">
@@ -1444,7 +1445,35 @@ function updateStat(){
     +'</b> 於 '+esc(sheet.reopen_at||'')+' 退回重對，原因：'+esc(sheet.reopen_reason||'')+'</div>';
   else if(!canEdit) nb='<div class="warn">你沒有這一側的對帳修改權限，只能檢視。</div>';
   $('#noteBox').html(nb);
+  renderVinv(locked);
 }
+/* 應付：鎖帳後登錄廠商發票號碼，再開傳票 */
+function renderVinv(locked){
+  var $b=$('#vinvBox');
+  if(SIDE!=='ap' || !locked || !sheet){ $b.hide().empty(); return; }
+  var ed=!!P.canEdit, no=sheet.vendor_inv_no||'', dt=sheet.vendor_inv_date||'';
+  $b.html('<div class="info" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
+    +'<b>廠商發票</b> 發票號碼 <input type="text" id="vinvNo" maxlength="11" style="width:130px;text-transform:uppercase;" placeholder="AB-12345678" value="'+esc(no)+'"'+(ed?'':' disabled')+'>'
+    +' 發票日期 <input type="date" id="vinvDate" value="'+esc(dt)+'"'+(ed?'':' disabled')+'>'
+    +(ed?' <button type="button" id="vinvSave" class="btn-warm">儲存發票</button>':'')
+    +' <button type="button" id="vinvVch"'+(no?'':' disabled title="請先登錄廠商發票號碼"')+'>開立傳票</button></div>').show();
+}
+$(document).on('click','#vinvSave',function(){
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=sheet_vendor_inv',{csrf:CSRF, sheet_id:sheet.sheet_id, inv_no:$('#vinvNo').val(), inv_date:$('#vinvDate').val()},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
+    sheet.vendor_inv_no=r.vendor_inv_no; sheet.vendor_inv_date=$('#vinvDate').val();
+    toast(esc(r.message)); renderVinv(true);
+  },'json').fail(function(){ $b.prop('disabled',false); toast('儲存失敗', true); });
+});
+$(document).on('click','#vinvVch',function(){
+  if(!sheet || !sheet.vendor_inv_no) return;
+  if(($('#vinvNo').val()||'').toUpperCase()!==sheet.vendor_inv_no || $('#vinvDate').val()!==(sheet.vendor_inv_date||'')){
+    toast('發票號碼或日期已修改，請先按「儲存發票」', true); return; }
+  window.open('voucher.php?side=ap&bm='+encodeURIComponent(sheet.billing_month)+'&party='+encodeURIComponent(sheet.party_id)
+    +'&inv='+encodeURIComponent(sheet.vendor_inv_no)+'&idate='+encodeURIComponent(sheet.vendor_inv_date||''),'_blank');
+});
 $('#theirTotal').on('input', updateStat);
 
 /* ══ 點列勾選（已對到→暖淺綠）══ */

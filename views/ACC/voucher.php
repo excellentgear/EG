@@ -201,7 +201,11 @@ $.getJSON(API,{action:'meta'},function(r){
     $('#vSide').val(q.get('side')==='ap'?'ap':'ar'); $('#vBm').val(qb);
     window.afterParties=function(){
       if(!$('#vParty option').filter(function(){ return this.value===qp; }).length){ toast(esc(qp)+' 在 '+esc(qb)+' 沒有可開傳票的明細', true); return; }
-      window.afterItems=function(){ $('#btnVAll').trigger('click'); };
+      window.afterItems=function(){
+        $('#btnVAll').trigger('click');
+        var inv=q.get('inv'), idt=q.get('idate');
+        if(inv && !$('#vNote').val()) $('#vNote').val(('廠商發票 '+inv+(idt?'（'+idt+'）':'')).slice(0,200));
+      };
       $('#vParty').val(qp).trigger('change');
     };
     loadParties();
