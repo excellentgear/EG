@@ -626,7 +626,8 @@ case 'erp_stmt_upload': {
     $token = bin2hex(random_bytes(10));
     $fname = acc_u8((string)$f['name']);
     $_SESSION['acc_erp_stmt'] = array_slice(($_SESSION['acc_erp_stmt'] ?? []) + [$token => [
-        'token' => $token, 'file_name' => $fname, 'entries' => $m['entries'], 'their_total' => null]], -3, 3, true);
+        'token' => $token, 'file_name' => $fname, 'entries' => $m['entries'], 'their_total' => null,
+        'customer_id' => (string)$parsed['customer_id']]], -3, 3, true);
     $sumAmt = 0.0; foreach ($parsed['lines'] as $l) $sumAmt += $l['amount'];
     $_SESSION['acc_erp_stmt'][$token]['their_total'] = ($parsed['total_declared'] !== null) ? (float)$parsed['total_declared'] : $sumAmt;
     acc_out(['token' => $token, 'file_name' => $fname, 'customer_id' => $parsed['customer_id'],
@@ -642,6 +643,18 @@ case 'erp_stmt_recon_link': {
     if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
     $r = acc_erp_stmt_recon_target($db, $stash);
     if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'erp_stmt_sync': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $stash = $_SESSION['acc_erp_stmt'][(string)($_POST['token'] ?? '')] ?? null;
+    if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
+    $r = acc_erp_stmt_sync($db, $stash, (string)($_SESSION['userName'] ?? $uid));
+    if (empty($r['success'])) acc_err($r['message'] ?? '同步失敗');
     acc_out($r);
 }
 
@@ -1488,10 +1501,14 @@ case 'sheet_load': {
             $rangeOut = $src['range'] ?? null;
             $have = [];
             // 已暫存的底稿，說明（規格）欄跟來源即時同步（規格顯示規則改過後，舊底稿也要看得到完整內容）
-            $specNow = [];
-            foreach ($src['lines'] as $l) $specNow[$l['src_type'] . '-' . (int)$l['src_id']] = $l['spec'];
+            $specNow = []; $srcByKey = [];
+            foreach ($src['lines'] as $l) { $specNow[$l['src_type'] . '-' . (int)$l['src_id']] = $l['spec']; $srcByKey[$l['src_type'] . '-' . (int)$l['src_id']] = $l; }
             foreach ($sheet['lines'] as &$sl) {
                 $k0 = ($sl['src_type'] ?? '') . '-' . (int)($sl['src_id'] ?? 0);
+                // 草稿底稿：來源憑證的數量／單價／金額若被更正過（例如匯入 ERP 對帳單），原始值跟著來源更新（調整值不動）
+                if ($sheet['status'] !== 'confirmed' && !in_array($sl['src_type'] ?? '', ['SPLIT', 'MANUAL'], true) && isset($srcByKey[$k0])) {
+                    foreach (['orig_qty', 'orig_price', 'orig_amount'] as $ok) $sl[$ok] = $srcByKey[$k0][$ok];
+                }
                 if (!in_array($sl['src_type'] ?? '', ['SPLIT', 'MANUAL'], true) && isset($specNow[$k0]) && $specNow[$k0] !== null && $specNow[$k0] !== '') $sl['spec'] = $specNow[$k0];
             }
             unset($sl);

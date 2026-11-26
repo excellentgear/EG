@@ -244,13 +244,19 @@ function acc_erp_stmt_apply(PDO $db, array $stash, array $isIds, string $userNam
             $sel->execute([$id]);
             $cur = $sel->fetch(PDO::FETCH_ASSOC);
             if (!$cur) { $skip[] = $label . '：出貨明細已不存在'; continue; }
-            if (!empty($cur['bind_locked'])) { $skip[] = $label . '：已鎖定'; continue; }
+            // bind_locked 是「綁定鎖」，只改單價不碰綁定，所以單價差異可更新；數量不同可能牽動分配，鎖定時仍略過
+            if (!empty($cur['bind_locked']) && $e['status'] !== 'price') { $skip[] = $label . '：已鎖定'; continue; }
             if (abs((float)$cur['Qty'] - (float)$e['site_qty']) > 0.0001
                 || abs((float)$cur['Unit_price'] - (float)$e['site_price']) > 0.00005) {
                 $skip[] = $label . '：網頁資料在比對後已被修改，請重新匯入比對'; continue;
             }
             $newQty = (float)$e['erp_qty']; $newPrice = (float)$e['erp_price'];
             $upd->execute([$newQty, $newPrice, $id]);
+            // 在出貨單備註註記自動更正了什麼（舊值->新值）
+            $chg = [];
+            if (abs((float)$cur['Qty'] - $newQty) > 0.0001) $chg[] = '數量' . (float)$cur['Qty'] . '->' . $newQty;
+            if (abs((float)$cur['Unit_price'] - $newPrice) > 0.00005) $chg[] = '單價' . (float)$cur['Unit_price'] . '->' . $newPrice;
+            if ($chg) acc_erp_stmt_note($db, $id, '匯入ERP自動更正 ' . implode('、', $chg));
             $log->execute([$stash['token'], $stash['file_name'], $id, $cur['IS_number'], $cur['Product_id'],
                            $cur['Qty'], $newQty, $cur['Unit_price'], $newPrice, $userName]);
             if ($inv) {   // 發票草稿：同步明細與發票金額
@@ -341,4 +347,83 @@ function acc_erp_stmt_checked_keys(PDO $db, array $stash): array
         }
     }
     return $keys;
+}
+
+
+/** 在出貨明細備註附加一段註記（備註欄只有 100 字：優先保留註記，舊備註從尾端截） */
+function acc_erp_stmt_note(PDO $db, int $isId, string $annot): void
+{
+    $st = $db->prepare("SELECT Note FROM is_list WHERE IS_id=?");
+    $st->execute([$isId]);
+    $old = trim((string)$st->fetchColumn());
+    $old = trim((string)preg_replace('/\s*匯入ERP自動.*$/us', '', $old));   // 重複匯入時不疊加舊的自動註記
+    $annot = mb_substr($annot, 0, 90);
+    $keep = mb_substr($old, 0, max(0, 99 - mb_strlen($annot)));
+    $note = trim($keep . ($keep !== '' ? ' ' : '') . $annot);
+    $db->prepare("UPDATE is_list SET Note=? WHERE IS_id=?")->execute([$note, $isId]);
+}
+
+/**
+ * 帶到對帳作業前的自動同步：①單價差異依 ERP 更正（含綁定鎖定者，只改單價）②ERP 有、網頁查無的出貨明細自動新增。
+ * 兩者都在備註註記「匯入ERP自動更正／自動新增」。數量不同的不自動改（可能牽動綁定分配）。
+ */
+function acc_erp_stmt_sync(PDO $db, array $stash, string $userName): array
+{
+    $ids = [];
+    foreach ($stash['entries'] as $e) {
+        if (($e['kind'] ?? '') === 'return' || empty($e['is_id']) || ($e['status'] ?? '') !== 'price') continue;
+        if (($e['lock'] ?? '') !== '' && $e['lock'] !== '已鎖定') continue;
+        $ids[] = (int)$e['is_id'];
+    }
+    $r1 = $ids ? acc_erp_stmt_apply($db, $stash, $ids, $userName) : ['success' => true, 'updated' => 0, 'skipped' => []];
+    if (empty($r1['success'])) return $r1;
+    $r2 = acc_erp_stmt_create_missing($db, $stash, $userName);
+    return ['success' => true, 'updated' => (int)($r1['updated'] ?? 0), 'skipped' => array_merge($r1['skipped'] ?? [], $r2['skipped']),
+            'created' => $r2['created']];
+}
+
+/** ERP 有、網頁查無的出貨明細 → 新增進 is_list（註記匯入ERP自動新增）。料號對不到主檔的略過並回報。 */
+function acc_erp_stmt_create_missing(PDO $db, array $stash, string $userName): array
+{
+    $created = 0; $skip = [];
+    $cands = [];
+    foreach ($stash['entries'] as $e) if (($e['kind'] ?? '') !== 'return' && ($e['status'] ?? '') === 'erp_only' && (float)$e['erp_qty'] > 0) $cands[] = $e;
+    if (!$cands) return ['created' => 0, 'skipped' => []];
+    // 同一張出貨單的客戶：優先沿用網頁同單號其他明細的客戶，其次 ERP 檔頭的客戶編號
+    $clientOf = [];
+    foreach ($stash['entries'] as $e) if (!empty($e['site_client'])) $clientOf[$e['no']] = $e['site_client'];
+    $hdrClient = '';
+    $hdrCid = (string)($stash['customer_id'] ?? '');
+    if ($hdrCid !== '') {
+        $q = $db->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+        $q->execute([$hdrCid]);
+        $hdrClient = (string)$q->fetchColumn();
+    }
+    $pick = $db->prepare("SELECT d_id, D_Setting_Id, Customer_Id FROM d_setting
+                          WHERE ? LIKE CONCAT(D_Setting_Id, '%') AND D_Setting_Id <> '' AND (? = '' OR Customer_Id = ?)   -- 有客戶編號時料號必須屬於該客戶，避免短料號誤配
+                          ORDER BY (Customer_Id = ?) DESC, CHAR_LENGTH(D_Setting_Id) DESC, d_id DESC LIMIT 1");
+    $dup = $db->prepare("SELECT 1 FROM is_list WHERE IS_number=? AND Product_id=? AND Qty=? AND ABS(Unit_price-?)<0.00005 AND Note LIKE '匯入ERP自動新增%' LIMIT 1");
+    $ins = $db->prepare("INSERT INTO is_list (Order_date, IS_number, Client_name, d_setting_id, Product_id, Specification, Qty, Unit_price, Warehouse, Note, Created_By)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+    $log = $db->prepare("INSERT INTO acc_erp_stmt_log (batch_token,file_name,is_id,is_number,part_no,old_qty,new_qty,old_price,new_price,applied_by) VALUES (?,?,?,?,?,NULL,?,NULL,?,?)");
+    foreach ($cands as $e) {
+        $label = $e['no'] . ' ' . $e['erp_spec'];
+        $pick->execute([$e['erp_spec'], $hdrCid, $hdrCid, $hdrCid]);
+        $d = $pick->fetch(PDO::FETCH_ASSOC);
+        $client = $clientOf[$e['no']] ?? $hdrClient;
+        if (!$d) { $skip[] = $label . '：料號對不到主檔，未新增'; continue; }
+        if ($client === '') { $skip[] = $label . '：查不到客戶，未新增'; continue; }
+        $pid = (string)$d['D_Setting_Id'];
+        $dup->execute([$e['no'], $pid, (int)round($e['erp_qty']), (float)$e['erp_price']]);
+        if ($dup->fetchColumn()) continue;
+        $rest = trim(mb_substr((string)$e['erp_spec'], mb_strlen($pid)));
+        try {
+            $ins->execute([$e['erp_date'], $e['no'], $client, (int)$d['d_id'], $pid, mb_substr($rest, 0, 80),
+                           (int)round($e['erp_qty']), (float)$e['erp_price'], '總倉庫', '匯入ERP自動新增', mb_substr($userName, 0, 11)]);
+            $newId = (int)$db->lastInsertId();
+            $log->execute([$stash['token'], $stash['file_name'], $newId, $e['no'], $pid, $e['erp_qty'], $e['erp_price'], $userName]);
+            $created++;
+        } catch (Throwable $ex) { $skip[] = $label . '：新增失敗（' . $ex->getMessage() . '）'; }
+    }
+    return ['created' => $created, 'skipped' => $skip];
 }

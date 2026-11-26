@@ -231,24 +231,25 @@ function upd(){
 $('#fStatus,#fKw').on('input change',render);
 // 只更新 Qty／Unit_price，不碰任何綁定（訂單／製令／報價對應）；數量不同的可能牽動綁定分配，不自動改
 function autoSyncPrice(done){
-  var idx=[], ids=[];
-  ENT.forEach(function(e,i){ if(canPick(e)&&e.status==='price'){ idx.push(i); ids.push(e.is_id); } });
-  if(!ids.length){ done(0,[]); return; }
-  $.post(API+'?action=erp_stmt_apply',{csrf:CSRF,token:TOKEN,is_ids:JSON.stringify(ids)},function(r){
+  var idx=[];
+  ENT.forEach(function(e,i){ if(e.kind!=='return' && e.is_id && e.status==='price' && (!e.lock||e.lock==='已鎖定')) idx.push(i); });
+  var hasNew=ENT.some(function(e){ return e.kind!=='return' && e.status==='erp_only' && e.erp_qty>0; });
+  if(!idx.length && !hasNew){ done(0,[]); return; }
+  $.post(API+'?action=erp_stmt_sync',{csrf:CSRF,token:TOKEN},function(r){
     if(!r.ok){ toast(esc(r.error||'同步單價失敗'), true); done(-1,[]); return; }
     idx.forEach(function(i){
       var e=ENT[i], sk=(r.skipped||[]).some(function(s){ return s.indexOf(e.no+' '+e.site_part)===0; });
       if(!sk){ e.status='same'; e.site_price=e.erp_price; }
     });
-    SEL={}; render(); done(r.updated||0, r.skipped||[]);
+    SEL={}; render(); done(r.updated||0, r.skipped||[], r.created||0);
   },'json').fail(function(){ toast('同步單價失敗', true); done(-1,[]); });
 }
 $('#btnToRecon').on('click',function(){
   var $b=$(this).prop('disabled',true);
   var w=window.open('','_blank');   // 先在點擊當下開好分頁，免得非同步回來後被彈出視窗封鎖擋掉
-  autoSyncPrice(function(n,sk){
+  autoSyncPrice(function(n,sk,cr){
   if(n<0){ $b.prop('disabled',false); if(w) w.close(); return; }
-  if(n>0||sk.length) toast('已先依 ERP 同步 '+n+' 筆單價差異'+(sk.length?'；略過 '+sk.length+' 筆（已鎖定）':''), false);
+  if(n>0||sk.length||cr) toast('已先依 ERP 同步：更正 '+n+' 筆單價'+(cr?'、自動新增 '+cr+' 筆出貨明細':'')+(sk.length?'；略過 '+sk.length+' 筆：'+sk.slice(0,3).map(esc).join('；'):'')+'（出貨單備註已註記）', false);
   $.post(API+'?action=erp_stmt_recon_link',{token:TOKEN},function(r){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'無法帶入'), true); if(w) w.close(); return; }
