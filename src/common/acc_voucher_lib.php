@@ -144,6 +144,8 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
     $b['lines'] = array_values(array_filter($b['lines'], fn($l) => abs((float)$l['orig_amount']) >= 0.0001));
     $vmap = acc_voucher_src_map($db);
     $imap = ($side === 'ar') ? acc_invoiced_src_map($db) : [];
+    // 應付：廠商開來的發票號碼登錄在鎖帳對帳單上，整張對帳單的明細都帶這個號碼
+    $vinv = ($side === 'ap' && $cs && !empty($cs['vendor_inv_no'])) ? (string)$cs['vendor_inv_no'] : null;
     $items = [];
     foreach ($b['lines'] as $l) {
         $k = strtoupper($l['src_type']) . '-' . (int)$l['src_id'];
@@ -154,7 +156,7 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
             'voucher_no' => isset($vmap[$k]) ? (string)$vmap[$k]['voucher_no'] : null,
             'voucher_id' => $vmap[$k]['voucher_id'] ?? null,
             'locked' => isset($vmap[$k]),
-            'invoice_no' => $imap[$k]['invoice_no'] ?? null,
+            'invoice_no' => $imap[$k]['invoice_no'] ?? $vinv,
             'invoiced' => isset($imap[$k]),
         ];
     }
