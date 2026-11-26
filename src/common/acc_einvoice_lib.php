@@ -169,6 +169,7 @@ function acc_einv_build(PDO $db, array $ids, string $invDate): array
         $lines = [];
         foreach ($itemsBy[$iid] ?? [] as $it) {
             $isRet = ($it['src_type'] === 'IR');
+            if (abs((float)$it['amount']) < 0.0001 || abs((float)$it['unit_price']) < 0.0001) continue;   // 單價／金額為 0 的不匯出到電子發票
             $part = (string)$it['product_id'];
             if ($isRet && ctype_digit($part)) $part = (string)($dName[(int)$part] ?? $part);
             $tag  = (!$isRet && isset($isOrder[(int)$it['src_id']])) ? ($tags[$isOrder[(int)$it['src_id']]] ?? null) : null;

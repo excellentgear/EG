@@ -475,7 +475,7 @@ function acc_sheet_build_core(PDO $db, string $side, string $partyId, string $bm
     }
 
     // 應收：partyId 傳的是客戶簡稱（is_list 以簡稱歸戶）
-    $d = acc_ar_detail($db, $partyId, $bm);
+    $d = acc_ar_detail($db, $partyId, $bm, true);
     foreach ($d['items'] as $it) {
         $lines[] = [
             'sort_order' => ++$i * 10, 'src_type' => $it['src_type'], 'src_id' => (int)$it['src_id'],
@@ -2331,7 +2331,7 @@ function acc_client_name_variants(PDO $db, string $name): array
     return $out ?: [$name];
 }
 
-function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
+function acc_ar_detail(PDO $db, string $clientName, string $billingMonth, bool $withZero = false): array
 {
     if (!preg_match('/^\d{4}-\d{2}$/', $billingMonth)) return ['items' => [], 'head' => null];
     [$scanFrom, $scanTo] = acc_scan_range($billingMonth, $billingMonth);
@@ -2360,7 +2360,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
     $st->execute(array_merge($nmList, [$scanFrom, $scanTo, $billingMonth]));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
-        if (abs($amt) < 0.0001) continue;
+        if (!$withZero && abs($amt) < 0.0001) continue;      // 對帳底稿要列出 0 元（才看得出漏填單價），其餘用途照舊不列
         $bm = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month_ex($r['d'], $cut, $ex);
         if ($bm !== $billingMonth) continue;
@@ -2387,7 +2387,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
-        if (abs($amt) < 0.0001) continue;
+        if (!$withZero && abs($amt) < 0.0001) continue;
         $bm = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month_ex($r['d'], $cut, $ex);
         if ($bm !== $billingMonth) continue;
