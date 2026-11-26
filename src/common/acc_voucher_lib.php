@@ -196,14 +196,21 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     }
     $total = 0.0;
     foreach ($pick as $it) $total += $it['amount'];
-    $total = round($total, 2);
-    // 小數處理（確認傳票時選）：四捨五入／無條件捨去（負數＝往 0 方向捨去），整數後才算稅額與分錄
-    if ($rounding === 'round') $total = round($total, 0, PHP_ROUND_HALF_UP);
-    elseif ($rounding === 'floor') $total = $total < 0 ? ceil($total - 1e-9) : floor($total + 1e-9);
+    // 出貨（正）與退貨（負）分開加總，分錄不互抵；小數處理（確認傳票時選）對兩邊各自做
+    $shipT = 0.0; $retT = 0.0;
+    foreach ($pick as $it) { if ($it['amount'] >= 0) $shipT += $it['amount']; else $retT += -$it['amount']; }
+    $shipT = round($shipT, 2); $retT = round($retT, 2);
+    $rf = function (float $v) use ($rounding): float {
+        if ($rounding === 'round') return round($v, 0, PHP_ROUND_HALF_UP);
+        if ($rounding === 'floor') return floor($v + 1e-9);
+        return $v;
+    };
+    $shipT = $rf($shipT); $retT = $rf($retT);
+    $total = round($shipT - $retT, 2);
     // 分錄：自動分錄（依選取明細金額重算）＋使用者追加的科目（匯費、手續費…），借貸必須平衡
     [$extraLines, $exErr] = acc_vch_clean_extra($db, $extra);
     if ($exErr) return ['success' => false, 'message' => $exErr];
-    $lines = array_merge(acc_vch_auto_lines($db, $side, $total), $extraLines);
+    $lines = array_merge(acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT]), $extraLines);
     [$dSum, $cSum] = acc_vch_lines_balance($lines);
     if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2) . '，請調整追加的科目'];
     try {
@@ -350,6 +357,7 @@ function acc_vch_acct_defaults(): array
         'ar_recv' => ['1144000', '應收帳款', 'D'],
         'ar_tax'  => ['2281000', '銷項稅額', 'C'],
         'ar_rev'  => ['4101000', '銷貨收入', 'C'],
+        'ar_ret'  => ['4102000', '銷貨退回', 'D'],
         'ap_pay'  => ['2144000', '應付帳款', 'C'],
         'ap_tax'  => ['1281000', '進項稅額', 'D'],
         'ap_exp'  => ['5201000', '進貨', 'D'],
@@ -358,7 +366,7 @@ function acc_vch_acct_defaults(): array
 
 function acc_vch_acct_labels(): array
 {
-    return ['ar_recv' => '應收：應收帳款（借方）', 'ar_tax' => '應收：銷項稅額（貸方）', 'ar_rev' => '應收：銷貨收入（貸方）',
+    return ['ar_recv' => '應收：應收帳款（借方）', 'ar_tax' => '應收：銷項稅額（貸方）', 'ar_rev' => '應收：銷貨收入（貸方）', 'ar_ret' => '應收：銷貨退回（借方）',
             'ap_pay' => '應付：應付帳款（貸方）', 'ap_tax' => '應付：進項稅額（借方）', 'ap_exp' => '應付：進貨（借方）'];
 }
 
@@ -520,10 +528,23 @@ function acc_vch_no_check(string $no): array
 }
 
 /** 由傳票金額組出自動分錄（借貸一律正數；淨額為負＝退貨大於出貨，借貸對調） */
-function acc_vch_auto_lines(PDO $db, string $side, float $net): array
+function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = null): array
 {
     $cfg = acc_vch_acct_cfg($db);
     $rate = acc_tax_rate($db);
+    if ($side === 'ar' && $parts !== null) {
+        // 應收：收入與退回分開列示、銷項稅額分兩行，應收帳款以含稅淨額入帳
+        $ship = (float)$parts['ship']; $ret = (float)$parts['ret'];
+        $taxS = (float)round($ship * $rate); $taxR = (float)round($ret * $rate);
+        $arNet = round(($ship + $taxS) - ($ret + $taxR), 2);
+        $L = [];
+        $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $arNet < 0 ? 'C' : 'D', 'amount' => abs($arNet), 'auto' => 1, 'memo' => ''];
+        $L[] = ['code' => $cfg['ar_ret']['code'],  'name' => $cfg['ar_ret']['name'],  'side' => 'D', 'amount' => $ret,  'auto' => 1, 'memo' => ''];
+        $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => 'D', 'amount' => $taxR, 'auto' => 1, 'memo' => '退貨稅額'];
+        $L[] = ['code' => $cfg['ar_rev']['code'],  'name' => $cfg['ar_rev']['name'],  'side' => 'C', 'amount' => $ship, 'auto' => 1, 'memo' => ''];
+        $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => 'C', 'amount' => $taxS, 'auto' => 1, 'memo' => '出貨稅額'];
+        return array_values(array_filter($L, fn($l) => $l['amount'] > 0.004));
+    }
     $tax = round(abs($net) * $rate);
     $net = round($net, 2);
     $abs = abs($net);
