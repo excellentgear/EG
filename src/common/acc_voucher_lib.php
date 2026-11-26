@@ -269,7 +269,7 @@ function acc_voucher_list(PDO $db, array $f): array
                                        JOIN acc_invoice_item ii ON ii.src_type=vi.src_type AND ii.src_id=vi.src_id
                                        JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id AND inv.status<>'void' AND inv.invoice_no IS NOT NULL AND inv.invoice_no<>''
                                        WHERE vi.voucher_id=v.voucher_id) AS invoice_nos
-                       FROM acc_voucher v $ws ORDER BY v.voucher_date DESC, v.voucher_id DESC LIMIT $per OFFSET " . (($page - 1) * $per));
+                       FROM acc_voucher v $ws ORDER BY (v.voucher_no IS NULL OR v.voucher_no=''), v.voucher_no DESC, v.voucher_id DESC LIMIT $per OFFSET " . (($page - 1) * $per));
     $q->execute($p);
     return ['rows' => $q->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per_page' => $per];
 }
