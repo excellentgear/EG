@@ -71,6 +71,16 @@ if (!function_exists('eg_role_page_r_all')) {
     }
 }
 
+if (!function_exists('eg_role_page_r_extra')) {
+    /** 同一角色模組涵蓋的其他頁面（這些頁面權限全走 acc_perms() 角色，不讀頁面 R/C/U/D 字母） */
+    function eg_role_page_r_extra(): array {
+        return [
+            'accounting' => ['customer_invoice_data.php', 'ar_statement.php', 'invoice_export.php', 'receipt.php',
+                             'ap_statement.php', 'reconcile.php', 'payment.php', 'erp_stmt_import.php', 'voucher.php'],
+        ];
+    }
+}
+
 if (!function_exists('eg_role_page_r_ensure')) {
     /**
      * 該使用者在這個角色所屬模組的頁面還沒有任何權限列時，補一列頁面 R。
@@ -78,8 +88,14 @@ if (!function_exists('eg_role_page_r_ensure')) {
      */
     function eg_role_page_r_ensure(PDO $pdo, int $uid, string $module): bool {
         $map = eg_role_page_r_all();
-        if (!isset($map[$module]) || $uid <= 0) return false;
-        return eg_role_page_r_ensure_file($pdo, $uid, $map[$module]);
+        if ($uid <= 0) return false;
+        $any = false;
+        // 一個角色模組涵蓋多個頁面者（會計：對帳／發票／收款／傳票…），每一頁都補 R，側欄才會全部出現
+        foreach (eg_role_page_r_extra()[$module] ?? [] as $f) {
+            if (eg_role_page_r_ensure_file($pdo, $uid, $f)) $any = true;
+        }
+        if (!isset($map[$module])) return $any;
+        return eg_role_page_r_ensure_file($pdo, $uid, $map[$module]) || $any;
     }
 }
 
