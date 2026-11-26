@@ -21,13 +21,13 @@
  */
 require_once __DIR__ . '/acc_lib.php';
 
-/** 廠商發票號碼正規化：大寫、去空白與連字號，回傳 AB-12345678；格式不對回 null；空字串回 '' */
+/** 廠商發票號碼正規化：大寫、去空白與連字號，回傳 AB12345678（不帶連字號）；格式不對回 null；空字串回 '' */
 function acc_purc_invoice_norm(string $raw): ?string
 {
     $v = strtoupper(preg_replace('/[\s-]+/u', '', $raw));
     if ($v === '') return '';
     if (!preg_match('/^[A-Z]{2}\d{8}$/', $v)) return null;
-    return substr($v, 0, 2) . '-' . substr($v, 2);
+    return $v;
 }
 
 /**

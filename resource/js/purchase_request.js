@@ -1846,12 +1846,12 @@ function openAcct() {
 /** 發票號碼：輸入當下轉大寫、去空白並即時檢查格式（2 碼英文＋8 碼數字） */
 function normInvNo() {
     var v = String($('#aInvNo').val() || '').toUpperCase().replace(/[\s-]+/g, '');
-    return v.length > 2 && /^[A-Z]{2}/.test(v) ? v.substr(0, 2) + '-' + v.substr(2) : v;   // 輸入到第 3 碼自動補連字號：AB-12345678
+    return v;   // 不帶連字號：AB12345678
 }
 function checkInvNo() {
     var v = normInvNo(); $('#aInvNo').val(v);
-    var bad = v !== '' && !/^[A-Z]{2}-\d{8}$/.test(v);
-    $('#aInvErr').text(bad ? '格式不正確：要是 2 碼英文加 8 碼數字，例如 AB-12345678' : '').css('color', '#DD5138');
+    var bad = v !== '' && !/^[A-Z]{2}\d{8}$/.test(v);
+    $('#aInvErr').text(bad ? '格式不正確：要是 2 碼英文加 8 碼數字，例如 AB12345678' : '').css('color', '#DD5138');
     $('#aInvNo').css('border-color', bad ? '#DD5138' : '');
     return !bad;
 }

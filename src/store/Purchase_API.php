@@ -85,6 +85,11 @@ case 'meta': {
         'me' => ['id' => $uid, 'name' => $uname, 'dept_id' => $u['dept_id'], 'dept_name' => $u['dept_name']],
         'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn(),   // 用資料庫時間：PHP 是 UTC，凌晨會差一天
         'categories' => $cats, 'units' => $units, 'locations' => $locs, 'tags' => $tags,
+        // 到貨入庫可選的儲位：管理員有限定就只給那些（空＝全部）
+        'recv_locations' => (function () use ($db, $locs) {
+            $ids = purchase_recv_loc_ids($db);
+            return $ids ? array_values(array_filter($locs, fn($l) => in_array((int)$l['location_id'], $ids, true))) : $locs;
+        })(),
         'thresholds' => ['l1' => $l1, 'l2' => $l2],
         'tax_types' => PURCHASE_TAX_TYPES, 'receive_modes' => PURCHASE_RECEIVE_MODES,
         'statuses' => PURCHASE_STATUS, 'purpose_types' => PURCHASE_PURPOSE_TYPES,
@@ -99,6 +104,7 @@ case 'meta': {
         $resp['attach_nas_writable'] = is_dir($nas) ? (bool)is_writable($nas) : false;
         $resp['attach_nas_exists']   = is_dir($nas);
         $resp['auto_approve_types']  = purchase_auto_approve_types($db);
+        $resp['recv_loc_ids']        = purchase_recv_loc_ids($db);
         $resp['as_docs']   = eg_asdoc_list($db);
         $resp['as_doc_id'] = eg_asdoc_id($db, 'purchase_req');
         $resp['as_doc']    = eg_asdoc_get($db, 'purchase_req');
@@ -126,6 +132,17 @@ case 'save_settings': {
         $ok = [];
         foreach ($arr as $t) { $t = strtoupper(trim((string)$t)); if (isset(PURCHASE_PURPOSE_TYPES[$t])) $ok[$t] = true; }
         purchase_set_setting($db, 'purchase_auto_approve_types', implode(',', array_keys($ok)));
+    }
+    // 到貨入庫可選儲位：沒送＝不動；送空陣列＝不限。id 一律對照儲位主檔過濾
+    if (isset($_POST['recv_loc_ids'])) {
+        $arr = json_decode((string)$_POST['recv_loc_ids'], true);
+        if (!is_array($arr)) jerr('入庫儲位格式不正確');
+        $ids = array_values(array_unique(array_filter(array_map('intval', $arr))));
+        if ($ids) {
+            $in = implode(',', $ids);
+            $ids = array_map('intval', $db->query("SELECT location_id FROM stock_locations WHERE location_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN));
+        }
+        purchase_set_setting($db, 'purchase_recv_loc_ids', implode(',', $ids));
     }
     if (isset($_POST['print_header'])) purchase_set_setting($db, 'purchase_print_header', pv('print_header'));
     if (isset($_POST['print_footer'])) purchase_set_setting($db, 'purchase_print_footer', pv('print_footer'));
@@ -1161,11 +1178,11 @@ case 'save_quote': {
     $status = $levels === 0 ? 'approved' : 'quoted';
     $db->prepare("UPDATE purchase_request SET vendor_id=?, vendor_name=?, tax_type=?, subtotal=?, tax_amount=?,
                   grand_total=?, need_levels=?, level_done=0, status=?, buyer_id=?, buyer_name=?, quoted_at=NOW(),
-                  expected_date=?, pay_method=?, approved_at=?, reject_reason=NULL, Modified_By=? WHERE req_id=?")
+                  expected_date=?, pay_method=?, approved_at=?, reject_reason=NULL, skip_quote=?, Modified_By=? WHERE req_id=?")
        ->execute([pv('vendor_id') ?: null, pv('vendor_name') ?: null, $taxType,
                   $t['subtotal'], $t['tax_amount'], $t['grand_total'], $levels, $status, $uid, $uname,
                   pdate('expected_date'), pv('pay_method') ?: null,
-                  $levels === 0 ? date('Y-m-d H:i:s') : null, $uid, $reqId]);
+                  $levels === 0 ? date('Y-m-d H:i:s') : null, pv('skip_quote') === '1' ? 1 : 0, $uid, $reqId]);
     // 最近採購價回寫規格主檔（下次申請自動帶）
     $sp = $db->prepare("SELECT COALESCE(buy_spec_id, spec_id) spec_id, unit_price FROM purchase_request_item
                         WHERE req_id=? AND COALESCE(buy_spec_id, spec_id) IS NOT NULL");
@@ -1280,6 +1297,11 @@ case 'receive': {
     }
     if (!$lines && !$extras) jerr('請至少填一筆到貨數量');
     $rcptDate = pdate('rcpt_date') ?: date('Y-m-d');
+    // ERP 進貨單號（II-民國年MMDD流水三碼）非必填；只存大寫、去空白，格式提醒由畫面負責，這裡不阻擋
+    $erpNo = strtoupper(preg_replace('/\s+/', '', pv('erp_rcpt_no')));
+    if (mb_strlen($erpNo) > 20) jerr('ERP 進貨單號太長（最多 20 字）');
+    $erpNo = $erpNo !== '' ? $erpNo : null;
+    $allowedLocs = purchase_recv_loc_ids($db);   // 管理員限定的入庫儲位（空＝不限）
     // 進貨一定要綁定廠商 ID（應付對帳、付款沖帳都靠它歸戶，只存名稱字串日後對不起來）
     $vendIn = pv('vendor_id');
     $vendName = null;
@@ -1296,9 +1318,16 @@ case 'receive': {
     if ($mil !== '' && (!ctype_digit($mil) || (int)$mil > 9999999)) jerr('里程數請填 0～9999999 的整數（公里）');
 
     $db->beginTransaction();
+    // 同一張單可分多張進貨單、各自不同廠商：這次進貨的廠商記在每筆到貨上；單頭廠商只在還沒有時才補（不覆蓋詢價時定的廠商）
+    $reqV = $req;
     if ($vendName !== null) {   // 名稱一律由主檔重建，不採信前端送來的字串
-        $db->prepare("UPDATE purchase_request SET vendor_id=?, vendor_name=? WHERE req_id=?")->execute([$vendIn, $vendName, $reqId]);
+        if (trim((string)$req['vendor_id']) === '') {
+            $db->prepare("UPDATE purchase_request SET vendor_id=?, vendor_name=? WHERE req_id=?")->execute([$vendIn, $vendName, $reqId]);
+        }
+        $reqV['vendor_id'] = $vendIn; $reqV['vendor_name'] = $vendName;
     }
+    $rcVendId = $reqV['vendor_id'] ?: null; $rcVendName = $reqV['vendor_name'] ?: null;
+    $priceTouched = false;
     if ($mil !== '') {
         $isVeh = !empty($req['purpose_vehicle_id']);
         if (!$isVeh) {
@@ -1313,8 +1342,9 @@ case 'receive': {
     }
     $got = $db->prepare("SELECT * FROM purchase_request_item WHERE pr_item_id=? AND req_id=?");
     $insR = $db->prepare("INSERT INTO purchase_receipt (req_id, pr_item_id, rcpt_date, qty, receive_mode, location_id,
-                          stock_item_id, txn_in_id, txn_out_id, receiver_id, receiver_name, remark, Created_By)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                          stock_item_id, txn_in_id, txn_out_id, receiver_id, receiver_name, remark, Created_By,
+                          vendor_id, vendor_name, erp_rcpt_no)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     $done = 0;
     foreach ($lines as $ln) {
         $qty = (float)($ln['qty'] ?? 0);
@@ -1335,9 +1365,30 @@ case 'receive': {
         $receiverId = (int)($ln['receiver_id'] ?? 0) ?: null;
         $receiverName = null;
 
-        if ($mode === 'stock' || $mode === 'direct') {
+        // 到貨時可一併補／改單價（未稅）；金額由後端重算
+        if (($ln['unit_price'] ?? '') !== '' && is_numeric($ln['unit_price'])) {
+            $np = (float)$ln['unit_price'];
+            if ($np < 0) { $db->rollBack(); jerr($item['item_name'] . ' 的單價不可為負'); }
+            if ($item['unit_price'] === null || abs((float)$item['unit_price'] - $np) > 0.00001) {
+                $db->prepare("UPDATE purchase_request_item SET unit_price=?, amount=ROUND(COALESCE(buy_qty, qty_requested) * ?, 2) WHERE pr_item_id=?")
+                   ->execute([$np, $np, (int)$item['pr_item_id']]);
+                $item['unit_price'] = $np; $priceTouched = true;
+            }
+        }
+        // 沒有採購料號的品項入庫：由到貨處理選「品項種類」（不建料號）
+        $catIn = (int)($ln['stock_category_id'] ?? 0);
+        if ($catIn > 0) {
+            $item['stock_category_id'] = $catIn;
+            $db->prepare("UPDATE purchase_request_item SET stock_category_id=? WHERE pr_item_id=?")->execute([$catIn, (int)$item['pr_item_id']]);
+        }
+        if ($mode === 'stock' && $allowedLocs && $locId && !in_array($locId, $allowedLocs, true)) {
+            $db->rollBack(); jerr($item['item_name'] . '：這個儲位不在管理員開放的入庫儲位內，請重新選擇');
+        }
+
+        // 入庫待領一定要有儲位；直接交付沒選儲位就只記到貨與交付對象，不動庫存
+        if ($mode === 'stock' || ($mode === 'direct' && $locId)) {
             try {
-                $stockItemId = purchase_find_or_create_stock_item($db, $item, $req, $locId, $uid);
+                $stockItemId = purchase_find_or_create_stock_item($db, $item, $reqV, $locId, $uid);
             } catch (Throwable $e) { $db->rollBack(); jerr($item['item_name'] . '：' . $e->getMessage()); }
             $locName = '';
             if ($locId) {
@@ -1347,7 +1398,7 @@ case 'receive': {
             }
             $txnIn = purchase_write_txn($db, $stockItemId, 'in', $qty, $locId, [
                 'location_name' => $locName, 'unit_cost' => $item['unit_price'], 'txn_date' => $rcptDate,
-                'remark' => '採購入庫 ' . $req['req_no'] . ($req['vendor_name'] ? '／' . $req['vendor_name'] : ''),
+                'remark' => '採購入庫 ' . $req['req_no'] . ($rcVendName ? '／' . $rcVendName : '') . ($erpNo ? '／' . $erpNo : ''),
             ], $uid);
             if ($mode === 'direct') {
                 if (!$receiverId) $receiverId = (int)$req['requester_id'];
@@ -1363,7 +1414,8 @@ case 'receive': {
         }
 
         $insR->execute([$reqId, (int)$item['pr_item_id'], $rcptDate, $qty, $mode, $locId, $stockItemId,
-                        $txnIn, $txnOut, $receiverId, $receiverName, trim((string)($ln['remark'] ?? '')) ?: null, $uid]);
+                        $txnIn, $txnOut, $receiverId, $receiverName, trim((string)($ln['remark'] ?? '')) ?: null, $uid,
+                        $rcVendId, $rcVendName, $erpNo]);
         $db->prepare("UPDATE purchase_request_item SET qty_received=qty_received+?, receive_mode=?,
                       location_id=COALESCE(?,location_id), stock_item_id=COALESCE(?,stock_item_id) WHERE pr_item_id=?")
            ->execute([$qty, $mode, $locId, $stockItemId, (int)$item['pr_item_id']]);
@@ -1387,17 +1439,29 @@ case 'receive': {
             $insX->execute([$reqId, $x['name'], $x['spec'], $x['qty'], $x['qty'], $x['price'],
                             $x['price'] === null ? null : round($x['qty'] * $x['price'], 2), $x['remark'], ++$sortMax]);
             $newId = (int)$db->lastInsertId();
-            $insR->execute([$reqId, $newId, $rcptDate, $x['qty'], 'service', null, null, null, null, null, null, $x['remark'], $uid]);
+            $insR->execute([$reqId, $newId, $rcptDate, $x['qty'], 'service', null, null, null, null, null, null, $x['remark'], $uid,
+                            $rcVendId, $rcVendName, $erpNo]);
             $extraDone++;
         }
-        // 金額重算；細項加總若讓金額超過原本核准的簽核層級，就不准直接進來（避免用細項繞過簽核）
+    }
+    // 金額重算（細項、改單價、調整含稅總額任一發生）；加總若讓金額超過原本核准的簽核層級，就不准直接進來（避免繞過簽核）
+    $finalIn = pv('grand_total_final');
+    if ($extras || $priceTouched || ($finalIn !== '' && is_numeric($finalIn))) {
         $taxT = (string)($req['tax_type'] ?: 'taxable');
+        if ($finalIn !== '' && is_numeric($finalIn)) {
+            // 含稅總額人工調整：存「與系統算出的差額」，之後單價再變動仍保留這個差額
+            $db->prepare("UPDATE purchase_request SET total_adjust=0 WHERE req_id=?")->execute([$reqId]);
+            $base = purchase_calc_totals($db, $reqId, $taxT);
+            $adj = round((float)$finalIn - $base['grand_total'], 2);
+            if (abs($adj) > 50) { $db->rollBack(); jerr('含稅總額與系統算出的金額差 ' . number_format($adj, 2) . ' 元，調整範圍上限 ±50 元（四捨五入／捨去用）'); }
+            $db->prepare("UPDATE purchase_request SET total_adjust=? WHERE req_id=?")->execute([$adj, $reqId]);
+        }
         $tt = purchase_calc_totals($db, $reqId, $taxT);
         [$l1, $l2] = purchase_thresholds($db);
         $lvNew = purchase_need_levels($tt['grand_total'], $l1, $l2);
         if ($lvNew > (int)$req['need_levels'] && !purchase_is_auto_purpose($db, $req, $reqId)) {
             $db->rollBack();
-            jerr('細項加總後含稅 ' . number_format($tt['grand_total'], 2) . ' 元，超過這張單原本核准的簽核層級，請改走詢價與簽核');
+            jerr('金額調整後含稅 ' . number_format($tt['grand_total'], 2) . ' 元，超過這張單原本核准的簽核層級，請改走詢價與簽核');
         }
         $db->prepare("UPDATE purchase_request SET tax_type=?, subtotal=?, tax_amount=?, grand_total=? WHERE req_id=?")
            ->execute([$taxT, $tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], $reqId]);
@@ -1418,9 +1482,9 @@ case 'save_account': {
     $reqId = pint('req_id');
     $req = purchase_load_req($db, $reqId);
     require_once __DIR__ . '/../common/acc_purc_invoice_lib.php';
-    // 發票號碼：大寫、2 碼英文＋8 碼數字，存成 AB-12345678（與會計應付對帳的廠商發票同一格式）；空白＝還沒有發票
+    // 發票號碼：大寫、2 碼英文＋8 碼數字，存成 AB12345678（不帶連字號，與會計應付對帳的廠商發票同一格式）；空白＝還沒有發票
     $inv = acc_purc_invoice_norm(pv('invoice_no'));
-    if ($inv === null) jerr('發票號碼格式不正確：要是 2 碼英文加 8 碼數字，例如 AB-12345678');
+    if ($inv === null) jerr('發票號碼格式不正確：要是 2 碼英文加 8 碼數字，例如 AB12345678');
     $invDate = pdate('invoice_date');
     if ($inv !== '' && !$invDate) jerr('有發票號碼時請一併填發票日期（帳款月份要依發票日期判定）');
     $db->beginTransaction();

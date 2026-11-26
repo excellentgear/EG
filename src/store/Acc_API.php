@@ -785,7 +785,8 @@ case 'vch_create': {
         trim((string)($_POST['bm'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
         acc_u8((string)($_POST['voucher_no'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), $sel,
         (string)($_SESSION['userName'] ?? $uid), $extra, (string)($_POST['rounding'] ?? 'none'),
-        (array)json_decode((string)($_POST['exp_choice'] ?? '[]'), true));
+        (array)json_decode((string)($_POST['exp_choice'] ?? '[]'), true),
+        (array)json_decode((string)($_POST['auto_ovr'] ?? '[]'), true));
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

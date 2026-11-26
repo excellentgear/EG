@@ -99,7 +99,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="a-wrap" style="max-height:60vh;overflow:auto;">
           <table class="a-t"><thead><tr><th style="width:30px;"><input type="checkbox" id="vCkAll"></th><th>類型</th><th>單號</th><th>日期</th>
-            <th>料號</th><th>品名規格</th><th>數量</th><th>單價</th><th>金額</th><th>發票</th><th>傳票</th></tr></thead>
+            <th id="vColPid">料號</th><th>品名規格</th><th>數量</th><th>單價</th><th>金額</th><th>發票</th><th>傳票</th></tr></thead>
             <tbody id="vBody"></tbody></table>
         </div>
       </div>
@@ -128,7 +128,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
   <div class="m-head"><i class="fa fa-book"></i>&nbsp;<span id="jTitle">確認傳票</span><span class="m-close" data-close="mkJ">✕</span></div>
   <div class="m-body">
     <div id="jHead" class="info" style="margin-bottom:8px;"></div>
-    <div style="font-weight:700;color:#5b3a1e;margin-bottom:6px;"><i class="fa fa-book"></i> 會計分錄　<span style="font-weight:400;font-size:12.5px;color:#8a6d45;">依勾選明細自動帶出；匯費、手續費等請在下方加入科目，借貸方向依科目代號首碼自動判定（1／5／6＝借方，2／3／4＝貸方）</span></div>
+    <div style="font-weight:700;color:#5b3a1e;margin-bottom:6px;"><i class="fa fa-book"></i> 會計分錄　<span style="font-weight:400;font-size:12.5px;color:#8a6d45;">依勾選明細自動帶出（科目可直接點選修改）；匯費、手續費等請在下方加入科目，借貸方向依科目代號首碼自動判定（1／5／6＝借方，2／3／4＝貸方）</span></div>
     <div style="margin-bottom:6px;font-size:13px;color:#5b3a1e;">小數處理（未稅金額）：
       <select id="jRound" style="width:auto;"><option value="none">不處理（保留小數）</option><option value="round">四捨五入至整數</option><option value="floor">無條件捨去至整數</option></select>
       <span style="color:#8a6d45;font-size:12.5px;">稅額以處理後的未稅金額計算</span></div>
@@ -183,7 +183,7 @@ $(document).ready(function () { $('#sidebar-menu').css('visibility', 'visible');
 (function ($) {
 'use strict';
 var API='../../src/store/Acc_API.php', CSRF='', CAN_EDIT=<?= $perms['canEdit']?'true':'false' ?>, CAN_ADMIN=<?= $perms['canAdmin']?'true':'false' ?>;
-var items=[], SEL={}, lPage=1;
+var items=[], SEL={}, lPage=1, PARTY_NAME='';
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function nf(n){ return Math.round(Number(n)||0).toLocaleString('en-US'); }
 function np(n){ return String(parseFloat(Number(n||0).toFixed(4))); }
@@ -209,7 +209,7 @@ $.getJSON(API,{action:'meta'},function(r){
       window.afterItems=function(){
         $('#btnVAll').trigger('click');
         var inv=q.get('inv'), idt=q.get('idate');
-        if(inv && !$('#vNote').val()) $('#vNote').val(('廠商發票 '+inv+(idt?'（'+idt+'）':'')).slice(0,200));
+        if(inv && !$('#vNote').val()) $('#vNote').val(('廠商發票 '+(idt?dd(idt):inv)).slice(0,200));
       };
       $('#vParty').val(qp).trigger('change');
     };
@@ -254,6 +254,7 @@ function loadItems(){
   $.post(API+'?action=vch_candidates',{side:$('#vSide').val(),party_id:pid,bm:$('#vBm').val()},function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     items=r.items||[]; SEL={}; $('#vBox').show();
+    PARTY_NAME=r.party_name||''; $('#vColPid').text($('#vSide').val()==='ap'?'廠商':'料號');
     var lk=items.filter(function(i){return i.locked;}).length;
     $('#vInfo').html('<div class="info"><b>'+esc(r.party_name)+'</b>　共 '+items.length+' 筆明細'+(lk?'，其中 '+lk+' 筆已有傳票（灰底，不可重複開立）':'')+'。</div>');
     renderItems();
@@ -269,7 +270,7 @@ function renderItems(){
     h+='<tr data-i="'+i+'" class="'+(it.locked?'lockedrow ':'')+(SEL[i]?'on':'')+'"'+(ret?' style="color:#DD5138;background:#FADADD;"':'')+'>'
       +'<td>'+(it.locked||!CAN_EDIT?'':'<input type="checkbox" class="vck"'+(SEL[i]?' checked':'')+'>')+'</td>'
       +'<td>'+srcLbl(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td>'
-      +'<td class="l">'+esc(it.product_id)+'</td><td class="l">'+esc((it.spec||'').substr(0,26))+'</td>'
+      +'<td class="l">'+esc($('#vSide').val()==='ap'?PARTY_NAME:it.product_id)+'</td><td class="l">'+esc((it.spec||'').substr(0,26))+'</td>'
       +'<td class="r">'+nf(it.qty)+'</td><td class="r">'+np(it.unit_price)+'</td><td class="r">'+nf(it.amount)+'</td>'
       +'<td>'+esc(it.invoice_no||(it.invoiced?'已開（未回填號碼）':''))+'</td>'
       +'<td>'+(it.locked?'<span class="lk"><i class="fa fa-lock"></i> '+esc(it.voucher_no||'(未填號)')+'</span>':'')+'</td></tr>';
@@ -363,9 +364,24 @@ function autoLines(){
     L.push({code:A('ap_tax').code,name:A('ap_tax').name,side:neg?'C':'D',amount:tax});
     L.push({code:A('ap_pay').code,name:A('ap_pay').name,side:neg?'D':'C',amount:abs+tax});
   }
-  return L.filter(function(l){ return l.amount>0.004; });
+  L=L.filter(function(l){ return l.amount>0.004; });
+  // 使用者手改的科目（以該列順序為鍵；借貸方向維持原分錄結構不變）
+  L.forEach(function(l,i){ l.ai=i; var o=AOVR[i]; if(o){ l.code=o.code; l.name=o.name; l.edited=1; } });
+  return L;
 }
-var jBalanced=false;
+var jBalanced=false, AOVR={};
+/* 自動帶出的會計科目可直接手改：輸入代號或名稱，下方出現符合的科目清單可選；離開欄位時驗證必須在科目表內 */
+$(document).on('change','.j-acode',function(){
+  var ai=+$(this).data('ai'), v=$.trim(this.value), a=null, up=v.toUpperCase();
+  if(v){
+    a=ACCT.filter(function(x){ return x.code===v; })[0]
+      || ACCT.filter(function(x){ return x.name===v; })[0]
+      || (function(){ var m=ACCT.filter(function(x){ return (x.code+' '+x.name).toUpperCase().indexOf(up)>=0; }); return m.length===1?m[0]:null; })();
+    if(!a){ toast('科目「'+esc(v)+'」不在科目表（或符合多筆），請從清單選擇或輸入完整科目代號', true); journalRender(); return; }
+  }
+  if(!a) delete AOVR[ai]; else AOVR[ai]={code:a.code,name:a.name};
+  journalRender();
+});
 function signBoxes(signs, maker, canClear, canSign, id){
   var sg='', ks=Object.keys(SLOTS);
   ks.forEach(function(k){ var g=(signs||{})[k];
@@ -380,7 +396,7 @@ function journalRender(){
   var d=0,c=0,h='';
   rows.forEach(function(l){
     if(l.side==='D') d+=l.amount; else c+=l.amount;
-    h+='<tr><td>'+esc(l.code)+'</td><td class="l" style="'+(l.side==='C'?'padding-left:26px;':'')+'">'+esc(l.name)+(l.memo?'<span style="color:#8a6d45;font-size:12px;">　'+esc(l.memo)+'</span>':'')+(l.auto?'':' <span class="lk">（追加）</span>')+'</td>'
+    h+='<tr><td>'+(l.auto&&CAN_EDIT?'<input type="text" class="j-acode" list="dlAcct" data-ai="'+l.ai+'" value="'+esc(l.code)+'" maxlength="40" autocomplete="off" data-eg-skip title="可直接改：輸入科目代號或名稱，從清單選擇" style="width:100%;box-sizing:border-box;'+(l.edited?'background:#FFF3D1;':'')+'">':esc(l.code))+'</td><td class="l" style="'+(l.side==='C'?'padding-left:26px;':'')+'">'+esc(l.name)+(l.memo?'<span style="color:#8a6d45;font-size:12px;">　'+esc(l.memo)+'</span>':'')+(l.auto?'':' <span class="lk">（追加）</span>')+'</td>'
       +'<td class="r">'+(l.side==='D'?nf2(l.amount):'')+'</td><td class="r">'+(l.side==='C'?nf2(l.amount):'')+'</td>'
       +'<td>'+(l.auto?'':'<button class="btn-mini j-del" data-i="'+l.ix+'">移除</button>')+'</td></tr>';
   });
@@ -546,7 +562,7 @@ $('#btnVCreate').on('click',function(){
   var d=$('#vDate').val(); if(!d){ toast('請先填傳票日期', true); $('#vDate').focus(); return; }
   var noV=normNo($('#vNo').val(), d), noE=noCheck(noV, d); $('#vNo').val(noV);
   if(noE){ toast('傳票號碼：'+esc(noE), true); $('#vNo').focus(); return; }
-  JX=[]; $('#jErr').text('');
+  JX=[]; AOVR={}; $('#jErr').text('');
   $('#jTitle').text('確認傳票 '+noV);
   $('#jRound').val('none'); EXPSEL={}; renderExp();
   $('#jHead').html('<b>'+esc($('#vParty option:selected').text().split('　')[0])+'</b>　帳款月份 '+esc($('#vBm').val())+'　傳票日期 '+dd(d)+'　共 '+k.length+' 筆憑證、未稅合計 '+nf2(selNet()));
@@ -560,7 +576,7 @@ $('#btnJConfirm').on('click',function(){
   var sel=k.map(function(i){ return {src_type:items[i].src_type, src_id:items[i].src_id}; });
   var $b=$(this).prop('disabled',true);
   $.post(API+'?action=vch_create',{csrf:CSRF,side:$('#vSide').val(),party_id:$('#vParty').val(),bm:$('#vBm').val(),
-    voucher_date:d,voucher_no:noV,note:$('#vNote').val(),sel:JSON.stringify(sel),extra:JSON.stringify(JX),rounding:$('#jRound').val(),exp_choice:JSON.stringify(EXPSEL)},function(r){
+    voucher_date:d,voucher_no:noV,note:$('#vNote').val(),sel:JSON.stringify(sel),extra:JSON.stringify(JX),auto_ovr:JSON.stringify(AOVR),rounding:$('#jRound').val(),exp_choice:JSON.stringify(EXPSEL)},function(r){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'開立失敗'), true); return; }
     closeMask('mkJ'); toast('<b>'+esc(r.message)+'</b>　可到「傳票查詢」列印或看明細');

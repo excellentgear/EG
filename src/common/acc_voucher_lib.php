@@ -165,7 +165,7 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
 
 /** 建立傳票。$sel＝[{src_type,src_id}]；明細內容一律以當下資料庫重算，不信前端金額 */
 function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, string $date, ?string $no,
-                            string $note, array $sel, string $userName, array $extra = [], string $rounding = 'none', array $expChoice = []): array
+                            string $note, array $sel, string $userName, array $extra = [], string $rounding = 'none', array $expChoice = [], array $autoOvr = []): array
 {
     acc_voucher_ensure($db);   // DDL 在交易外
     if (!in_array($rounding, ['none', 'round', 'floor'], true)) $rounding = 'none';
@@ -242,7 +242,18 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
             $expGroups[$mi]['amount'] = round($expGroups[$mi]['amount'] + $diff, 2);
         }
     }
-    $lines = array_merge(acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT], $expGroups), $extraLines);
+    $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT], $expGroups);
+    // 使用者手改自動分錄的科目：以該列順序為鍵，科目名稱一律取自科目表；借貸方向維持原分錄結構
+    foreach ($autoOvr as $ai => $ocode) {
+        $ocode = trim((string)$ocode);
+        if (is_array($ocode) || !isset($autoLines[(int)$ai])) continue;
+        if (!preg_match('/^\d{4,10}$/', $ocode)) return ['success' => false, 'message' => '分錄第 ' . ((int)$ai + 1) . ' 列：科目代號須為 4~10 位數字'];
+        $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$ocode]);
+        $oname = (string)$q->fetchColumn();
+        if ($oname === '') return ['success' => false, 'message' => '分錄第 ' . ((int)$ai + 1) . ' 列：科目 ' . $ocode . ' 不在科目表'];
+        $autoLines[(int)$ai]['code'] = $ocode; $autoLines[(int)$ai]['name'] = $oname;
+    }
+    $lines = array_merge($autoLines, $extraLines);
     [$dSum, $cSum] = acc_vch_lines_balance($lines);
     if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2) . '，請調整追加的科目'];
     try {

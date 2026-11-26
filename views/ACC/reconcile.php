@@ -426,7 +426,11 @@ table.ot tr.lock{color:#a08a6a;}
       <label id="bmLbl" style="cursor:help;">帳款月份 <i class="fa fa-info-circle" style="color:#b5762a;"></i></label>
       <input type="month" id="bm" style="width:145px;">
       <label id="partyLbl">客戶</label>
-      <select id="partySel" data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">請先選帳款月份</option></select>
+      <span style="position:relative;display:inline-block;">
+        <input type="text" id="partyKw" autocomplete="off" style="width:260px;" placeholder="輸入名稱或編號，從下方清單選擇">
+        <div id="partyDd" style="display:none;position:absolute;left:0;top:100%;z-index:3000;min-width:100%;width:max-content;max-width:520px;max-height:300px;overflow:auto;background:#fff;border:1px solid #d9b98a;box-shadow:0 4px 12px rgba(91,58,30,.2);"></div>
+      </span>
+      <select id="partySel" style="display:none;"><option value="">請先選帳款月份</option></select>
       <button id="btnLoad" class="btn-warm"><i class="fa fa-folder-open-o"></i> 載入對帳單</button>
       <button id="btnCalc"><i class="fa fa-calculator"></i> 計算機</button>
       <span class="a-role">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b>
@@ -1082,7 +1086,7 @@ function loadParties(){
         +(p.in_master===false ? ' ［未建主檔］' : '')
         +(p.no_statement ? ' ［不提供對帳單］' : '')+'</option>';
     });
-    $('#partySel').html(h);
+    $('#partySel').html(h); partySync();
     paintUnbBar((r.summary && r.summary.no_master) || 0, !!r.can_bind);
     if(pendingParty){
       var want=pendingParty; pendingParty='';
@@ -1093,7 +1097,7 @@ function loadParties(){
       if(!found){
         $('#partySel').append('<option value="'+esc(want)+'">'+esc(want)+'（已有對帳底稿）</option>');
       }
-      $('#partySel').val(want);
+      $('#partySel').val(want); partySync();
       if($('#partySel').val()===want) loadSheet();
       else toast('找不到指定的對象：'+esc(want), true);
     }
@@ -1103,7 +1107,38 @@ $('#bm').on('change', loadParties);
 
 /* ══ 載入底稿 ══ */
 $('#btnLoad').on('click', loadSheet);
-$('#partySel').on('change',function(){ if($(this).val()) loadSheet(); });
+$('#partySel').on('change',function(){ partySync(); if($(this).val()) loadSheet(); });
+/* 客戶／廠商：輸入即在輸入欄下方列出符合的選項，點選（或 Enter 選第一筆）就自動載入對帳單 */
+function partySync(){
+  var $o=$('#partySel option:selected');
+  $('#partyKw').val($o.val() ? String($o.text()).split('（')[0].replace(/^⚠\s*/,'') : '');
+}
+function partyList(){
+  var kw=$.trim($('#partyKw').val()).toLowerCase().split(/\s+/).filter(Boolean), h='', n=0;
+  $('#partySel option').each(function(){
+    if(!this.value) return;
+    var t=String($(this).text()), tl=t.toLowerCase();
+    if(kw.some(function(k){ return tl.indexOf(k)<0; })) return;
+    if(++n>60) return;
+    h+='<div class="pd-it" data-v="'+esc(this.value)+'" style="padding:5px 10px;cursor:pointer;border-bottom:1px solid #f1e6d3;white-space:nowrap;">'+esc(t)+'</div>';
+  });
+  if(!h) h='<div style="padding:6px 10px;color:#8a6d45;">'+($('#partySel option').length>1?'沒有符合的對象':'請先選帳款月份並載入')+'</div>';
+  else if(n>60) h+='<div style="padding:4px 10px;color:#8a6d45;font-size:12px;">僅列前 60 筆，請再輸入更多字縮小範圍</div>';
+  $('#partyDd').html(h).show();
+}
+function partyPick(v){
+  $('#partyDd').hide();
+  $('#partySel').val(v).trigger('change');
+}
+$('#partyKw').on('focus click',function(){ this.select(); partyList(); })
+  .on('input',partyList)
+  .on('keydown',function(e){
+    if(e.key==='Enter'){ e.preventDefault(); var $f=$('#partyDd .pd-it').first(); if($f.length) partyPick($f.data('v')); }
+    else if(e.key==='Escape'){ $('#partyDd').hide(); partySync(); }
+  });
+$(document).on('mousedown','#partyDd .pd-it',function(e){ e.preventDefault(); partyPick(String($(this).data('v'))); });
+$(document).on('mouseenter','#partyDd .pd-it',function(){ $(this).css('background','#F7E0BD'); }).on('mouseleave','#partyDd .pd-it',function(){ $(this).css('background',''); });
+$('#partyKw').on('blur',function(){ setTimeout(function(){ $('#partyDd').hide(); partySync(); },120); });
 
 /* 對帳／請款聯絡提示：會計聯絡人、發票收件人（客戶主檔聯絡人勾選）＋電子發票 Email＋帳務備註；沒設定就不顯示 */
 function renderContactHint(h){
@@ -1453,7 +1488,7 @@ function renderVinv(locked){
   if(SIDE!=='ap' || !locked || !sheet){ $b.hide().empty(); return; }
   var ed=!!P.canEdit, no=sheet.vendor_inv_no||'', dt=sheet.vendor_inv_date||'';
   $b.html('<div class="info" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
-    +'<b>廠商發票</b> 發票號碼 <input type="text" id="vinvNo" maxlength="11" style="width:130px;text-transform:uppercase;" placeholder="AB-12345678" value="'+esc(no)+'"'+(ed?'':' disabled')+'>'
+    +'<b>廠商發票</b> 發票號碼 <input type="text" id="vinvNo" maxlength="10" style="width:130px;text-transform:uppercase;" placeholder="AB12345678" value="'+esc(no)+'"'+(ed?'':' disabled')+'>'
     +' 發票日期 <input type="date" id="vinvDate" value="'+esc(dt)+'"'+(ed?'':' disabled')+'>'
     +(ed?' <button type="button" id="vinvSave" class="btn-warm">儲存發票</button>':'')
     +' <button type="button" id="vinvVch" title="'+(no?'':'尚無廠商發票也可直接開傳票')+'">開立傳票</button></div>').show();
@@ -1928,7 +1963,7 @@ $(document).on('click','#btnUseSetlBm',function(){
   bmWhy('依此對象自訂結帳日');
   var keep = $('#partySel').val();
   loadParties();
-  setTimeout(function(){ if($('#partySel').val()!==keep) $('#partySel').val(keep);
+  setTimeout(function(){ if($('#partySel').val()!==keep) $('#partySel').val(keep); partySync();
                          if($('#partySel').val()) loadSheet(); }, 700);
 });
 $(document).on('click','#btnAddMissing',function(){

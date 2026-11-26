@@ -718,9 +718,8 @@ function acc_sheet_save(PDO $db, array $sheet, array $lines, ?array $user): arra
 function acc_sheet_vendor_inv_save(PDO $db, int $sheetId, string $invNo, string $invDate): array
 {
     acc_ensure_schema($db);
-    $invNo = strtoupper(trim($invNo));
-    if (!preg_match('/^[A-Z]{2}-?\d{8}$/', $invNo)) return ['success' => false, 'message' => '發票號碼格式應為 2 碼英文＋8 碼數字（如 AB-12345678）'];
-    if (strlen($invNo) === 10) $invNo = substr($invNo, 0, 2) . '-' . substr($invNo, 2);
+    $invNo = str_replace('-', '', strtoupper(trim($invNo)));
+    if (!preg_match('/^[A-Z]{2}\d{8}$/', $invNo)) return ['success' => false, 'message' => '發票號碼格式應為 2 碼英文＋8 碼數字（如 AB12345678）'];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $invDate) || !strtotime($invDate)) return ['success' => false, 'message' => '發票日期格式錯誤'];
     $st = $db->prepare("SELECT side,status FROM acc_recon_sheet WHERE sheet_id=? LIMIT 1");
     $st->execute([$sheetId]);
