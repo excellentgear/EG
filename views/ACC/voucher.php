@@ -44,6 +44,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 .page-help-btn{margin-left:auto;height:30px;padding:0 12px;border:1px solid var(--a-line2);border-radius:15px;background:#fff;color:var(--a-ink);cursor:pointer;}
 .help-doc{font-size:13.5px;line-height:1.9;color:var(--a-ink);}
 .help-doc h5{margin:10px 0 2px;color:var(--a-brand);font-weight:bold;}
+tr.v-ar td{background:#FCE9D4;} tr.v-ap td{background:#EFE9C6;} tr.voided td{background:#EDE6DA;}
 .st-open{background:var(--a-ok);color:#6b4522;} .st-void{background:#C9B69F;color:#fff;}
 .lk{color:#8a6d45;} tr.lockedrow{color:#a08a6a;background:#F6EFE2 !important;}
 .vno-in{width:150px;height:28px;border:1px solid var(--a-line2);border-radius:4px;padding:0 6px;color:var(--a-ink);}
@@ -130,6 +131,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <div style="margin-bottom:6px;font-size:13px;color:#5b3a1e;">小數處理（未稅金額）：
       <select id="jRound" style="width:auto;"><option value="none">不處理（保留小數）</option><option value="round">四捨五入至整數</option><option value="floor">無條件捨去至整數</option></select>
       <span style="color:#8a6d45;font-size:12.5px;">稅額以處理後的未稅金額計算</span></div>
+    <div id="jExp" class="info" style="display:none;margin-bottom:6px;"></div>
     <table class="a-t" id="tblJ"><thead><tr><th style="width:110px;">會計科目</th><th>科目名稱</th><th style="width:140px;">借方金額</th><th style="width:140px;">貸方金額</th><th style="width:60px;"></th></tr></thead>
       <tbody id="jBody"></tbody>
       <tfoot><tr><td colspan="2" style="text-align:right;font-weight:700;">合計</td><td class="r" id="jDsum" style="font-weight:700;">0</td><td class="r" id="jCsum" style="font-weight:700;">0</td><td id="jBal"></td></tr></tfoot></table>
@@ -310,12 +312,33 @@ $('#vNo').on('blur change',function(){ this.value=normNo(this.value, $('#vDate')
 $('#vDate').on('input change',function(){ var $n=$('#vNo'); if(/^\d{7}$/.test($.trim($n.val()))) $n.val(normNo($n.val(), $(this).val())); vNoState(); });
 function loadAcct(cb){
   $.getJSON(API,{action:'vch_accounts'},function(r){
-    if(!r.ok) return; ACCT=r.accounts||[]; ACFG=r.cfg||{}; TAXR=Number(r.tax_rate)||0.05; ME=r.me||''; SLOTS=r.slots||{}; COMPANY=r.company||'';
+    if(!r.ok) return; ACCT=r.accounts||[]; ACFG=r.cfg||{}; TAXR=Number(r.tax_rate)||0.05; ME=r.me||''; PRULES=r.prefix_rules||[]; SLOTS=r.slots||{}; COMPANY=r.company||'';
     $('#dlAcct').html(ACCT.map(function(a){ return '<option value="'+esc(a.code)+'">'+esc(a.name)+'</option>'; }).join(''));
     if(cb) cb(r);
   });
 }
 loadAcct();
+var PRULES=[], EXPSEL={};
+function ruleFor(no){ var best=null; PRULES.forEach(function(r){ if(r.prefix && String(no||'').toUpperCase().indexOf(String(r.prefix).toUpperCase())===0 && (!best||r.prefix.length>best.prefix.length)) best=r; }); return best; }
+function expGroups(){   // 應付：依單號開頭分組 → [{key,rule,amount}]
+  var m=$('#jRound').val(), f=function(n){ return m==='round'?Math.round(n):(m==='floor'?Math.floor(n+1e-9):n); }, g={}, order=[];
+  Object.keys(SEL).forEach(function(i){ var it=items[i], r=ruleFor(it.src_no), k=r?r.prefix:'', v=Number(it.amount)||0;
+    if(!g[k]){ g[k]={key:k,rule:r,pos:0,neg:0}; order.push(k); } if(v>=0) g[k].pos+=v; else g[k].neg+=-v; });
+  var out=order.map(function(k){ var x=g[k]; x.amount=f(Math.round(x.pos*100)/100)-f(Math.round(x.neg*100)/100); return x; });
+  var diff=Math.round((selNet()-out.reduce(function(a,x){ return a+x.amount; },0))*100)/100;
+  if(Math.abs(diff)>0.001 && out.length){ var mi=0; out.forEach(function(x,i){ if(Math.abs(x.amount)>Math.abs(out[mi].amount)) mi=i; }); out[mi].amount=Math.round((out[mi].amount+diff)*100)/100; }
+  return out;
+}
+function expAcct(x){ if(!x.rule) return ACFG.ap_exp||{code:'',name:''}; var a=x.rule.accounts, c=EXPSEL[x.key]; return a.filter(function(y){ return y.code===c; })[0]||a[0]; }
+function renderExp(){
+  if($('#vSide').val()!=='ap'){ $('#jExp').hide().empty(); return; }
+  var h='';
+  expGroups().forEach(function(x){ if(!x.rule || x.rule.accounts.length<2) return;
+    h+='<div style="margin:4px 0;">單號「'+esc(x.key)+'」開頭的明細，進貨會計科目：<select class="jexp" data-k="'+esc(x.key)+'" style="width:auto;">'
+      +x.rule.accounts.map(function(a){ return '<option value="'+esc(a.code)+'"'+(expAcct(x).code===a.code?' selected':'')+'>'+esc(a.code+' '+a.name)+'</option>'; }).join('')+'</select></div>'; });
+  $('#jExp').html(h).toggle(!!h);
+}
+$(document).on('change','.jexp',function(){ EXPSEL[$(this).data('k')]=this.value; journalRender(); });
 function selParts(){
   var sh=0, rt=0; Object.keys(SEL).forEach(function(i){ var v=Number(items[i].amount)||0; if(v>=0) sh+=v; else rt+=-v; });
   sh=Math.round(sh*100)/100; rt=Math.round(rt*100)/100;
@@ -333,7 +356,9 @@ function autoLines(){
     L.push({code:A('ar_tax').code,name:A('ar_tax').name,side:neg?'D':'C',amount:tax});
     L.push({code:A('ar_rev').code,name:A('ar_rev').name,side:'C',amount:P.ship});
   } else {
-    L.push({code:A('ap_exp').code,name:A('ap_exp').name,side:neg?'C':'D',amount:abs});
+    var eg=expGroups(), by={}, ord=[];
+    eg.forEach(function(x){ var a=expAcct(x); if(!by[a.code]){ by[a.code]={name:a.name,amt:0}; ord.push(a.code); } by[a.code].amt+=x.amount; });
+    ord.forEach(function(c){ L.push({code:c,name:by[c].name,side:by[c].amt<0?'C':'D',amount:Math.round(Math.abs(by[c].amt)*100)/100}); });
     L.push({code:A('ap_tax').code,name:A('ap_tax').name,side:neg?'C':'D',amount:tax});
     L.push({code:A('ap_pay').code,name:A('ap_pay').name,side:neg?'D':'C',amount:abs+tax});
   }
@@ -365,7 +390,7 @@ function journalRender(){
   $('#btnJConfirm').prop('disabled', !jBalanced);
   $('#vSigns').html(signBoxes({}, ME, false, false, 0));
 }
-$('#jRound').on('change',journalRender);
+$('#jRound').on('change',function(){ journalRender(); });
 $('#jCode').on('input change',function(){
   var code=$.trim(this.value), a=ACCT.filter(function(x){ return x.code===code; })[0];
   $('#jName').val(a?a.name:'');
@@ -409,8 +434,29 @@ $('#btnAcctCfg').on('click',function(){
       +'<table class="a-t" style="table-layout:fixed;width:100%;"><colgroup><col style="width:90px;"><col style="width:300px;"><col><col style="width:70px;">'+(CAN_ADMIN?'<col style="width:60px;">':'')+'</colgroup><thead><tr><th>分類代號</th><th>分類名稱</th><th>備註</th><th>科目數</th>'+(CAN_ADMIN?'<th>刪除</th>':'')+'</tr></thead><tbody id="catBody">';
     (r.categories||[]).forEach(function(c){ h+=catRow(c); });
     h+='</tbody></table>'+(!CAN_ADMIN?'':'<div class="a-bar" style="margin-top:6px;"><input type="text" id="catNewCode" maxlength="2" placeholder="2位代號" style="width:80px;" autocomplete="off"><input type="text" id="catNewName" maxlength="60" placeholder="新分類名稱" style="width:200px;" autocomplete="off"><button id="btnCatAdd"><i class="fa fa-plus"></i> 加入分類</button><span id="catErr" style="color:#DD5138;font-size:12.5px;"></span></div>');
+    PRULES=r.prefix_rules||[];
+    h+='<div style="font-weight:700;margin:14px 0 4px;">④ 應付：單號開頭對應進貨會計科目'+(CAN_ADMIN?'':'<span style="font-weight:400;color:#8a6d45;font-size:12.5px;">　僅會計管理員可修改</span>')+'</div>'
+      +'<div class="a-hint" style="margin-bottom:4px;">明細單號以「單號開頭」起頭時，傳票的進貨借方科目改用這裡設定的科目；設多個科目時，確認傳票時可下拉選擇（第一個為預設）。沒有符合的單號開頭，仍用上方「應付：進貨」。每行一個科目：代號 名稱（名稱可省略，會從科目表帶入）。</div>'
+      +'<table class="a-t"><thead><tr><th style="width:110px;">單號開頭</th><th>會計科目（一行一個）</th>'+(CAN_ADMIN?'<th style="width:60px;">刪除</th>':'')+'</tr></thead><tbody id="prBody">';
+    PRULES.forEach(function(x){ h+=prRow(x); });
+    h+='</tbody></table>'+(CAN_ADMIN?'<div class="a-bar" style="margin-top:6px;"><button id="btnPrAdd"><i class="fa fa-plus"></i> 新增單號開頭</button><button class="go" id="btnPrSave"><i class="fa fa-check"></i> 儲存單號對應科目</button></div>':'');
     $('#acctBody').html(h); openMask('mkAcct');
   });
+});
+function prRow(x){
+  var dis=CAN_ADMIN?'':' disabled', t=(x.accounts||[]).map(function(a){ return a.code+' '+a.name; }).join('\n');
+  return '<tr class="pr-row"><td><input type="text" class="pr-pf" maxlength="10" value="'+esc(x.prefix||'')+'" style="width:90px;"'+dis+'></td>'
+    +'<td><textarea class="pr-acc" rows="2" style="width:100%;" list="dlAcct"'+dis+'>'+esc(t)+'</textarea></td>'+(CAN_ADMIN?'<td style="text-align:center;"><input type="checkbox" class="pr-del"></td>':'')+'</tr>';
+}
+$(document).on('click','#btnPrAdd',function(){ $('#prBody').append(prRow({prefix:'',accounts:[]})); });
+$(document).on('click','#btnPrSave',function(){
+  var rules=[]; $('#prBody .pr-row').each(function(){ var $t=$(this); if($t.find('.pr-del').is(':checked')) return;
+    var accs=[]; String($t.find('.pr-acc').val()).split(/\n/).forEach(function(ln){ ln=$.trim(ln); if(!ln) return; var m=ln.match(/^(\d+)\s*(.*)$/); accs.push(m?{code:m[1],name:m[2]}:{code:ln,name:''}); });
+    rules.push({prefix:$.trim($t.find('.pr-pf').val()), accounts:accs}); });
+  $.post(API+'?action=vch_prefix_rules_save',{csrf:CSRF,rules:JSON.stringify(rules)},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
+    toast(esc(r.message)); loadAcct(); $('#btnAcctCfg').click();
+  },'json').fail(function(x){ failMsg(x,'儲存失敗'); });
 });
 function catRow(c){
   var dis=CAN_ADMIN?'':' disabled';
@@ -501,7 +547,7 @@ $('#btnVCreate').on('click',function(){
   if(noE){ toast('傳票號碼：'+esc(noE), true); $('#vNo').focus(); return; }
   JX=[]; $('#jErr').text('');
   $('#jTitle').text('確認傳票 '+noV);
-  $('#jRound').val('none');
+  $('#jRound').val('none'); EXPSEL={}; renderExp();
   $('#jHead').html('<b>'+esc($('#vParty option:selected').text().split('　')[0])+'</b>　帳款月份 '+esc($('#vBm').val())+'　傳票日期 '+dd(d)+'　共 '+k.length+' 筆憑證、未稅合計 '+nf2(selNet()));
   journalRender(); openMask('mkJ');
 });
@@ -513,7 +559,7 @@ $('#btnJConfirm').on('click',function(){
   var sel=k.map(function(i){ return {src_type:items[i].src_type, src_id:items[i].src_id}; });
   var $b=$(this).prop('disabled',true);
   $.post(API+'?action=vch_create',{csrf:CSRF,side:$('#vSide').val(),party_id:$('#vParty').val(),bm:$('#vBm').val(),
-    voucher_date:d,voucher_no:noV,note:$('#vNote').val(),sel:JSON.stringify(sel),extra:JSON.stringify(JX),rounding:$('#jRound').val()},function(r){
+    voucher_date:d,voucher_no:noV,note:$('#vNote').val(),sel:JSON.stringify(sel),extra:JSON.stringify(JX),rounding:$('#jRound').val(),exp_choice:JSON.stringify(EXPSEL)},function(r){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'開立失敗'), true); return; }
     closeMask('mkJ'); toast('<b>'+esc(r.message)+'</b>　可到「傳票查詢」列印或看明細');
@@ -529,7 +575,7 @@ function loadList(){
     var h='';
     if(!r.rows.length) h='<tr><td colspan="10" style="padding:18px;color:#8a6d45;">沒有符合的傳票</td></tr>';
     r.rows.forEach(function(v){
-      h+='<tr class="'+(v.status==='void'?'voided':'')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
+      h+='<tr class="'+(v.status==='void'?'voided ':'')+(v.side==='ap'?'v-ap':'v-ar')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
         +'<td>'+dd(v.voucher_date)+'</td><td>'+(v.side==='ap'?'應付':'應收')+'</td><td class="l">'+esc(v.party_name)+'</td>'
         +'<td>'+esc(v.billing_month||'')+'</td><td class="r">'+nf(v.total_amount)+'</td>'
         +'<td>'+esc(v.invoice_nos||'')+'</td>'

@@ -784,7 +784,8 @@ case 'vch_create': {
     $r = acc_voucher_create($db, (string)($_POST['side'] ?? 'ar'), acc_u8(trim((string)($_POST['party_id'] ?? ''))),
         trim((string)($_POST['bm'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
         acc_u8((string)($_POST['voucher_no'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), $sel,
-        (string)($_SESSION['userName'] ?? $uid), $extra, (string)($_POST['rounding'] ?? 'none'));
+        (string)($_SESSION['userName'] ?? $uid), $extra, (string)($_POST['rounding'] ?? 'none'),
+        (array)json_decode((string)($_POST['exp_choice'] ?? '[]'), true));
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }
@@ -818,7 +819,7 @@ case 'vch_update': {
 case 'vch_accounts': {
     require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
     acc_voucher_ensure($db);
-    acc_out(['accounts' => acc_vch_accounts($db), 'all_accounts' => acc_vch_accounts($db, true), 'categories' => acc_vch_categories($db), 'cfg' => acc_vch_acct_cfg($db), 'labels' => acc_vch_acct_labels(),
+    acc_out(['accounts' => acc_vch_accounts($db), 'all_accounts' => acc_vch_accounts($db, true), 'categories' => acc_vch_categories($db), 'cfg' => acc_vch_acct_cfg($db), 'prefix_rules' => acc_vch_prefix_rules($db), 'labels' => acc_vch_acct_labels(),
              'slots' => acc_vch_sign_slots(), 'tax_rate' => acc_tax_rate($db), 'me' => (string)($u['user_cname'] ?? ($_SESSION['userName'] ?? '')),
              'company' => (string)$db->query("SELECT COALESCE(NULLIF(customer_full,''),customer) FROM customer_list WHERE is_own_company=1 ORDER BY customer_id LIMIT 1")->fetchColumn()]);
 }
@@ -850,6 +851,20 @@ case 'vch_categories_save': {
     foreach ($rows as &$rw) foreach (['name', 'note'] as $f) if (isset($rw[$f])) $rw[$f] = acc_u8((string)$rw[$f]);
     unset($rw);
     $r = acc_vch_categories_save($db, $rows, $del);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_prefix_rules_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改科目設定', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $in = json_decode((string)($_POST['rules'] ?? '[]'), true);
+    if (!is_array($in)) acc_err('資料格式錯誤');
+    foreach ($in as &$x) { if (isset($x['prefix'])) $x['prefix'] = acc_u8((string)$x['prefix']); foreach ((array)($x['accounts'] ?? []) as $i => $ac) if (isset($ac['name'])) $x['accounts'][$i]['name'] = acc_u8((string)$ac['name']); }
+    unset($x);
+    $r = acc_vch_prefix_rules_save($db, $in, (string)$uid, (string)($_SESSION['userName'] ?? ''));
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

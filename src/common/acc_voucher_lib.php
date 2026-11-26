@@ -165,7 +165,7 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
 
 /** 建立傳票。$sel＝[{src_type,src_id}]；明細內容一律以當下資料庫重算，不信前端金額 */
 function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, string $date, ?string $no,
-                            string $note, array $sel, string $userName, array $extra = [], string $rounding = 'none'): array
+                            string $note, array $sel, string $userName, array $extra = [], string $rounding = 'none', array $expChoice = []): array
 {
     acc_voucher_ensure($db);   // DDL 在交易外
     if (!in_array($rounding, ['none', 'round', 'floor'], true)) $rounding = 'none';
@@ -212,7 +212,37 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     // 分錄：自動分錄（依選取明細金額重算）＋使用者追加的科目（匯費、手續費…），借貸必須平衡
     [$extraLines, $exErr] = acc_vch_clean_extra($db, $extra);
     if ($exErr) return ['success' => false, 'message' => $exErr];
-    $lines = array_merge(acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT]), $extraLines);
+    // 應付：依單號開頭分組決定「進貨」類借方科目（沒有規則的用預設進貨科目）
+    $expGroups = null;
+    if ($side === 'ap') {
+        $rules = acc_vch_prefix_rules($db);
+        $cfgA = acc_vch_acct_cfg($db);
+        $grp = [];
+        foreach ($pick as $it) {
+            $rule = acc_vch_rule_for($rules, (string)$it['src_no']);
+            $gk = $rule ? (string)$rule['prefix'] : '';
+            if (!isset($grp[$gk])) $grp[$gk] = ['rule' => $rule, 'pos' => 0.0, 'neg' => 0.0];
+            if ($it['amount'] >= 0) $grp[$gk]['pos'] += $it['amount']; else $grp[$gk]['neg'] += -$it['amount'];
+        }
+        $expGroups = []; $sumG = 0.0;
+        foreach ($grp as $gk => $g) {
+            $amt = $rf(round($g['pos'], 2)) - $rf(round($g['neg'], 2));
+            if ($g['rule']) {
+                $codes = array_column($g['rule']['accounts'], 'code');
+                $want = (string)($expChoice[$gk] ?? '');
+                $ix = array_search($want, $codes, true);
+                $acc = $g['rule']['accounts'][$ix === false ? 0 : $ix];
+            } else $acc = $cfgA['ap_exp'];
+            $expGroups[] = ['code' => $acc['code'], 'name' => $acc['name'], 'amount' => $amt];
+            $sumG += $amt;
+        }
+        $diff = round($total - $sumG, 2);      // 各組分別進位後與總額的零頭差，併入金額最大的一組
+        if (abs($diff) > 0.001 && $expGroups) {
+            $mi = 0; foreach ($expGroups as $i => $g) if (abs($g['amount']) > abs($expGroups[$mi]['amount'])) $mi = $i;
+            $expGroups[$mi]['amount'] = round($expGroups[$mi]['amount'] + $diff, 2);
+        }
+    }
+    $lines = array_merge(acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT], $expGroups), $extraLines);
     [$dSum, $cSum] = acc_vch_lines_balance($lines);
     if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2) . '，請調整追加的科目'];
     try {
@@ -250,8 +280,10 @@ function acc_voucher_list(PDO $db, array $f): array
                  OR EXISTS (SELECT 1 FROM acc_voucher_item i WHERE i.voucher_id=v.voucher_id AND (i.src_no LIKE ? OR i.product_id LIKE ?))
                  OR EXISTS (SELECT 1 FROM acc_invoice_item ii JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id
                             JOIN acc_voucher_item i2 ON i2.src_type=ii.src_type AND i2.src_id=ii.src_id
-                            WHERE i2.voucher_id=v.voucher_id AND inv.invoice_no LIKE ?))";
-        for ($i = 0; $i < 6; $i++) $p[] = '%' . $kw . '%';
+                            WHERE i2.voucher_id=v.voucher_id AND inv.invoice_no LIKE ?)
+                 OR EXISTS (SELECT 1 FROM acc_recon_sheet vs WHERE v.side='ap' AND vs.side='ap' AND vs.party_id=v.party_id
+                            AND vs.billing_month=v.billing_month AND vs.vendor_inv_no LIKE ?))";
+        for ($i = 0; $i < 7; $i++) $p[] = '%' . $kw . '%';
     }
     foreach (['bm_from' => 'v.billing_month >= ?', 'bm_to' => 'v.billing_month <= ?'] as $k => $c)
         if (preg_match('/^\d{4}-\d{2}$/', (string)($f[$k] ?? ''))) { $w[] = $c; $p[] = $f[$k]; }
@@ -266,11 +298,13 @@ function acc_voucher_list(PDO $db, array $f): array
     $page = max(1, (int)($f['page'] ?? 1));
     $c = $db->prepare("SELECT COUNT(*) FROM acc_voucher v $ws"); $c->execute($p);
     $total = (int)$c->fetchColumn();
-    $q = $db->prepare("SELECT v.*, (SELECT GROUP_CONCAT(DISTINCT inv.invoice_no ORDER BY inv.invoice_no SEPARATOR '、')
+    $q = $db->prepare("SELECT v.*, COALESCE(NULLIF((SELECT GROUP_CONCAT(DISTINCT inv.invoice_no ORDER BY inv.invoice_no SEPARATOR '、')
                                        FROM acc_voucher_item vi
                                        JOIN acc_invoice_item ii ON ii.src_type=vi.src_type AND ii.src_id=vi.src_id
                                        JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id AND inv.status<>'void' AND inv.invoice_no IS NOT NULL AND inv.invoice_no<>''
-                                       WHERE vi.voucher_id=v.voucher_id) AS invoice_nos
+                                       WHERE vi.voucher_id=v.voucher_id), ''),
+                                       IF(v.side='ap', (SELECT vs.vendor_inv_no FROM acc_recon_sheet vs WHERE vs.side='ap' AND vs.party_id=v.party_id
+                                                         AND vs.billing_month=v.billing_month LIMIT 1), NULL)) AS invoice_nos
                        FROM acc_voucher v $ws ORDER BY (v.voucher_no IS NULL OR v.voucher_no=''), v.voucher_no DESC, v.voucher_id DESC LIMIT $per OFFSET " . (($page - 1) * $per));
     $q->execute($p);
     return ['rows' => $q->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per_page' => $per];
@@ -529,8 +563,64 @@ function acc_vch_no_check(string $no): array
     return [null, sprintf('%04d-%02d-%02d', $y, $m[2], $m[3])];
 }
 
+/** 應付：單號開頭 → 進貨類會計科目（可多個，第一個為預設）。回 [['prefix'=>'J-','accounts'=>[['code'=>,'name'=>],…]],…] */
+function acc_vch_prefix_rules(PDO $db): array
+{
+    $raw = null;
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='acc_vch_prefix_rules' LIMIT 1");
+        $st->execute();
+        $raw = $st->fetchColumn();
+    } catch (Throwable $e) {}
+    if ($raw === false || $raw === null) return [['prefix' => 'J-', 'accounts' => [['code' => '5401006', 'name' => '其他委外加工']]]];
+    $a = json_decode((string)$raw, true);
+    return is_array($a) ? $a : [];
+}
+
+function acc_vch_prefix_rules_save(PDO $db, array $rules, string $uid, string $uname): array
+{
+    acc_voucher_ensure($db);
+    $out = []; $seen = [];
+    foreach ($rules as $r) {
+        $pf = trim((string)($r['prefix'] ?? ''));
+        if ($pf === '') continue;
+        if (mb_strlen($pf) > 10) return ['success' => false, 'message' => '單號開頭「' . $pf . '」太長（10 字內）'];
+        if (isset($seen[strtoupper($pf)])) return ['success' => false, 'message' => '單號開頭「' . $pf . '」重複設定'];
+        $seen[strtoupper($pf)] = 1;
+        $acc = []; $codes = [];
+        foreach ((array)($r['accounts'] ?? []) as $x) {
+            $c = trim((string)($x['code'] ?? '')); $n = trim((string)($x['name'] ?? ''));
+            if ($c === '') continue;
+            if (!preg_match('/^\d{4,10}$/', $c)) return ['success' => false, 'message' => '「' . $pf . '」的科目代號 ' . $c . ' 須為 4~10 位數字'];
+            if (isset($codes[$c])) continue;
+            $codes[$c] = 1;
+            if ($n === '') { $q = $db->prepare("SELECT name FROM acc_account WHERE code=? LIMIT 1"); $q->execute([$c]); $n = (string)$q->fetchColumn(); }
+            if ($n === '') return ['success' => false, 'message' => '科目 ' . $c . ' 不在科目表，請填科目名稱'];
+            $acc[] = ['code' => $c, 'name' => mb_substr($n, 0, 40)];
+        }
+        if (!$acc) return ['success' => false, 'message' => '單號開頭「' . $pf . '」至少要設定一個會計科目'];
+        $out[] = ['prefix' => $pf, 'accounts' => $acc];
+    }
+    $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by) VALUES ('acc_vch_prefix_rules',?,?,?)
+                  ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)")
+       ->execute([json_encode($out, JSON_UNESCAPED_UNICODE), (int)$uid, $uname]);
+    foreach ($out as $r) foreach ($r['accounts'] as $x) acc_vch_account_upsert($db, $x['code'], $x['name']);
+    return ['success' => true, 'message' => '已儲存單號開頭對應科目'];
+}
+
+/** 單號 → 命中的規則（前綴不分大小寫，取最長者）；沒有回 null */
+function acc_vch_rule_for(array $rules, string $srcNo): ?array
+{
+    $best = null;
+    foreach ($rules as $r) {
+        $pf = (string)$r['prefix'];
+        if ($pf !== '' && stripos($srcNo, $pf) === 0 && ($best === null || strlen($pf) > strlen($best['prefix']))) $best = $r;
+    }
+    return $best;
+}
+
 /** 由傳票金額組出自動分錄（借貸一律正數；淨額為負＝退貨大於出貨，借貸對調） */
-function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = null): array
+function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = null, ?array $expGroups = null): array
 {
     $cfg = acc_vch_acct_cfg($db);
     $rate = acc_tax_rate($db);
@@ -556,6 +646,16 @@ function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = n
         $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => $neg ? 'D' : 'C', 'amount' => (float)$tax, 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_rev']['code'],  'name' => $cfg['ar_rev']['name'],  'side' => $neg ? 'D' : 'C', 'amount' => $abs, 'auto' => 1, 'memo' => ''];
     } else {
+        if ($expGroups) {
+            // 依單號開頭分組的進貨類科目（同科目合併）；各組淨額為負者借貸對調
+            $by = [];
+            foreach ($expGroups as $g) {
+                $k = $g['code'];
+                if (!isset($by[$k])) $by[$k] = ['name' => $g['name'], 'amt' => 0.0];
+                $by[$k]['amt'] += (float)$g['amount'];
+            }
+            foreach ($by as $code => $g) $L[] = ['code' => $code, 'name' => $g['name'], 'side' => $g['amt'] < 0 ? 'C' : 'D', 'amount' => round(abs($g['amt']), 2), 'auto' => 1, 'memo' => ''];
+        } else
         $L[] = ['code' => $cfg['ap_exp']['code'], 'name' => $cfg['ap_exp']['name'], 'side' => $neg ? 'C' : 'D', 'amount' => $abs, 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ap_tax']['code'], 'name' => $cfg['ap_tax']['name'], 'side' => $neg ? 'C' : 'D', 'amount' => (float)$tax, 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ap_pay']['code'], 'name' => $cfg['ap_pay']['name'], 'side' => $neg ? 'D' : 'C', 'amount' => round($abs + $tax, 2), 'auto' => 1, 'memo' => ''];
