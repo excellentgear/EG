@@ -135,7 +135,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <tfoot><tr><td colspan="2" style="text-align:right;font-weight:700;">合計</td><td class="r" id="jDsum" style="font-weight:700;">0</td><td class="r" id="jCsum" style="font-weight:700;">0</td><td id="jBal"></td></tr></tfoot></table>
     <div class="a-bar" style="margin-top:6px;">
       <input type="text" id="jCode" list="dlAcct" maxlength="10" placeholder="科目代號" style="width:110px;" autocomplete="off">
-      <input type="text" id="jName" maxlength="40" placeholder="科目名稱" style="width:170px;" autocomplete="off">
+      <input type="text" id="jName" readonly tabindex="-1" data-eg-skip placeholder="科目名稱（輸入代號自動帶入）" style="width:200px;background:#f3ece0;cursor:default;" autocomplete="off">
       <input type="text" id="jAmt" placeholder="金額" style="width:110px;text-align:right;" autocomplete="off">
       <select id="jSide" style="display:none;"><option value="D">借方</option><option value="C">貸方</option></select>
       <input type="text" id="jMemo" maxlength="100" placeholder="備註（選填）" style="width:150px;" autocomplete="off">
@@ -360,7 +360,7 @@ function journalRender(){
 $('#jRound').on('change',journalRender);
 $('#jCode').on('input change',function(){
   var code=$.trim(this.value), a=ACCT.filter(function(x){ return x.code===code; })[0];
-  if(a) $('#jName').val(a.name);
+  $('#jName').val(a?a.name:'');
   $('#jSide').toggle(code.length>=4 && !sideOfCode(code));
 });
 $('#btnJAdd').on('click',function(){
@@ -368,7 +368,7 @@ $('#btnJAdd').on('click',function(){
   var e='';
   if(!/^\d{4,10}$/.test(code)) e='科目代號須為 4~10 位數字';
   else if(!(amt>0)) e='金額須大於 0';
-  else { var a=ACCT.filter(function(x){ return x.code===code; })[0]; if(!a && !name) e='科目 '+code+' 不在科目表，請填科目名稱'; if(a&&!name) name=a.name; }
+  else { var a=ACCT.filter(function(x){ return x.code===code; })[0]; if(!a) e='科目 '+code+' 不在科目表，請先到科目表新增'; else name=a.name; }
   $('#jErr').text(e); if(e) return;
   JX.push({code:code,name:name,side:sideOfCode(code)||$('#jSide').val(),amount:Math.round(amt*100)/100,memo:$.trim($('#jMemo').val())});
   $('#jCode,#jName,#jAmt,#jMemo').val(''); $('#jSide').hide(); journalRender();

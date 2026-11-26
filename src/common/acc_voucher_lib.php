@@ -129,7 +129,17 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
     if ($cs && ($cs['status'] ?? '') === 'confirmed') {
         $in = [];
         foreach ($cs['lines'] as $sl) if ((int)$sl['src_id'] > 0) $in[strtoupper((string)$sl['src_type']) . '-' . (int)$sl['src_id']] = true;
-        $b['lines'] = array_values(array_filter($b['lines'], fn($l) => isset($in[strtoupper($l['src_type']) . '-' . (int)$l['src_id']])));
+        // 以鎖帳對帳單上的明細為準（對帳區間可能延到次月，帶入依結帳日屬於別月的單，重建的來源憑證不含這些）
+        $keep = [];
+        foreach ($b['lines'] as $l) $keep[strtoupper($l['src_type']) . '-' . (int)$l['src_id']] = $l;
+        $nl = [];
+        foreach ($cs['lines'] as $sl) {
+            $k = strtoupper((string)$sl['src_type']) . '-' . (int)$sl['src_id'];
+            if (!isset($in[$k])) continue;
+            $nl[] = $keep[$k] ?? $sl;
+            unset($in[$k]);     // 同一憑證在底稿出現多列時只取一次
+        }
+        $b['lines'] = $nl;
     }
     $b['lines'] = array_values(array_filter($b['lines'], fn($l) => abs((float)$l['orig_amount']) >= 0.0001));
     $vmap = acc_voucher_src_map($db);
@@ -540,11 +550,10 @@ function acc_vch_clean_extra(PDO $db, array $extra): array
         $amt = round((float)($e['amount'] ?? 0), 2);
         $n = $i + 1;
         if (!preg_match('/^\d{4,10}$/', $code)) return [[], "追加科目第 {$n} 列：科目代號須為 4~10 位數字"];
-        if ($name === '') {
-            $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$code]);
-            $name = (string)$q->fetchColumn();
-            if ($name === '') return [[], "追加科目第 {$n} 列：科目 {$code} 不在科目表，請填科目名稱"];
-        }
+        // 科目名稱一律取自科目表，不接受自填
+        $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$code]);
+        $name = (string)$q->fetchColumn();
+        if ($name === '') return [[], "追加科目第 {$n} 列：科目 {$code} 不在科目表，請先到科目表新增"];
         if (mb_strlen($name) > 40) return [[], "追加科目第 {$n} 列：科目名稱過長"];
         if ($amt <= 0) return [[], "追加科目第 {$n} 列：金額須大於 0"];
         $side = acc_vch_side_of_code($code) ?? (in_array($e['side'] ?? '', ['D', 'C'], true) ? $e['side'] : null);

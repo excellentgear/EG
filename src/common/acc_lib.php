@@ -2647,6 +2647,43 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         $groups[$name]['net_amt'] -= $amt;
     }
 
+    // 已鎖帳的對帳單：對帳單上的憑證即為開立依據。對帳單可能帶入「依結帳日屬於別的帳款月份」的單
+    // （例：對帳區間延到 10/25 而納入 10/14 出貨），上面依帳款月份／掃描區間篩不到，這裡依 id 補進來
+    foreach ($confSet as $pName => $keys) {
+        $have = [];
+        if (isset($groups[$pName])) foreach ($groups[$pName]['items'] as $it) $have[$it['src_type'] . '-' . $it['src_id']] = 1;
+        foreach (array_keys($keys) as $k) {
+            if (isset($have[$k]) || isset($used[$k])) continue;
+            [$tp, $sid] = explode('-', $k, 2); $sid = (int)$sid;
+            if ($tp === 'IS') {
+                $q = $db->prepare("SELECT IS_id, IS_number, DATE_FORMAT(Order_date,'%Y-%m-%d') AS d, Product_id, Specification, Qty, Unit_price
+                                   FROM is_list WHERE IS_id=?");
+                $q->execute([$sid]); $r = $q->fetch(PDO::FETCH_ASSOC);
+                if (!$r) continue;
+                $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+                if (abs($amt) < 0.0001) continue;
+                $touch($pName);
+                $groups[$pName]['items'][] = ['src_type' => 'IS', 'src_id' => $sid, 'src_no' => $r['IS_number'], 'src_date' => $r['d'],
+                    'product_id' => $r['Product_id'], 'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
+                    'unit_price' => (float)$r['Unit_price'], 'amount' => $amt];
+                $groups[$pName]['net_amt'] += $amt;
+            } elseif ($tp === 'IR') {
+                $q = $db->prepare("SELECT IR_id, IR_no, DATE_FORMAT(IR_date,'%Y-%m-%d') AS d, d_id, Specification, Qty, Unit_price
+                                   FROM ir_track WHERE IR_id=?");
+                $q->execute([$sid]); $r = $q->fetch(PDO::FETCH_ASSOC);
+                if (!$r) continue;
+                $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+                if (abs($amt) < 0.0001) continue;
+                $touch($pName);
+                $groups[$pName]['items'][] = ['src_type' => 'IR', 'src_id' => $sid, 'src_no' => $r['IR_no'], 'src_date' => $r['d'],
+                    'product_id' => $r['d_id'], 'spec' => $r['Specification'], 'qty' => -(int)$r['Qty'],
+                    'unit_price' => (float)$r['Unit_price'], 'amount' => -$amt];
+                $groups[$pName]['net_amt'] -= $amt;
+            }
+        }
+        if (isset($groups[$pName])) usort($groups[$pName]['items'], fn($a, $b) => strcmp((string)$a['src_date'], (string)$b['src_date']) ?: strcmp((string)$a['src_no'], (string)$b['src_no']));
+    }
+
     // 稅與可開立判定
     $out = [];
     foreach ($groups as $g) {
