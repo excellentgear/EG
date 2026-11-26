@@ -105,6 +105,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
 .pill{display:inline-block;padding:1px 8px;border-radius:9px;font-size:11px;line-height:17px;}
 .s-ok{background:var(--a-ok);color:#6b4522;}
 .s-no_tax{background:#EFE6D6;color:#8a6d45;}
+.s-no_lock{background:#F7E0BD;color:#8a4b12;}
 .s-bad_tax{background:var(--a-bad);color:#fff;}
 .s-no_full{background:var(--a-acc);color:#fff;}
 .st-draft{background:#EFE6D6;color:#8a6d45;}
@@ -217,7 +218,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
       <div class="a-stat">
         <div><span class="n" id="cdGroups">—</span> <span class="l">客戶</span></div>
         <div><span class="n" id="cdCan">—</span> <span class="l">可開立</span></div>
-        <div><span class="n bad" id="cdBlocked">—</span> <span class="l">缺發票資料</span></div>
+        <div><span class="n bad" id="cdBlocked">—</span> <span class="l">未鎖帳／缺發票資料</span></div>
         <div class="sep"></div>
         <div><span class="n big" id="cdNet">—</span> <span class="l">未稅</span></div>
         <div><span class="n" id="cdTax">—</span> <span class="l">稅額</span></div>
@@ -506,7 +507,7 @@ var cand = [], candSel = {};
 var invRows = [], invSel = {}, ivPage = 1, ivPerPage = 20, ivTotal = 0;
 var bfMatched = [], alData = null;
 
-var READY_LABEL  = {ok:'可開立', no_tax:'缺統編', bad_tax:'統編錯誤', no_full:'缺發票抬頭'};
+var READY_LABEL  = {ok:'可開立', no_tax:'缺統編', bad_tax:'統編錯誤', no_full:'缺發票抬頭', no_lock:'尚未鎖帳'};
 var STATUS_LABEL = {draft:'草稿', exported:'已轉出', issued:'已開立', void:'已作廢'};
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
@@ -574,7 +575,7 @@ $.getJSON(API,{action:'meta'},function(r){
       $('#candKw').val(qCust); refreshCandKwList();
       var g=cand.filter(function(x){ return x.customer===qCust; })[0];
       if(g && g.can_issue && CAN_EDIT){ candSel={}; candSel[qCust]=1; renderCand(); toast('已帶入 <b>'+esc(qCust)+'</b>（'+esc(qBm)+'）的待開立憑證並勾選，確認後按「產生發票草稿」'); }
-      else if(g && !g.can_issue){ renderCand(); toast(esc(qCust)+' 的發票資料不完整（缺統編或抬頭），請先到「客戶發票資料維護」補齊', true); }
+      else if(g && !g.can_issue){ renderCand(); toast(esc(qCust)+(g.inv_ready==='no_lock'?' 的對帳單尚未確認鎖帳，請先到「對帳作業」完成對帳並鎖帳才能開發票':' 的發票資料不完整（缺統編或抬頭），請先到「客戶發票資料維護」補齊'), true); }
       else { $('#invKw').val(qCust); $('.tab-btn[data-tab=inv]').click(); toast(esc(qCust)+' '+esc(qBm)+' 沒有待開立的憑證（可能已有發票草稿），已切到發票管理並篩出該客戶'); }
     };
   }
@@ -594,12 +595,12 @@ function loadCand(){
     $('#cdGroups').text(nf(s.groups)); $('#cdCan').text(nf(s.can_issue));
     $('#cdBlocked').text(nf(s.blocked));
     $('#cdNet').text(nf(s.net_amt)); $('#cdTax').text(nf(s.tax_amt)); $('#cdTotal').text(nf(s.total_amt));
-    $('#cdWarn').html(s.blocked>0
-      ? '<div class="warn"><b>'+nf(s.blocked)+'</b> 家客戶因為缺統一編號或發票抬頭而無法開立發票（金額 '
-        +nf(s.total_amt- cand.filter(function(g){return g.can_issue;})
-             .reduce(function(a,g){return a+g.total_amt;},0))
-        +' 元）。請先到「客戶發票資料維護」補齊。</div>'
-      : '');
+    var nLock=cand.filter(function(g){return g.inv_ready==='no_lock';}), nData=cand.filter(function(g){return !g.can_issue && g.inv_ready!=='no_lock';});
+    var sumT=function(a){ return a.reduce(function(x,g){return x+g.total_amt;},0); };
+    $('#cdWarn').html((nLock.length
+        ? '<div class="warn"><b>'+nf(nLock.length)+'</b> 家客戶的對帳單尚未確認鎖帳（金額 '+nf(sumT(nLock))+' 元），對完帳並「確認正確（鎖帳）」後才能開發票。請到「對帳作業」處理。</div>' : '')
+      +(nData.length
+        ? '<div class="warn"><b>'+nf(nData.length)+'</b> 家客戶因為缺統一編號或發票抬頭而無法開立發票（金額 '+nf(sumT(nData))+' 元）。請先到「客戶發票資料維護」補齊。</div>' : ''));
     refreshCandKwList();
     renderCand();
     if(window.afterCand){ var f=window.afterCand; window.afterCand=null; f(); }

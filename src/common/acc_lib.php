@@ -2774,6 +2774,8 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
     $out = [];
     foreach ($groups as $g) {
         if (!$g['items']) continue;
+        // 對帳單尚未確認鎖帳＝還沒對完帳，不可開發票（先到對帳作業「確認正確（鎖帳）」）
+        if (!isset($confSet[$g['customer']])) $g['inv_ready'] = 'no_lock';
         $g['tax_amt']   = round($g['net_amt'] * $rate);
         $g['total_amt'] = $g['net_amt'] + $g['tax_amt'];
         $g['item_cnt']  = count($g['items']);
@@ -2845,7 +2847,9 @@ function acc_create_invoices(PDO $db, array $sel, string $userId, bool $splitByS
             }
             if (!$grp['items']) { $errors[] = "{$name} {$bm}：沒有選到憑證"; continue; }
             if ($grp['inv_ready'] !== 'ok') {
-                $errors[] = "{$name}：發票資料不完整（" . $grp['inv_ready'] . "），無法開立";
+                $errors[] = $grp['inv_ready'] === 'no_lock'
+                    ? "{$name} {$bm}：對帳單尚未確認鎖帳，請先到對帳作業完成對帳並鎖帳後再開發票"
+                    : "{$name}：發票資料不完整（" . $grp['inv_ready'] . "），無法開立";
                 continue;
             }
 
