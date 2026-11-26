@@ -306,6 +306,13 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <p class="hint">列印的表單名稱取自這份文件，頁尾右下角印文件編號（版次依申請日期回推）。</p>
             </div>
             <div class="pq-sec" style="max-width:760px;">
+                <h5>到貨入庫可選的儲位</h5>
+                <input type="text" id="cfgRecvLocKw" autocomplete="off" placeholder="輸入部分儲位代碼篩選" style="max-width:260px;margin-bottom:6px;">
+                <span class="hint" id="cfgRecvLocCnt"></span>
+                <div id="cfgRecvLocs" style="max-height:200px;overflow:auto;border:1px solid #e8d9bf;border-radius:4px;padding:6px 8px;background:#fff;"></div>
+                <p class="hint">「登錄到貨」選「入庫待領」時，入庫儲位只能從這裡勾選的儲位挑（輸入部分字元可篩選）。<b>一個都不勾＝不限，所有儲位都可選</b>。儲位本身在庫存管理的主資料設定維護。</p>
+            </div>
+            <div class="pq-sec" style="max-width:760px;">
                 <h5>自動簽核的用途類別</h5>
                 <div id="cfgAutoTypes"></div>
                 <p class="hint">勾選的用途，採購詢完價後<b>不論金額都直接視為核准、不通知簽核者，也不通知送單人</b>。
@@ -572,6 +579,44 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     </div>
 </div></div>
 
+<!-- ══ 下單 ══ -->
+<div class="pq-mask" id="mOrder"><div class="pq-modal">
+    <div class="m-head"><span>已下單</span><span class="m-close" onclick="closeMask('mOrder')">✕</span></div>
+    <div class="m-body">
+        <div class="pq-grid">
+            <div class="pq-fld"><label>下訂日期</label><input type="date" id="odDate"></div>
+            <div class="pq-fld"><label>預計到貨日（選填）</label><input type="date" id="odExp"></div>
+            <div class="pq-fld"><label>或：幾天後到貨（選填）</label><input type="text" id="odDays" inputmode="numeric" autocomplete="off" data-eg-hint="填天數，由下訂日往後推算預計到貨日"></div>
+        </div>
+        <p class="hint">預計到貨日與天數擇一即可，都不填也可以。</p>
+    </div>
+    <div class="m-foot">
+        <button class="pq-btn" onclick="closeMask('mOrder')">取消</button>
+        <button class="pq-btn warm" id="btnOrderGo"><i class="fa fa-check"></i> 確認已下單</button>
+    </div>
+</div></div>
+
+<!-- ══ 進貨後修改金額（對帳鎖帳前） ══ -->
+<div class="pq-mask" id="mAmend"><div class="pq-modal">
+    <div class="m-head"><span>修改金額</span><span class="m-close" onclick="closeMask('mAmend')">✕</span></div>
+    <div class="m-body">
+        <div class="pq-wrap"><table class="pq-table"><thead><tr><th>品名</th><th style="width:15%;">數量</th><th style="width:28%;">單價（未稅，可輸入算式）</th></tr></thead>
+            <tbody id="amBody"></tbody></table></div>
+        <div class="pq-grid" style="margin-top:8px;">
+            <div class="pq-fld"><label>未稅</label><div id="amSub" class="money" style="font-size:14px;"></div></div>
+            <div class="pq-fld"><label>稅額（5%）</label><div id="amTax" class="money" style="font-size:14px;"></div></div>
+            <div class="pq-fld"><label>含稅總額（可調整）</label>
+                <input type="text" id="amGrand" inputmode="decimal" autocomplete="off" data-eg-skip style="text-align:right;font-weight:bold;">
+                <span class="hint" id="amHint"></span></div>
+        </div>
+        <p class="hint">對帳鎖帳前都可修改；鎖帳後要改請會計先解鎖該月對帳。含稅總額與系統算出的差額限 ±50 元（廠商四捨五入／捨去用）。</p>
+    </div>
+    <div class="m-foot">
+        <button class="pq-btn" onclick="closeMask('mAmend')">取消</button>
+        <button class="pq-btn warm" id="btnAmendGo"><i class="fa fa-check"></i> 儲存修改</button>
+    </div>
+</div></div>
+
 <!-- ══ 到貨 ══ -->
 <div class="pq-mask" id="mRecv"><div class="pq-modal wide">
     <div class="m-head"><span>登錄到貨</span><span class="m-close" onclick="closeMask('mRecv')">✕</span></div>
@@ -581,12 +626,16 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <input type="text" id="rcVendor" autocomplete="off">
                 <div id="rcVendorList"></div>
                 <span class="hint" id="rcVendorHint">輸入廠商名稱或編號，從清單點選後才算綁定</span></div>
+            <div class="pq-fld"><label>ERP 進貨單號（選填）</label>
+                <input type="text" id="rcErp" autocomplete="off" data-eg-hint="格式：II＋民國年＋月日＋流水號三碼，例 II-1151126001">
+                <span class="hint" id="rcErpHint" style="color:#B8741A;">建議填寫 ERP 進貨單號，日後對帳比對用（不填也可以登錄）</span></div>
             <div class="pq-fld" id="rcMileWrap" style="display:none;"><label>里程數（公里，選填）</label>
                 <input type="text" id="rcMileage" inputmode="numeric" data-eg-hint="車輛保養時填目前里程，方便日後查紀錄；不確定可以留白" autocomplete="off"></div></div>
         <div class="pq-wrap">
             <table class="pq-table" id="recvTable">
-                <thead><tr><th>品名</th><th>規格</th><th style="width:13%;">採購料號</th><th>已到／應到</th><th style="width:9%;">本次到貨</th>
-                    <th style="width:12%;">到貨處理</th><th style="width:13%;">入庫儲位</th><th style="width:13%;">交付對象</th><th>備註</th></tr></thead>
+                <thead><tr><th>品名</th><th>規格</th><th style="width:13%;">採購料號</th><th>已到／應到</th><th style="width:8%;">本次到貨</th>
+                    <th style="width:11%;">單價（未稅）</th>
+                    <th style="width:11%;">到貨處理</th><th style="width:14%;">入庫儲位／種類</th><th style="width:11%;">交付對象</th><th>備註</th></tr></thead>
                 <tbody id="recvBody"></tbody>
             </table>
         </div>
@@ -610,6 +659,16 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 </table>
             </div>
             <button class="pq-btn" id="rcExtraAdd" type="button" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增細項</button>
+        </div>
+        <div class="pq-sec" id="rcTotals" style="margin-top:8px;">
+            <h5>金額核對</h5>
+            <div class="pq-grid" style="margin:0;">
+                <div class="pq-fld"><label>未稅</label><div id="rcSub" class="money" style="font-size:14px;"></div></div>
+                <div class="pq-fld"><label>稅額（5%）</label><div id="rcTax" class="money" style="font-size:14px;"></div></div>
+                <div class="pq-fld"><label>含稅總額（可調整）</label>
+                    <input type="text" id="rcGrand" inputmode="decimal" autocomplete="off" data-eg-skip style="text-align:right;font-weight:bold;" title="廠商四捨五入或無條件捨去時，直接改這裡（可輸入算式；與系統算出的差額限 ±50 元）">
+                    <span class="hint" id="rcGrandHint"></span></div>
+            </div>
         </div>
         <p class="hint" style="margin-top:6px;">沒有採購料號的品項無法入庫：請按該列「綁定料號」，把它綁到既有採購料號、或當場建一支新的（或把該列改成「不列管」）。</p>
     </div>

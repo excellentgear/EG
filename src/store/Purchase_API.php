@@ -950,6 +950,10 @@ case 'req_detail': {
         'close'   => $perms['canBuy'] && in_array($req['status'], ['received', 'partial'], true),
         'delete'  => $perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'),
     ];
+    $req['acc_locked'] = purchase_acc_locked($db, $reqId) ? 1 : 0;
+    // 進貨後可修改金額：到貨權或採購權，對帳鎖帳前
+    $req['can']['amend'] = ($perms['canReceive'] || $perms['canBuy'] || $perms['canAdmin'])
+        && in_array($req['status'], ['approved', 'ordered', 'partial', 'received'], true) && !$req['acc_locked'];
     // 只有申請權的人不該看得到別人的單——列表擋住了，這裡也要擋，
     // 否則換個 req_id 就把別人的單撈出來了
     if (!$isOwner && !$perms['canView'] && !$req['can']['sign']) jerr('無權檢視此單據', 403);
@@ -1267,9 +1271,18 @@ case 'mark_ordered': {
     $reqId = pint('req_id');
     $req = purchase_load_req($db, $reqId);
     if ($req['status'] !== 'approved') jerr('此單尚未核准或已下單');
+    // 下訂日期（不填＝今天）；預計到貨可直接填日期，或填「幾天後到貨」由下訂日往後推（都可不填）
+    $orderDate = pdate('order_date') ?: (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $expected = pdate('expected_date');
+    $lead = pv('lead_days');
+    if (!$expected && $lead !== '') {
+        if (!ctype_digit($lead) || (int)$lead > 3650) jerr('預計幾天後到貨請填 0～3650 的整數');
+        $expected = (new DateTime($orderDate))->modify('+' . (int)$lead . ' day')->format('Y-m-d');
+    }
+    if ($expected && $expected < $orderDate) jerr('預計到貨日不可早於下訂日期');
     $db->beginTransaction();
-    $db->prepare("UPDATE purchase_request SET status='ordered', ordered_at=NOW(), expected_date=COALESCE(?,expected_date),
-                  Modified_By=? WHERE req_id=?")->execute([pdate('expected_date'), $uid, $reqId]);
+    $db->prepare("UPDATE purchase_request SET status='ordered', ordered_at=NOW(), order_date=?, expected_date=COALESCE(?,expected_date),
+                  Modified_By=? WHERE req_id=?")->execute([$orderDate, $expected, $uid, $reqId]);
     $db->commit();
     purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
         '採購已下單：' . $req['req_no'], $uname . ' 已向 ' . ($req['vendor_name'] ?: '廠商') . ' 下單。', 'read', $uid);
@@ -1473,6 +1486,86 @@ case 'receive': {
     purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
         ($status === 'received' ? '採購已全數到貨：' : '採購部分到貨：') . $req['req_no'],
         $uname . ' 登錄了 ' . $req['req_no'] . ' 的到貨。', 'read', $uid);
+    jout(['status' => $status]);
+}
+
+/** 進貨後更正金額（各品項單價、含稅總額調整）——對帳鎖帳前都可改；同一套金額重算與簽核層級檢查 */
+case 'adjust_amounts': {
+    if (!$perms['canReceive'] && !$perms['canBuy'] && !$perms['canAdmin']) jerr('無修改權限', 403);
+    $reqId = pint('req_id');
+    $req = purchase_load_req($db, $reqId);
+    if (!in_array($req['status'], ['approved', 'ordered', 'partial', 'received'], true)) jerr('此單目前狀態不可修改金額');
+    if (purchase_acc_locked($db, $reqId)) jerr('這張單已進入對帳並鎖帳，不可修改；請會計先解鎖該月對帳');
+    $db->beginTransaction();
+    $upd = $db->prepare("UPDATE purchase_request_item SET unit_price=?, amount=ROUND(COALESCE(buy_qty, qty_requested) * ?, 2)
+                         WHERE pr_item_id=? AND req_id=?");
+    foreach (pjson('prices') as $p) {
+        if (($p['unit_price'] ?? '') === '' || !is_numeric($p['unit_price']) || (float)$p['unit_price'] < 0) continue;
+        $np = (float)$p['unit_price'];
+        $upd->execute([$np, $np, (int)($p['pr_item_id'] ?? 0), $reqId]);
+    }
+    $taxT = (string)($req['tax_type'] ?: 'taxable');
+    $db->prepare("UPDATE purchase_request SET total_adjust=0 WHERE req_id=?")->execute([$reqId]);
+    $finalIn = pv('grand_total_final');
+    if ($finalIn !== '' && is_numeric($finalIn)) {
+        $base = purchase_calc_totals($db, $reqId, $taxT);
+        $adj = round((float)$finalIn - $base['grand_total'], 2);
+        if (abs($adj) > 50) { $db->rollBack(); jerr('含稅總額與系統算出的金額差 ' . number_format($adj, 2) . ' 元，調整範圍上限 ±50 元（四捨五入／捨去用）'); }
+        $db->prepare("UPDATE purchase_request SET total_adjust=? WHERE req_id=?")->execute([$adj, $reqId]);
+    }
+    $tt = purchase_calc_totals($db, $reqId, $taxT);
+    [$l1, $l2] = purchase_thresholds($db);
+    if (purchase_need_levels($tt['grand_total'], $l1, $l2) > (int)$req['need_levels'] && !purchase_is_auto_purpose($db, $req, $reqId)) {
+        $db->rollBack();
+        jerr('修改後含稅 ' . number_format($tt['grand_total'], 2) . ' 元，超過這張單原本核准的簽核層級，請改走詢價與簽核');
+    }
+    $db->prepare("UPDATE purchase_request SET subtotal=?, tax_amount=?, grand_total=?, Modified_By=? WHERE req_id=?")
+       ->execute([$tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], $uid, $reqId]);
+    $db->commit();
+    jout($tt);
+}
+
+/** 撤銷一筆到貨（對帳鎖帳前）：庫存異動反向沖回、已到量扣回，之後可重新登錄 */
+case 'receipt_cancel': {
+    if (!$perms['canReceive'] && !$perms['canAdmin']) jerr('無到貨入庫權限', 403);
+    $rcId = pint('rcpt_id');
+    $st = $db->prepare("SELECT * FROM purchase_receipt WHERE rcpt_id=?");
+    $st->execute([$rcId]);
+    $rc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$rc) jerr('找不到這筆到貨');
+    $req = purchase_load_req($db, (int)$rc['req_id']);
+    if (purchase_acc_locked($db, (int)$rc['req_id'])) jerr('這張單已進入對帳並鎖帳，不可撤銷到貨；請會計先解鎖該月對帳');
+    $db->beginTransaction();
+    try {
+        $qty = (float)$rc['qty'];
+        if ($rc['stock_item_id']) {
+            $sid = (int)$rc['stock_item_id'];
+            $locId = $rc['location_id'] !== null ? (int)$rc['location_id'] : null;
+            if ($rc['txn_out_id']) {   // 直接交付：先把出庫補回，再沖入庫（淨庫存不變）
+                purchase_write_txn($db, $sid, 'in', $qty, $locId, ['txn_date' => date('Y-m-d'), 'remark' => '撤銷到貨（沖回直接交付）' . $req['req_no']], $uid);
+            }
+            if ($rc['txn_in_id']) {
+                $q = $db->prepare("SELECT qty FROM stock_items WHERE stock_item_id=? FOR UPDATE");
+                $q->execute([$sid]);
+                if ((float)$q->fetchColumn() + 0.0001 < $qty) throw new Exception('這批貨已被領用或移出，庫存不足以沖回（現有庫存少於 ' . rtrim(rtrim(number_format($qty, 4, '.', ''), '0'), '.') . '），請先處理庫存');
+                purchase_write_txn($db, $sid, 'out', $qty, $locId, ['txn_date' => date('Y-m-d'), 'remark' => '撤銷到貨 ' . $req['req_no']], $uid);
+            }
+        }
+        $it = $db->prepare("SELECT added_at_receive FROM purchase_request_item WHERE pr_item_id=?");
+        $it->execute([(int)$rc['pr_item_id']]);
+        $added = (int)$it->fetchColumn();
+        $db->prepare("DELETE FROM purchase_receipt WHERE rcpt_id=?")->execute([$rcId]);
+        if ($added) {   // 到貨時才新增的細項：到貨撤銷就連細項一起拿掉
+            $db->prepare("DELETE FROM purchase_request_item WHERE pr_item_id=? AND req_id=?")->execute([(int)$rc['pr_item_id'], (int)$rc['req_id']]);
+        } else {
+            $db->prepare("UPDATE purchase_request_item SET qty_received=GREATEST(0, qty_received-?) WHERE pr_item_id=?")->execute([$qty, (int)$rc['pr_item_id']]);
+        }
+        $tt = purchase_calc_totals($db, (int)$rc['req_id'], (string)($req['tax_type'] ?: 'taxable'));
+        $db->prepare("UPDATE purchase_request SET subtotal=?, tax_amount=?, grand_total=? WHERE req_id=?")
+           ->execute([$tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], (int)$rc['req_id']]);
+        $status = purchase_refresh_status($db, (int)$rc['req_id'], $uid);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr($e->getMessage()); }
     jout(['status' => $status]);
 }
 

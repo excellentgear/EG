@@ -291,11 +291,18 @@ function purchase_ensure_schema(PDO $db): void
     foreach ([
         'purchase_request'      => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
                                     'purpose_maint_id INT NULL', 'vehicle_mileage INT NULL', 'vehicle_mileage_date DATE NULL',
-                                    'designated_vendor_id VARCHAR(11) NULL', 'designated_vendor_name VARCHAR(120) NULL'],
+                                    'designated_vendor_id VARCHAR(11) NULL', 'designated_vendor_name VARCHAR(120) NULL',
+                                    "skip_quote TINYINT NOT NULL DEFAULT 0 COMMENT '1=免詢價直接核價'",
+                                    "total_adjust DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '含稅總額調整（廠商四捨五入／無條件捨去的差額）'",
+                                    "order_date DATE NULL COMMENT '下訂日期'"],
+        'stock_items'           => ["source VARCHAR(20) NULL COMMENT 'purchase=採購進貨'"],
+        'stock_item_categories' => ["party_label VARCHAR(10) NOT NULL DEFAULT '客戶' COMMENT '列表「客戶」欄顯示名稱：客戶／廠商'"],
         'purchase_request_item' => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
                                     'purpose_maint_id INT NULL', 'designated_vendor_id VARCHAR(11) NULL',
                                     'designated_vendor_name VARCHAR(120) NULL',
-                                    "added_at_receive TINYINT NOT NULL DEFAULT 0 COMMENT '1=到貨時才新增的細項（保養／維修明細）'"],
+                                    "added_at_receive TINYINT NOT NULL DEFAULT 0 COMMENT '1=到貨時才新增的細項（保養／維修明細）'",
+                                    "stock_category_id INT NULL COMMENT '到貨入庫時選的庫存品項種類（沒有採購料號時用）'"],
+        'purchase_receipt'      => ['vendor_id VARCHAR(11) NULL', 'vendor_name VARCHAR(120) NULL', 'erp_rcpt_no VARCHAR(20) NULL'],
     ] as $vt => $cols) {
         foreach ($cols as $def) {
             $cn = explode(' ', $def)[0];
@@ -515,6 +522,25 @@ function purchase_setting(PDO $db, string $key, string $default = ''): string
         $v = $st->fetchColumn();
         return ($v === false || $v === null || $v === '') ? $default : (string)$v;
     } catch (Throwable $e) { return $default; }
+}
+
+/** 這張採購單是否已進會計對帳並鎖帳（鎖帳後到貨與金額不可再改；要改請會計先解鎖該月對帳） */
+function purchase_acc_locked(PDO $db, int $reqId): bool
+{
+    try {
+        $st = $db->prepare("SELECT 1 FROM acc_recon_line l JOIN acc_recon_sheet s ON s.sheet_id=l.sheet_id
+                            WHERE l.src_type='PURC' AND l.src_id=? AND s.status='confirmed' LIMIT 1");
+        $st->execute([$reqId]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/** 管理員開放給「到貨入庫」選的儲位 id（空陣列＝不限，所有儲位都可選） */
+function purchase_recv_loc_ids(PDO $db): array
+{
+    $v = trim(purchase_setting($db, 'purchase_recv_loc_ids', ''));
+    if ($v === '') return [];
+    return array_values(array_unique(array_filter(array_map('intval', explode(',', $v)))));
 }
 
 function purchase_set_setting(PDO $db, string $key, string $val): void
@@ -995,7 +1021,11 @@ function purchase_calc_totals(PDO $db, int $reqId, string $taxType): array
     $st->execute([$reqId]);
     $subtotal = round((float)$st->fetchColumn(), 2);
     $tax = ($taxType === 'taxable') ? round($subtotal * 0.05, 2) : 0.0;
-    return ['subtotal' => $subtotal, 'tax_amount' => $tax, 'grand_total' => round($subtotal + $tax, 2)];
+    // 含稅總額可人工調整（廠商可能四捨五入或無條件捨去）；調整值存差額，單價變動後仍保留
+    $adj = $db->prepare("SELECT COALESCE(total_adjust,0) FROM purchase_request WHERE req_id=?");
+    $adj->execute([$reqId]);
+    $adjust = round((float)$adj->fetchColumn(), 2);
+    return ['subtotal' => $subtotal, 'tax_amount' => $tax, 'grand_total' => round($subtotal + $tax + $adjust, 2), 'adjust' => $adjust];
 }
 
 /* ============================================================
@@ -1119,12 +1149,40 @@ function purchase_close_sign_notice(PDO $db, int $reqId, int $deciderUid): void
  * 入庫（共用既有 stock_items / stock_transactions）
  * ============================================================ */
 
+/** 沒有採購料號的品項入庫：不建料號，直接用「品名＋所選品項種類＋儲位」建庫存列（同品名同種類同儲位併成一列） */
+function purchase_find_or_create_stock_item_nospec(PDO $db, array $item, array $req, ?int $locationId, int $userId): int
+{
+    $catId = (int)($item['stock_category_id'] ?? 0);
+    if ($catId <= 0) throw new Exception('沒有採購料號的品項入庫，請選擇「品項種類」（或改成不列管）');
+    $locId = (int)$locationId;
+    if ($locId <= 0) throw new Exception('請指定入庫儲位');
+    $name = trim((string)($item['buy_item_name'] ?: $item['item_name']));
+    $spec = trim((string)($item['buy_spec_text'] ?: ($item['spec_text'] ?? '')));
+    $st = $db->prepare("SELECT stock_item_id FROM stock_items
+                        WHERE purchase_spec_id IS NULL AND d_id=? AND item_type=? AND location_id=? AND is_active=1 AND source='purchase' LIMIT 1");
+    $st->execute([$name, $catId, $locId]);
+    $sid = $st->fetchColumn();
+    if ($sid) return (int)$sid;
+    $lq = $db->prepare("SELECT location_code FROM stock_locations WHERE location_id=?");
+    $lq->execute([$locId]);
+    $locName = (string)($lq->fetchColumn() ?: '');
+    $cost = ($item['unit_price'] ?? null) !== null ? (float)$item['unit_price'] : null;
+    $db->prepare("INSERT INTO stock_items
+        (d_id, d_setting_id, purchase_spec_id, item_type, storage_location, location_id, qty, unit_id, unit_cost,
+         vendor_id, vendor_name, remark1, stock_date, is_active, source, Created_By)
+        VALUES (?, NULL, NULL, ?, ?, ?, 0, ?, ?, ?, ?, ?, CURDATE(), 1, 'purchase', ?)")
+       ->execute([$name, $catId, $locName, $locId,
+                  $item['unit_id'] !== null ? (int)$item['unit_id'] : null, $cost,
+                  $req['vendor_id'] ?: null, $req['vendor_name'] ?: null, $spec ?: null, $userId]);
+    return (int)$db->lastInsertId();
+}
+
 /** 找出或建立採購品對應的 stock_items 列（同規格＋同儲位＝同一列） */
 function purchase_find_or_create_stock_item(PDO $db, array $item, array $req, ?int $locationId, int $userId): int
 {
     // 入庫要用「採購實際綁的料號」；採購沒綁才退回申請人當初挑的
     $specId = (int)($item['buy_spec_id'] ?? 0) ?: (int)($item['spec_id'] ?? 0);
-    if ($specId <= 0) throw new Exception('未建檔的採購品無法入庫，請先綁定採購料號（詢價頁或到貨頁的「綁定」）');
+    if ($specId <= 0) return purchase_find_or_create_stock_item_nospec($db, $item, $req, $locationId, $userId);
 
     $st = $db->prepare("SELECT s.spec_id, s.spec_code, s.spec_text, s.unit_id, s.location_id, i.item_name, i.category_id
                         FROM purchase_spec s JOIN purchase_item i ON i.item_id=s.item_id WHERE s.spec_id=?");
@@ -1149,12 +1207,13 @@ function purchase_find_or_create_stock_item(PDO $db, array $item, array $req, ?i
     } catch (Throwable $e) {}
 
     $db->prepare("INSERT INTO stock_items
-        (d_id, d_setting_id, purchase_spec_id, item_type, storage_location, location_id, qty, unit_id,
-         vendor_id, vendor_name, remark1, stock_date, is_active, Created_By)
-        VALUES (?, NULL, ?, ?, ?, ?, 0, ?, ?, ?, ?, CURDATE(), 1, ?)")
+        (d_id, d_setting_id, purchase_spec_id, item_type, storage_location, location_id, qty, unit_id, unit_cost,
+         vendor_id, vendor_name, remark1, stock_date, is_active, source, Created_By)
+        VALUES (?, NULL, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, CURDATE(), 1, 'purchase', ?)")
        ->execute([
            $spec['spec_code'], $specId, (int)$spec['category_id'], $locName, $locId,
            $item['unit_id'] !== null ? (int)$item['unit_id'] : ($spec['unit_id'] !== null ? (int)$spec['unit_id'] : null),
+           ($item['unit_price'] ?? null) !== null ? (float)$item['unit_price'] : null,
            $req['vendor_id'] ?: null, $req['vendor_name'] ?: null,
            trim($spec['item_name'] . ' ' . (string)$spec['spec_text']), $userId,
        ]);
