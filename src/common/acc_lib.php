@@ -352,7 +352,106 @@ function acc_sheet_locked_src(PDO $db, string $srcType, int $srcId): ?array
  * 從來源憑證組出一份新底稿的明細（不寫入資料庫）。
  * 已有暫存時前端應改用 acc_sheet_get 的內容，避免蓋掉使用者對過的進度。
  */
-function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm): array
+/**
+ * 組底稿明細（含「對帳區間」）。
+ *   opt.with_prior  true＝把本帳款月份「以前」還沒對完的憑證一併帶進來（避免前面有遺漏）：
+ *                   往前最多 6 個帳款月份（起始日更早則往前延伸、上限 24 個月），
+ *                   已被其他底稿（任何狀態）佔用的、以及已開進發票（應收）的不重複帶。
+ *   opt.date_from / date_to  人工指定的起訖日（YYYY-MM-DD，空＝不限）；有指定才會過濾，
+ *                   沒指定時本月份自己的單據一律保留（含手動改月份進來的）。
+ * 回傳多一個 range：結帳日說明、預設截止日、目前套用的起訖日。
+ */
+function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm, array $opt = []): array
+{
+    $b = acc_sheet_build_core($db, $side, $partyId, $bm);
+    $isD = fn($v) => is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) && strtotime($v) !== false;
+    $from = $isD($opt['date_from'] ?? '') ? $opt['date_from'] : '';
+    $to   = $isD($opt['date_to']   ?? '') ? $opt['date_to']   : '';
+    if ($from !== '' && $to !== '' && $from > $to) { $t = $from; $from = $to; $to = $t; }
+
+    $b['range'] = acc_recon_range_info($db, $side, $partyId, $bm, $b['head'] ?? null);
+    $b['range']['from'] = $from;
+    $b['range']['to']   = $to;
+
+    if (!empty($opt['with_prior'])) {
+        $excl = [];
+        try {
+            $st = $db->prepare("SELECT l.src_type, l.src_id
+                                FROM acc_recon_line l JOIN acc_recon_sheet s ON s.sheet_id = l.sheet_id
+                                WHERE s.side = ? AND s.party_id = ? AND s.billing_month <> ?
+                                  AND l.src_id > 0 AND l.src_type <> 'SPLIT'");
+            $st->execute([$side, $partyId, $bm]);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $excl[$r['src_type'] . '-' . (int)$r['src_id']] = true;
+        } catch (Throwable $e) {}
+        if ($side === 'ar') {
+            try { foreach (acc_invoiced_src_map($db) as $k => $_) $excl[$k] = true; } catch (Throwable $e) {}
+        }
+        $have = [];
+        foreach ($b['lines'] as $l) $have[$l['src_type'] . '-' . (int)$l['src_id']] = true;
+
+        $back = 6;
+        if ($from !== '') {
+            $diff = (int)date('Y', strtotime($bm . '-01')) * 12 + (int)date('n', strtotime($bm . '-01'))
+                  - ((int)date('Y', strtotime($from)) * 12 + (int)date('n', strtotime($from)));
+            $back = max(6, min(24, $diff + 1));
+        }
+        $prior = 0;
+        for ($k = 1; $k <= $back; $k++) {
+            $pm = date('Y-m', strtotime($bm . '-01 -' . $k . ' month'));
+            try { $pb = acc_sheet_build_core($db, $side, $partyId, $pm); } catch (Throwable $e) { continue; }
+            foreach ($pb['lines'] as $l) {
+                $key = $l['src_type'] . '-' . (int)$l['src_id'];
+                if (isset($excl[$key]) || isset($have[$key])) continue;
+                $have[$key] = true;
+                $b['lines'][] = $l;
+                $prior++;
+            }
+        }
+        $b['range']['prior_count'] = $prior;
+        $b['range']['prior_months'] = $back;
+    }
+
+    if ($from !== '' || $to !== '') {
+        $b['lines'] = array_values(array_filter($b['lines'], function ($l) use ($from, $to) {
+            $d = (string)($l['doc_date'] ?? '');
+            if ($from !== '' && $d < $from) return false;
+            if ($to   !== '' && $d > $to)   return false;
+            return true;
+        }));
+    }
+    usort($b['lines'], fn($x, $y) => strcmp((string)$x['doc_date'], (string)$y['doc_date'])
+                                   ?: strcmp((string)$x['doc_no'], (string)$y['doc_no']));
+    foreach ($b['lines'] as $i => &$l) $l['sort_order'] = ($i + 1) * 10;
+    unset($l);
+    return $b;
+}
+
+/** 結帳日說明與預設截止日（本次對帳預設只列到這一天以前）。畫面顯示用，不影響歸屬判定。 */
+function acc_recon_range_info(PDO $db, string $side, string $partyId, string $bm, ?array $head): array
+{
+    $last = (int)date('t', strtotime($bm . '-01'));
+    $cutDay = null; $label = ''; $exDate = null;
+    if ($side === 'ar') {
+        $c = acc_customer_of_name($db, $partyId);
+        $cut = isset($head['cutoff']) ? (int)$head['cutoff'] : acc_cutoff_for($c, acc_global_cutoff($db));
+        $mode = strtoupper(trim((string)($c['settlement_mode'] ?? '')));
+        $cutDay = ($cut > 0) ? min($cut, $last) : $last;
+        $label = ($cut > 0) ? ('每月 ' . $cut . ' 日') : '月底';
+        if ($mode !== 'FIXED' && $mode !== 'EOM') $label .= '（客戶未設定，沿用全站預設）';
+        $exDate = acc_settle_ex_of($db, $c)[$bm] ?? null;
+    } else {
+        $s = acc_settlement_for($db, 'ap', $partyId);
+        $eom = (strtoupper((string)$s['mode']) === 'EOM');
+        $cutDay = $eom ? $last : min((int)$s['day'], $last);
+        $label = $eom ? '月底' : ('每月 ' . (int)$s['day'] . ' 日');
+        if (($s['source'] ?? '') !== 'party') $label .= '（廠商未設定，沿用全站預設）';
+    }
+    $defTo = $exDate ?: sprintf('%s-%02d', $bm, $cutDay);
+    return ['cut_label' => $label, 'cut_day' => $cutDay, 'default_to' => $defTo,
+            'exception_date' => $exDate, 'from' => '', 'to' => ''];
+}
+
+function acc_sheet_build_core(PDO $db, string $side, string $partyId, string $bm): array
 {
     $lines = [];
     $i = 0;
@@ -2249,7 +2348,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
 
     $st = $db->prepare("
         SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS d,
-               il.Product_id, il.Specification, il.Qty, il.Unit_price, il.Note,
+               il.Product_id, il.Specification, il.Content, il.Qty, il.Unit_price, il.Note,
                il.billing_month_override, ot.Order_oo,
                COALESCE(ist.sale_type_name,'') AS sale_type_name
         FROM is_list il
@@ -2268,7 +2367,8 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         $items[] = ['kind' => 'ship', 'src_type' => 'IS', 'src_id' => (int)$r['IS_id'],
                     'no' => $r['IS_number'], 'date' => $r['d'],
                     'order_oo' => $r['Order_oo'], 'product_id' => $r['Product_id'], 'part_no' => $r['Product_id'],
-                    'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
+                    // 與出貨分析明細同一規格：匯入 ERP 時空格右側（製程）存在 Content，要接在規格後面才看得出業務在 ERP 出貨單打了什麼
+                    'spec' => trim((string)$r['Specification'] . ' ' . (string)$r['Content']), 'qty' => (int)$r['Qty'],
                     'unit_price' => (float)$r['Unit_price'], 'amount' => $amt,
                     'note' => $r['Note'], 'sale_type' => $r['sale_type_name']];
     }

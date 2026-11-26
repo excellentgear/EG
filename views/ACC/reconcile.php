@@ -1260,7 +1260,7 @@ function render(){
       +'<td>'+kindPill(l)+'</td>'
       +(SIDE==='ap'?'<td>'+esc(l.bom||'')+'</td>':'')
       +'<td class="l">'+partCell(l)+'</td>'
-      +'<td class="l">'+esc((l.spec||'').substr(0,18))+'</td>'
+      +'<td class="l" style="white-space:normal;word-break:break-all;min-width:150px;">'+esc(l.spec||'')+'</td>'
       +'<td class="r orig-v">'+(l.orig_qty===null?'':nf(l.orig_qty))+'</td>'
       +'<td class="r orig-v">'+(l.orig_price===null?'':n2(l.orig_price))+'</td>'
       +'<td class="r orig-v"><b>'+(l.orig_amount===null?'':nf(l.orig_amount))+'</b></td>'

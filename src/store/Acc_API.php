@@ -1487,6 +1487,14 @@ case 'sheet_load': {
             $src  = acc_sheet_build($db, $side, $pid, $bm, $rgOpt);
             $rangeOut = $src['range'] ?? null;
             $have = [];
+            // 已暫存的底稿，說明（規格）欄跟來源即時同步（規格顯示規則改過後，舊底稿也要看得到完整內容）
+            $specNow = [];
+            foreach ($src['lines'] as $l) $specNow[$l['src_type'] . '-' . (int)$l['src_id']] = $l['spec'];
+            foreach ($sheet['lines'] as &$sl) {
+                $k0 = ($sl['src_type'] ?? '') . '-' . (int)($sl['src_id'] ?? 0);
+                if (!in_array($sl['src_type'] ?? '', ['SPLIT', 'MANUAL'], true) && isset($specNow[$k0]) && $specNow[$k0] !== null && $specNow[$k0] !== '') $sl['spec'] = $specNow[$k0];
+            }
+            unset($sl);
             foreach ($sheet['lines'] as $l) {
                 if (($l['src_type'] ?? '') !== 'SPLIT') $have[$l['src_type'] . '-' . (int)$l['src_id']] = true;
             }
