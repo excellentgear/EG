@@ -518,7 +518,11 @@ $('.tab-btn').on('click',function(){
 (function(){
   var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1);
   var m=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
-  $('#candBm').val(m); $('#invBmFrom').val(m); $('#invBmTo').val(m);
+  $('#candBm').val(m);
+  // 發票管理：預設帶入「上個月～本月」
+  var t=new Date();
+  $('#invBmFrom').val(m);
+  $('#invBmTo').val(t.getFullYear()+'-'+('0'+(t.getMonth()+1)).slice(-2));
 })();
 $('#btnInvThis,#btnInvPrev').on('click',function(){
   var d=new Date(); d.setDate(1); if(this.id==='btnInvPrev') d.setMonth(d.getMonth()-1);
