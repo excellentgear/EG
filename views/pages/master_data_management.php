@@ -8978,6 +8978,8 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 
 /* ── Search & Action Bar ── */
 /* Customer modal tabs */
+#makerModal .tab-pane { display:none !important; }
+#makerModal .tab-pane.active { display:block !important; }
 #customerModal .tab-pane { display:none !important; }
 #customerModal .tab-pane.active { display:block !important; }
 #custModalTabs > li > a { cursor:pointer; }
