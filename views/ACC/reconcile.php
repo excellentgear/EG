@@ -1816,14 +1816,19 @@ var syncMissing=[], autoAdded=[], exclList=[], staleList=[];
 /* 依出貨單號排序（單號相同依明細 id）；onlyNew＝只把新帶入的列插到同單號／較大單號之前，其餘維持原順序 */
 function sortByDocNo(onlyNew){
   var tops=lines.filter(function(l){ return !l.split_parent_key; });
-  var cmp=function(a,b){ var x=String(a.doc_no||''), y=String(b.doc_no||''); return x<y?-1:(x>y?1:((a.src_id||0)-(b.src_id||0))); };
+  // 退貨單與出貨單混合排序：先依日期，同日再依單號、明細 id
+  var cmp=function(a,b){
+    var da=String(a.doc_date||''), db=String(b.doc_date||'');
+    if(da!==db) return da<db?-1:1;
+    var x=String(a.doc_no||''), y=String(b.doc_no||''); return x<y?-1:(x>y?1:((a.src_id||0)-(b.src_id||0)));
+  };
   var out;
   if(onlyNew){
     var olds=tops.filter(function(l){ return !l._new; }).sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); });
     out=olds.slice();
     tops.filter(function(l){ return l._new; }).sort(cmp).forEach(function(n){
       var at=-1;
-      for(var i=0;i<out.length;i++){ if(String(out[i].doc_no||'')<=String(n.doc_no||'')) at=i; }   // 最後一個單號不大於它的位置
+      for(var i=0;i<out.length;i++){ if(cmp(out[i],n)<=0) at=i; }   // 最後一個（日期、單號）不大於它的位置
       out.splice(at+1,0,n);
     });
     lines.forEach(function(l){ delete l._new; });

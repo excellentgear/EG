@@ -336,6 +336,15 @@ function acc_erp_stmt_checked_keys(PDO $db, array $stash): array
         }
         if (!empty($e['is_id']) && in_array($e['status'], ['same', 'price'], true)) $isIds[(int)$e['is_id']] = $e;
     }
+    // 「網頁查無」且已由匯入自動新增進 is_list 的明細：ERP 與網頁必然一致，也算已對到
+    $fnd = $db->prepare("SELECT IS_id FROM is_list WHERE IS_number=? AND Qty=? AND ABS(Unit_price-?)<0.00005
+                         AND Note LIKE '匯入ERP自動新增%' AND ? LIKE CONCAT(Product_id,'%') LIMIT 1");
+    foreach ($stash['entries'] as $e) {
+        if (($e['kind'] ?? '') === 'return' || ($e['status'] ?? '') !== 'erp_only' || (float)($e['erp_qty'] ?? 0) <= 0) continue;
+        $fnd->execute([$e['no'], (int)round($e['erp_qty']), (float)$e['erp_price'], (string)$e['erp_spec']]);
+        $nid = $fnd->fetchColumn();
+        if ($nid) $keys[] = 'IS-' . (int)$nid;
+    }
     foreach (array_chunk(array_keys($isIds), 500) as $part) {
         $ph = implode(',', array_fill(0, count($part), '?'));
         $st = $db->prepare("SELECT IS_id, Qty, Unit_price FROM is_list WHERE IS_id IN ($ph)");
