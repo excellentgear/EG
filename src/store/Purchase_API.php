@@ -1465,7 +1465,7 @@ case 'receive': {
             $extraDone++;
         }
     }
-    // 金額重算（細項、改單價、調整含稅總額任一發生）；加總若讓金額超過原本核准的簽核層級，就不准直接進來（避免繞過簽核）
+    // 金額重算（細項、改單價、調整含稅總額任一發生）
     $finalIn = pv('grand_total_final');
     if ($extras || $priceTouched || ($finalIn !== '' && is_numeric($finalIn))) {
         $taxT = (string)($req['tax_type'] ?: 'taxable');
@@ -1478,12 +1478,7 @@ case 'receive': {
             $db->prepare("UPDATE purchase_request SET total_adjust=? WHERE req_id=?")->execute([$adj, $reqId]);
         }
         $tt = purchase_calc_totals($db, $reqId, $taxT);
-        [$l1, $l2] = purchase_thresholds($db);
-        $lvNew = purchase_need_levels($tt['grand_total'], $l1, $l2);
-        if ($lvNew > (int)$req['need_levels'] && !purchase_is_auto_purpose($db, $req, $reqId)) {
-            $db->rollBack();
-            jerr('金額調整後含稅 ' . number_format($tt['grand_total'], 2) . ' 元，超過這張單原本核准的簽核層級，請改走詢價與簽核');
-        }
+        // 已核准並下單／到貨後的金額更正，不再回頭檢查簽核層級（實際進貨金額以廠商為準）
         $db->prepare("UPDATE purchase_request SET tax_type=?, subtotal=?, tax_amount=?, grand_total=? WHERE req_id=?")
            ->execute([$taxT, $tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], $reqId]);
     }
@@ -1497,7 +1492,7 @@ case 'receive': {
     jout(['status' => $status]);
 }
 
-/** 進貨後更正金額（各品項單價、含稅總額調整）——對帳鎖帳前都可改；同一套金額重算與簽核層級檢查 */
+/** 進貨後更正金額（各品項單價、含稅總額調整）——對帳鎖帳前都可改 */
 case 'adjust_amounts': {
     if (!$perms['canReceive'] && !$perms['canBuy'] && !$perms['canAdmin']) jerr('無修改權限', 403);
     $reqId = pint('req_id');
@@ -1522,11 +1517,6 @@ case 'adjust_amounts': {
         $db->prepare("UPDATE purchase_request SET total_adjust=? WHERE req_id=?")->execute([$adj, $reqId]);
     }
     $tt = purchase_calc_totals($db, $reqId, $taxT);
-    [$l1, $l2] = purchase_thresholds($db);
-    if (purchase_need_levels($tt['grand_total'], $l1, $l2) > (int)$req['need_levels'] && !purchase_is_auto_purpose($db, $req, $reqId)) {
-        $db->rollBack();
-        jerr('修改後含稅 ' . number_format($tt['grand_total'], 2) . ' 元，超過這張單原本核准的簽核層級，請改走詢價與簽核');
-    }
     $db->prepare("UPDATE purchase_request SET subtotal=?, tax_amount=?, grand_total=?, Modified_By=? WHERE req_id=?")
        ->execute([$tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], $uid, $reqId]);
     $db->commit();
