@@ -124,6 +124,11 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 </div>
 </div>
 
+<div class="a-mask" id="mkAtt"><div class="a-modal" style="width:520px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-paperclip"></i>&nbsp;發票附件<span class="m-close" data-close="mkAtt">✕</span></div>
+  <div class="m-body" id="attBody"></div>
+  <div class="m-foot"><button data-close="mkAtt">關閉</button></div>
+</div></div>
 <div class="a-mask" id="mkJ"><div class="a-modal" style="width:900px;max-width:96vw;">
   <div class="m-head"><i class="fa fa-book"></i>&nbsp;<span id="jTitle">確認傳票</span><span class="m-close" data-close="mkJ">✕</span></div>
   <div class="m-body">
@@ -583,6 +588,22 @@ $('#btnJConfirm').on('click',function(){
     $('#vNo').val(''); $('#vNote').val(''); JX=[]; vNoState(); loadItems();
   },'json').fail(function(x){ $b.prop('disabled',false); failMsg(x,'開立失敗'); });
 });
+/* 傳票查詢：點發票號碼／迴紋針開啟該傳票對應發票的附件（一個直接開，多個列清單） */
+$(document).on('click','.att-open',function(e){
+  e.preventDefault();
+  var ids=String($(this).data('inv')||'').split(',').filter(Boolean), all=[], n=0;
+  if(!ids.length) return;
+  ids.forEach(function(id){
+    $.getJSON(API,{action:'inv_attach_list',invoice_id:id},function(r){
+      (r.rows||[]).forEach(function(a){ all.push(a); });
+      if(++n<ids.length) return;
+      if(!all.length){ toast('沒有附件', true); return; }
+      if(all.length===1){ window.open(API+'?action=inv_attach_download&att_id='+all[0].att_id,'_blank'); return; }
+      $('#attBody').html(all.map(function(a){ return '<div style="padding:5px 0;"><a href="'+API+'?action=inv_attach_download&att_id='+a.att_id+'" target="_blank" rel="noopener"><i class="fa fa-paperclip"></i> '+esc(a.orig_name)+'</a></div>'; }).join(''));
+      openMask('mkAtt');
+    });
+  });
+});
 /* ── 查詢 ── */
 function loadList(){
   $('#lBody').html('<tr><td colspan="10" style="padding:18px;color:#8a6d45;">查詢中…</td></tr>');
@@ -595,7 +616,8 @@ function loadList(){
       h+='<tr class="'+(v.status==='void'?'voided':'')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
         +'<td>'+dd(v.voucher_date)+'</td><td><span class="sd-pill '+(v.side==='ap'?'sd-ap">應付':'sd-ar">應收')+'</span></td><td class="l">'+esc(v.party_name)+'</td>'
         +'<td>'+esc(v.billing_month||'')+'</td><td class="r'+(v.side==='ap'?' amt-ap':'')+'">'+nf(v.total_amount)+'</td>'
-        +'<td>'+esc(v.invoice_nos||'')+'</td>'
+        +'<td style="white-space:nowrap;">'+(v.att_invs?'<a href="#" class="att-open" data-inv="'+esc(v.att_invs)+'" title="點選開啟發票附件">'+esc(v.invoice_nos||'')+'</a>':esc(v.invoice_nos||''))
+        +' <span style="display:inline-block;width:20px;text-align:left;">'+(v.att_invs?'<a href="#" class="att-open" data-inv="'+esc(v.att_invs)+'" style="color:#B9793C;" title="有附件，點選開啟"><i class="fa fa-paperclip"></i></a>':'')+'</span></td>'
         +'<td><span class="pill st-'+v.status+'">'+(v.status==='void'?'已作廢':'有效')+'</span></td><td class="l">'+esc(v.note||'')+'</td>'
         +'<td><button class="btn-mini v-open" data-id="'+v.voucher_id+'">明細</button> <button class="btn-mini v-print" data-id="'+v.voucher_id+'"><i class="fa fa-print"></i> 列印</button></td></tr>';
     });

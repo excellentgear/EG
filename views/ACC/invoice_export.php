@@ -889,7 +889,7 @@ function renderInv(){
       +'<td style="white-space:nowrap;">'+(canEditNo
           ? '<input type="text" class="no-in" data-id="'+id+'" maxlength="10" value="'+esc(v.invoice_no||'')+'" data-eg-hint="英文2碼＋數字8碼，例 AB12345678" autocomplete="off">'
           : (Number(v.attach_cnt)>0 ? '<a href="#" class="att-open" data-id="'+id+'" title="開啟附件"><b>'+esc(v.invoice_no||'—')+'</b></a>' : '<b>'+esc(v.invoice_no||'—')+'</b>'))
-        +(Number(v.attach_cnt)>0 ? ' <a href="#" class="att-open" data-id="'+id+'" title="有 '+v.attach_cnt+' 個附件，點選開啟" style="color:#B9793C;"><i class="fa fa-paperclip"></i>'+(v.attach_cnt>1?'<sup>'+v.attach_cnt+'</sup>':'')+'</a>' : '')+'</td>'
+        +' <span style="display:inline-block;width:30px;text-align:left;vertical-align:middle;">'+(Number(v.attach_cnt)>0 ? '<a href="#" class="att-open" data-id="'+id+'" title="有 '+v.attach_cnt+' 個附件，點選開啟" style="color:#B9793C;"><i class="fa fa-paperclip"></i>'+(v.attach_cnt>1?'<sup>'+v.attach_cnt+'</sup>':'')+'</a>' : '')+'</span></td>'
       +'<td>'+(v.invoice_date?esc(String(v.invoice_date).replace(/-/g,'.')):'—')+'</td>'
       +'<td class="l">'+esc(v.customer_full||v.customer_name)+'</td>'
       +'<td>'+esc(v.tax_id||'—')+'</td>'

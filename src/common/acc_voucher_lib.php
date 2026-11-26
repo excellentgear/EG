@@ -315,7 +315,13 @@ function acc_voucher_list(PDO $db, array $f): array
                                        JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id AND inv.status<>'void' AND inv.invoice_no IS NOT NULL AND inv.invoice_no<>''
                                        WHERE vi.voucher_id=v.voucher_id), ''),
                                        IF(v.side='ap', (SELECT vs.vendor_inv_no FROM acc_recon_sheet vs WHERE vs.side='ap' AND vs.party_id=v.party_id
-                                                         AND vs.billing_month=v.billing_month LIMIT 1), NULL)) AS invoice_nos
+                                                         AND vs.billing_month=v.billing_month LIMIT 1), NULL)) AS invoice_nos,
+                       (SELECT GROUP_CONCAT(DISTINCT inv.invoice_id)
+                          FROM acc_voucher_item vi
+                          JOIN acc_invoice_item ii ON ii.src_type=vi.src_type AND ii.src_id=vi.src_id
+                          JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id AND inv.status<>'void'
+                          JOIN acc_invoice_attach at ON at.invoice_id=inv.invoice_id
+                         WHERE vi.voucher_id=v.voucher_id) AS att_invs
                        FROM acc_voucher v $ws ORDER BY (v.voucher_no IS NULL OR v.voucher_no=''), v.voucher_no DESC, v.voucher_id DESC LIMIT $per OFFSET " . (($page - 1) * $per));
     $q->execute($p);
     return ['rows' => $q->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per_page' => $per];
