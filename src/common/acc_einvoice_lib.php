@@ -86,28 +86,13 @@ function acc_einv_desc_of_tag(?array $tag): string
 /** 會計聯絡人 email（客戶聯絡人設為會計者），沒有則退回客戶發票 email */
 function acc_einv_email(PDO $db, string $customerId, array $cust): string
 {
-    // 買方電子信箱＝客戶主檔標記為「本公司」那一筆的「電子發票信箱」（發票通知集中寄到公司信箱）；
-    // 本公司沒設才依序用該客戶自己的電子發票信箱、「發票」聯絡人、會計聯絡人
+    // 買方電子信箱固定＝客戶主檔標記為「本公司」那一筆的「電子發票信箱」（不帶入各客戶自己的信箱）
     static $own = null;
     if ($own === null) {
         $own = '';
         try { $own = trim((string)$db->query("SELECT invoice_email FROM customer_list WHERE is_own_company=1 AND invoice_email<>'' ORDER BY customer_id LIMIT 1")->fetchColumn()); } catch (Throwable $e) {}
     }
-    if ($own !== '') return $own;
-    $v = trim((string)($cust['invoice_email'] ?? ''));
-    if ($v !== '') return $v;
-    foreach (['is_invoice_recv', 'is_accounting'] as $flag) {
-        try {
-            $st = $db->prepare("SELECT email FROM customer_contacts
-                                WHERE customer_id=? AND {$flag}=1 AND email<>''
-                                ORDER BY is_primary DESC, sort_order, contact_id LIMIT 1");
-            $st->execute([$customerId]);
-            $e = trim((string)$st->fetchColumn());
-            if ($e !== '') return $e;
-        } catch (Throwable $e) {}
-    }
-    $v = trim((string)($cust['customer_email'] ?? ''));
-    return $v;
+    return $own;
 }
 
 /**
