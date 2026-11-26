@@ -43,7 +43,13 @@ function orp_ensure_schema(PDO $db): void
         }
         // 對應 part_viewer「ERP/資材報告 檔名標籤」的檔名後綴（可空；2026-11-26）
         if (!$db->query("SHOW COLUMNS FROM order_report_opt LIKE 'tag_suffix'")->fetchColumn()) {
-            $db->exec("ALTER TABLE order_report_opt ADD COLUMN tag_suffix VARCHAR(30) NULL AFTER process_type_id");
+            $db->exec("ALTER TABLE order_report_opt ADD COLUMN tag_suffix VARCHAR(255) NULL AFTER process_type_id");
+        } else {
+            // 對應後綴可多選（以 JSON 陣列存放），欄位要放得下
+            $col = $db->query("SHOW COLUMNS FROM order_report_opt LIKE 'tag_suffix'")->fetch(PDO::FETCH_ASSOC);
+            if ($col && stripos((string)$col['Type'], 'varchar(30)') !== false) {
+                $db->exec("ALTER TABLE order_report_opt MODIFY COLUMN tag_suffix VARCHAR(255) NULL");
+            }
         }
         $done = true;
     } catch (Throwable $e) { error_log('orp_ensure_schema: ' . $e->getMessage()); }
@@ -67,13 +73,28 @@ function orp_perms(PDO $db, int $uid): array
     } catch (Throwable $e) { return $p; }
 }
 
+/** 對應後綴欄位值 → 後綴陣列（新版是 JSON 陣列，舊版單一字串也相容） */
+function orp_suffix_list($raw): array
+{
+    $raw = trim((string)$raw);
+    if ($raw === '') return [];
+    if ($raw[0] === '[') {
+        $a = json_decode($raw, true);
+        return is_array($a) ? array_values(array_unique(array_filter(array_map(function ($v) { return trim((string)$v); }, $a), function ($v) { return $v !== ''; }))) : [];
+    }
+    return [$raw];
+}
+
 /** 已被報告項目綁定的檔名後綴（part_viewer 的檔名標籤設定據此反灰，不可改名／刪除） */
 function orp_locked_suffixes(PDO $db): array
 {
     orp_ensure_schema($db);
     try {
-        return array_values(array_filter(array_map('strval',
-            $db->query("SELECT DISTINCT tag_suffix FROM order_report_opt WHERE tag_suffix IS NOT NULL AND tag_suffix<>''")->fetchAll(PDO::FETCH_COLUMN))));
+        $all = [];
+        foreach ($db->query("SELECT tag_suffix FROM order_report_opt WHERE tag_suffix IS NOT NULL AND tag_suffix<>''")->fetchAll(PDO::FETCH_COLUMN) as $raw) {
+            foreach (orp_suffix_list($raw) as $s) $all[$s] = 1;
+        }
+        return array_map('strval', array_keys($all));
     } catch (Throwable $e) { return []; }
 }
 
@@ -116,7 +137,8 @@ function orp_options(PDO $db, bool $onlyActive = true, array $keepIds = []): arr
             'opt_id' => $id, 'opt_name' => (string)$r['opt_name'],
             'process_type_id' => $r['process_type_id'] === null ? null : (int)$r['process_type_id'],
             'ptype_name' => (string)($r['ptype_name'] ?? ''),
-            'tag_suffix' => (string)($r['tag_suffix'] ?? ''),
+            'tag_suffix' => (string)(orp_suffix_list($r['tag_suffix'] ?? '')[0] ?? ''),
+            'tag_suffixes' => orp_suffix_list($r['tag_suffix'] ?? ''),
             'is_active' => (int)$r['is_active'],
         ];
     }
@@ -217,14 +239,18 @@ function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
         $chk = $db->prepare("SELECT 1 FROM process_type WHERE process_type_id=?"); $chk->execute([$pt]);
         if (!$chk->fetchColumn()) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列：製程大類不存在'];
         }
-        $suffix = trim((string)($r['tag_suffix'] ?? ''));
-        if ($suffix !== '' && !in_array($suffix, $okSuffix, true)) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：檔名後綴「' . $suffix . '」不在「ERP/資材報告 檔名標籤」的報告標籤內'];
+        $sfxIn = isset($r['tag_suffixes']) && is_array($r['tag_suffixes']) ? $r['tag_suffixes'] : orp_suffix_list($r['tag_suffix'] ?? '');
+        $sfxList = array_values(array_unique(array_filter(array_map(function ($v) { return trim((string)$v); }, $sfxIn), function ($v) { return $v !== ''; })));
+        foreach ($sfxList as $sx) {
+            if (!in_array($sx, $okSuffix, true)) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：檔名後綴「' . $sx . '」不在「ERP/資材報告 檔名標籤」內'];
+        }
+        $suffix = $sfxList ? json_encode($sfxList, JSON_UNESCAPED_UNICODE) : '';
         $id = (int)($r['opt_id'] ?? 0);
         $active = !empty($r['is_active']) ? 1 : 0;
         if ($id > 0) {
             if (!isset($cur[$id])) return ['ok' => false, 'msg' => '項目已不存在，請重新開啟設定'];
             $o = $cur[$id]; $keepIds[] = $id;
-            $changed = $o['opt_name'] !== $name || (int)$o['process_type_id'] !== $pt || (int)$o['is_active'] !== $active || (int)$o['sort_order'] !== $i + 1 || (string)($o['tag_suffix'] ?? '') !== $suffix;
+            $changed = $o['opt_name'] !== $name || (int)$o['process_type_id'] !== $pt || (int)$o['is_active'] !== $active || (int)$o['sort_order'] !== $i + 1 || orp_suffix_list($o['tag_suffix'] ?? '') !== $sfxList;
             if ($changed && empty($perm['edit'])) return ['ok' => false, 'msg' => '您沒有「修改」報告項目的權限'];
         } elseif (empty($perm['add'])) {
             return ['ok' => false, 'msg' => '您沒有「新增」報告項目的權限'];

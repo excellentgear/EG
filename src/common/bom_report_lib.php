@@ -78,13 +78,16 @@ function brp_required_map(PDO $db, array $boms): array
         }
         $reports = []; $flag = []; $miss = [];
         foreach ($items as $optId => $r) {
-            $suffix = trim((string)($r['tag_suffix'] ?? ''));
+            $sfxList = orp_suffix_list($r['tag_suffix'] ?? '');
+            $suffix = implode(' ', $sfxList);
             $ptype = $r['ptype'] === null || $r['ptype'] === '' ? null : (int)$r['ptype'];
             $has = null; $file = null;
-            if ($suffix !== '' && $dirOk) {
+            if ($sfxList && $dirOk) {
                 $has = false;
                 foreach ($files as $f) {
-                    if (eg_bom_tag_seq($f['name'], $bom . $suffix) !== null && (!$file || $f['mtime'] > $file['mtime'])) $file = $f;
+                    foreach ($sfxList as $sx) {   // 多個後綴：任一個有檔案就算已附
+                        if (eg_bom_tag_seq($f['name'], $bom . $sx) !== null && (!$file || $f['mtime'] > $file['mtime'])) { $file = $f; break; }
+                    }
                 }
                 if ($file) $has = true;
             }
