@@ -1176,7 +1176,7 @@ function renderDetail(q) {
     }
 
     if (q.receipts && q.receipts.length) {
-        var canUndo = q.can.receive && !parseInt(q.acc_locked, 10);
+        var canUndo = q.can.receipt_edit && !parseInt(q.acc_locked, 10);   // 已全數到貨的單也要能修改／撤銷
         var svc = q.receipts.filter(function (rc) { return rc.receive_mode === 'service'; });
         var gen = q.receipts.filter(function (rc) { return rc.receive_mode !== 'service'; });
         var undoBtn = function (rc) { return canUndo ? '<td style="white-space:nowrap;"><a href="javascript:;" class="rc-edit" data-key="' + esc(rc.Created_At + '|' + rc.Created_By) + '" style="color:#8A5A2B;">修改</a>　<a href="javascript:;" class="rc-undo" data-id="' + rc.rcpt_id + '" style="color:#DD5138;">撤銷</a></td>' : ''; };

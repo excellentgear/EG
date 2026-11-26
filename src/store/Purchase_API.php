@@ -981,6 +981,7 @@ case 'req_detail': {
         'order'   => $perms['canBuy'] && $req['status'] === 'approved',
         // 核准後可直接到貨：有些是直接去購買、並沒有向廠商訂貨，所以不強制先按「已下單」
         'receive' => $perms['canReceive'] && in_array($req['status'], ['approved', 'ordered', 'partial'], true),
+        'receipt_edit' => ($perms['canReceive'] || $perms['canAdmin']) && in_array($req['status'], ['approved', 'ordered', 'partial', 'received'], true),
         'account' => $perms['canBuy'] && in_array($req['status'], ['approved', 'ordered', 'partial', 'received', 'closed'], true),
         'close'   => $perms['canBuy'] && in_array($req['status'], ['received', 'partial'], true),
         'delete'  => $perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'),
