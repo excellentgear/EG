@@ -191,7 +191,7 @@ function openMask(id){ $('#'+id).addClass('show'); } function closeMask(id){ $('
 $(document).on('click','[data-close]',function(){ closeMask($(this).data('close')); });
 $(document).on('click','.a-mask',function(e){ if(e.target===this) $(this).removeClass('show'); });
 $('#btnHelp').on('click',function(){ openMask('mkHelp'); });
-var SRC_LBL={IS:'出貨',IR:'退貨',TLOG:'加工移轉',PURC:'採購'};
+var SRC_LBL={IS:'出貨',IR:'退貨',TLOG:'委外加工',PURC:'採購'};
 function srcLbl(t){ return esc(SRC_LBL[t]||t); }
 function failMsg(x,d){ var m=d||'操作失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); }
 
