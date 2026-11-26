@@ -163,10 +163,10 @@ function applyFormMode() {
     ATT_TYPE = FULL ? ($('#attTagWrap .att-tag.on').data('v') || 'other') : 'other';
     $('#reqItemSecTitle').text(FULL ? '要買什麼（可綁採購料號、填預估單價與到貨處理）'
                                     : '要買什麼（只填品名、數量就好；價格與入庫方式由採購接手）');
-    var th = '<th style="width:22%;">品名</th><th style="width:16%;">規格</th><th style="width:8%;">數量</th>' +
-             '<th style="width:8%;">單位</th>';
+    var th = '<th style="width:17%;">品名</th><th style="width:12%;">規格</th><th style="width:7%;">數量</th>' +
+             '<th style="width:6%;">單位</th>';
     if (FULL) th += '<th style="width:10%;">預估單價</th><th style="width:11%;">到貨處理</th>';
-    th += '<th style="width:18%;">用途</th><th style="width:5%;">急</th><th>備註</th><th style="width:4%;"></th>';
+    th += '<th style="width:13%;">指定廠商</th><th style="width:13%;">用途</th><th style="width:4%;">急</th><th style="width:22%;">備註</th><th style="width:3%;"></th>';
     $('#reqItemHead').html(th);
 }
 
@@ -274,6 +274,30 @@ function bindAll() {
     bindSearch('#qVendor', '#qVendorList', 'search_vendor', function (v) { return v.maker_id + '（' + v.maker_id_no + '）'; },
         function (v) { $('#qVendor').val(v.maker_id).data('vid', v.maker_id_no);
                        if (v.payment_method && !$('#qPayMethod').val()) $('#qPayMethod').val(v.payment_method); });
+    // 指定廠商（整張單／各品項）：ID 或名稱模糊搜尋、點選才算；手動改字就解除綁定
+    bindSearch('#rDVendor', '#rDVendorList', 'search_vendor', function (v) { return v.maker_id + '（' + v.maker_id_no + '）'; },
+        function (v) { $('#rDVendor').val(v.maker_id).data('vid', v.maker_id_no); });
+    $(document).on('input', '#rDVendor', function () { $(this).data('vid', ''); });
+    $(document).on('click', '#rDVendorClr', function () { $('#rDVendor').val('').data('vid', ''); $('#rDVendorList').empty(); });
+    var dvT = null;
+    $(document).on('input', '.i-dv', function () {
+        var $in = $(this), $ls = $in.siblings('.i-dv-list'); $in.data('vid', '');
+        clearTimeout(dvT); var kw = $.trim($in.val());
+        if (!kw) { $ls.empty(); return; }
+        dvT = setTimeout(function () {
+            api('search_vendor', { kw: kw }).done(function (r) {
+                var rows = r.vendors || [];
+                if (!rows.length) { $ls.html('<div class="sug">查無資料</div>'); return; }
+                var h = '<div class="sug">';
+                rows.forEach(function (v, i) { h += '<a href="javascript:;" class="i-dv-pick" data-i="' + i + '">' + esc(v.maker_id + '（' + v.maker_id_no + '）') + '</a><br>'; });
+                $ls.html(h + '</div>').data('rows', rows);
+            });
+        }, 300);
+    });
+    $(document).on('click', '.i-dv-pick', function () {
+        var $ls = $(this).closest('.i-dv-list'), v = ($ls.data('rows') || [])[$(this).data('i')];
+        if (v) { $ls.siblings('.i-dv').val(v.maker_id).data('vid', v.maker_id_no); $ls.empty(); }
+    });
     // 到貨：廠商一定要綁定（ID 或名稱模糊搜尋、點選才算）；手動改字就解除綁定，免得畫面寫 A 實際綁著 B
     bindSearch('#rcVendor', '#rcVendorList', 'search_vendor', function (v) { return v.maker_id + '（' + v.maker_id_no + '）'; },
         function (v) { $('#rcVendor').val(v.maker_id).data('vid', v.maker_id_no); syncRcVendor(); });
@@ -425,6 +449,7 @@ function openReq(id) {
     $('#btnSaveReq').html('<i class="fa fa-save"></i> ' + (id ? '儲存修改' : '送出申請'));
     $('#rTitle,#rNeed,#rReason,#pkKw').val('');
     $('#rApply').val(META.today).attr('max', META.today); syncBackTag();
+    $('#rDVendor').val('').data('vid', ''); $('#rDVendorList').empty();
     $('#rUrgent').prop('checked', false);
     REQPP = null; renderReqPurpose();
     $('#pkResult').html('<span class="hint">在上方搜尋採購品後點選加入；主檔沒有的東西可直接手打，採購到貨前再建檔。</span>');
@@ -434,6 +459,7 @@ function openReq(id) {
             var q = r.req;
             $('#rTitle').val(q.title || ''); $('#rNeed').val(q.need_date || ''); $('#rReason').val(q.reason || '');
             $('#rApply').val(q.apply_date || String(q.Created_At || '').substr(0, 10)); syncBackTag();
+            $('#rDVendor').val(q.designated_vendor_id ? (q.designated_vendor_name || '') : '').data('vid', q.designated_vendor_id || '');
             $('#rUrgent').prop('checked', false);   // 品項載入後再依「是否全部急件」回推
             if (q.purpose_type) {
                 REQPP = { type: q.purpose_type, order_id: q.purpose_order_id || 0, bom: q.purpose_bom || '',
@@ -468,7 +494,8 @@ function searchSpecs() {
             h += '<tr><td>' + esc(s.spec_code) + '</td><td class="l">' + esc(s.item_name) + '</td>' +
                  '<td class="l">' + esc(s.spec_text) + '</td><td>' + esc(s.category_name) + '</td>' +
                  '<td class="r">' + nz(s.stock_qty) + ' ' + esc(s.unit_label || '') +
-                 (low ? ' <span class="urg">低於安全量</span>' : '') + '</td>' +
+                 (low ? ' <span class="urg">低於安全量</span>' : '') +
+                 (s.stock_locs ? '<br><span class="hint">儲位 ' + esc(s.stock_locs) + '</span>' : '') + '</td>' +
                  '<td class="r money">' + (s.last_price ? money(s.last_price) : '—') + '</td>' +
                  '<td><button class="pq-btn warm pick-spec" data-i="' + i + '">加入</button></td></tr>';
         });
@@ -480,13 +507,29 @@ $(document).on('click', '.pick-spec', function () {
     if (s) addItemRow(s);
 });
 
+/** 庫存提示：有綁採購料號才有；「庫存 3（儲位 A-01×3）」 */
+function stockText(x) {
+    if (!x || x.stock_qty === undefined || x.stock_qty === null) return '';
+    return '庫存 ' + (nz(x.stock_qty) || '0') + (x.stock_locs ? '（儲位 ' + x.stock_locs + '）' : '（無儲位資料）');
+}
+/** 品名旁的標記：指定廠商、到貨時新增、庫存 */
+function itemTags(it) {
+    var h = '';
+    if (it.designated_vendor_name) h += ' <span class="tag-chip">指定：' + esc(it.designated_vendor_name) + '</span>';
+    if (parseInt(it.added_at_receive, 10) === 1) h += ' <span class="tag-chip">到貨時新增</span>';
+    var st = stockText(it);
+    if (st) h += '<br><span class="hint">' + esc(st) + '</span>';
+    return h;
+}
 function addItemRow(spec, prefill) {
     // 精簡版只問「買什麼、幾個」；預估單價／到貨處理屬採購與倉管的語言，只在採購版出現
     var uid = spec ? (spec.unit_id || spec.default_unit_id || '') : '';
     var modes = '';
     if (FULL) $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '<tr data-spec="' + esc(spec ? spec.spec_id : '') + '">' +
-        '<td class="l">' + (spec ? '<b>' + esc(spec.item_name) + '</b><br><span class="hint">' + esc(spec.spec_code || '') + '</span>'
+        '<td class="l">' + (spec ? '<b>' + esc(spec.item_name) + '</b><br><span class="hint">' + esc(spec.spec_code || '') + '</span>' +
+                                 (function () { var st = stockText(prefill && prefill.stock_locs !== undefined ? prefill : spec);
+                                                return st ? '<br><span class="hint">' + esc(st) + '</span>' : ''; })()
                                  : '<input type="text" class="i-name" placeholder="品名（例：白板筆）">') + '</td>' +
         '<td class="l">' + (spec ? esc(spec.spec_text || '') : '<input type="text" class="i-spec" placeholder="規格／顏色">') + '</td>' +
         '<td><input type="number" class="i-qty" step="0.01" style="width:70px;text-align:right;" value="1"></td>' +
@@ -494,9 +537,11 @@ function addItemRow(spec, prefill) {
                   optList(META.units, 'unit_id', 'unit_name', '', '—') + '</select>') + '</td>' +
         (FULL ? '<td><input type="number" class="i-est" step="0.01" style="width:85px;text-align:right;" placeholder="可留白"></td>' +
                 '<td><select class="i-mode">' + modes + '</select></td>' : '') +
+        '<td class="l"><input type="text" class="i-dv" autocomplete="off" style="width:100%;" title="這一項要指定向哪家買才填；沒填＝沿用整張單的指定廠商">' +
+            '<div class="i-dv-list"></div></td>' +
         '<td class="l"><div class="pq-pp-cell"></div></td>' +
         '<td><input type="checkbox" class="i-urg" title="這一項是急件"></td>' +
-        '<td><input type="text" class="i-remark" style="width:100%;" placeholder="選填"></td>' +
+        '<td><textarea class="i-remark" rows="2" style="width:100%;min-height:54px;resize:vertical;"></textarea></td>' +
         '<td><button class="pq-btn danger i-del" title="移除">✕</button></td></tr>';
     var $tr = $(h).appendTo('#reqItemBody');
     $tr.data('meta', spec ? { spec_id: spec.spec_id, item_name: spec.item_name, spec_text: spec.spec_text,
@@ -506,6 +551,7 @@ function addItemRow(spec, prefill) {
     if (prefill) {
         $tr.find('.i-qty').val(nz(prefill.qty_requested));
         $tr.find('.i-remark').val(prefill.remark || '');
+        if (prefill.designated_vendor_id) $tr.find('.i-dv').val(prefill.designated_vendor_name || '').data('vid', prefill.designated_vendor_id);
         $tr.find('.i-urg').prop('checked', parseInt(prefill.is_urgent, 10) === 1);
         if (FULL) {
             $tr.find('.i-est').val(prefill.est_price === null ? '' : nz(prefill.est_price));
@@ -534,6 +580,7 @@ function collectItems() {
         if (!name) return;
         if (!(qty > 0)) { bad = name + ' 的數量要大於 0'; return; }
         var pp = $t.data('pp') || {};
+        if ($.trim($t.find('.i-dv').val() || '') && !$t.find('.i-dv').data('vid')) { bad = name + ' 的指定廠商請從清單點選（或清空）'; return; }
         items.push({
             spec_id: m ? m.spec_id : 0,
             item_name: name,
@@ -553,7 +600,8 @@ function collectItems() {
             purpose_d_id: pp.d_id || '',
             purpose_vehicle_id: pp.vehicle_id || '',
             purpose_equip_kind: pp.equip_kind || '', purpose_equip_id: pp.equip_id || '', purpose_maint_id: pp.maint_id || '',
-            purpose_note: pp.note || ''
+            purpose_note: pp.note || '',
+            designated_vendor_id: $t.find('.i-dv').data('vid') || ''
         });
     });
     if (bad) { alert(bad); return null; }
@@ -563,10 +611,12 @@ function collectItems() {
 
 function saveReq() {
     if (!REQPP || !REQPP.type) { alert('請先選擇這筆採購的用途'); openPurpose('req'); return; }
+    if ($.trim($('#rDVendor').val() || '') && !$('#rDVendor').data('vid')) { alert('指定廠商請從清單點選（或清空）'); $('#rDVendor').focus(); return; }
     var items = reqIsSimple() ? [] : collectItems(); if (!items) return;
     // 精簡版不顯示標題，一律留白交給後端自動組（用途＋品名）
     var d = { req_id: EDIT.id, is_new: EDIT.id ? '0' : '1', title: FULL ? $('#rTitle').val() : '',
               apply_date: $('#rApply').val() || META.today,
+              designated_vendor_id: $('#rDVendor').data('vid') || '',
               need_date: reqIsSimple() ? '' : $('#rNeed').val(), reason: $('#rReason').val(),
               // 單頭急件＝任一項急件（列表與通知看單頭這個旗標）
               is_urgent: ($('#rUrgent').prop('checked') || $('#reqItemBody .i-urg:checked').length) ? 1 : 0,
@@ -1050,6 +1100,7 @@ function renderDetail(q) {
         fld('含稅總額', '<b class="money" style="font-size:16px;color:#8A5A2B;">' + money(q.grand_total) + '</b>') +
         fld('簽核', q.need_levels > 0 ? ('需 ' + q.need_levels + ' 層，已完成 ' + q.level_done + ' 層' +
             (q.pending_signers ? '（待簽：' + esc(q.pending_signers) + '）' : '')) : '未達門檻，免簽核') +
+        (q.designated_vendor_name ? fld('指定廠商', esc(q.designated_vendor_name)) : '') +
         fld('採購', esc(q.buyer_name || '—')) + fld('預計到貨', q.expected_date || '—') +
         fld('發票', q.masked_vendor ? '＊＊＊' : esc(q.invoice_no || '—') + (q.invoice_date ? '（' + q.invoice_date + '）' : '')) +
         fld('付款', q.masked_vendor ? '＊＊＊'
@@ -1068,7 +1119,7 @@ function renderDetail(q) {
         // 申請內容與採購實際並列；採購沒改的欄位顯示「同申請」，一眼看得出買到的是不是他要的
         var bn = it.buy_item_name || '', bs = it.buy_spec_text || '';
         var bothSame = (!bn && !bs);
-        h += '<tr><td class="l">' + esc(it.item_name) + (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + '</td>' +
+        h += '<tr><td class="l">' + esc(it.item_name) + (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + itemTags(it) + '</td>' +
              '<td class="l">' + esc(it.spec_text || '') + '</td>' +
              '<td class="r">' + nz(it.qty_requested) + '</td><td>' + esc(it.unit_label || '') + '</td>' +
              '<td>' + esc(it.buy_spec_code || it.spec_code || '（未綁定）') + '</td>' +
@@ -1173,16 +1224,20 @@ $(document).on('click', '#dtPrint', function () {
         T('希望到貨日', esc(dotDate(q.need_date) || '—')) + '</tr>' +
         '<tr>' + T('申請人／部門', esc(q.requester_name || '') + '／' + esc(q.dept_name || '')) +
         T('用途', q.purpose_type ? (q.purpose_label && String(q.purpose_label).indexOf(ppTypeName(q.purpose_type)) === 0 ? esc(q.purpose_label) : esc(ppTypeName(q.purpose_type)) + (q.purpose_label ? '：' + esc(q.purpose_label) : '')) : '—') + '</tr>' +
-        '<tr>' + T('採購', esc(q.buyer_name || '—')) + T('廠商', q.masked_vendor ? '＊＊＊' : esc(q.vendor_name || '—')) + '</tr>' +
+        '<tr>' + T('採購', esc(q.buyer_name || '—')) + T('廠商', q.masked_vendor ? '＊＊＊' : esc(q.vendor_name || '—') + (q.designated_vendor_name ? '　（指定：' + esc(q.designated_vendor_name) + '）' : '')) + '</tr>' +
         (q.vehicle_mileage ? '<tr>' + T('里程數', esc(String(q.vehicle_mileage).replace(/\B(?=(\d{3})+(?!\d))/g, ',')) + ' 公里') +
             T('到貨日', esc(dotDate(q.vehicle_mileage_date))) + '</tr>' : '') +
         (q.reason ? '<tr>' + T('補充說明', esc(q.reason)).replace('<td>', '<td colspan="3">') + '</tr>' : '') + '</table>';
-    h += '<table class="d"><thead><tr><th>#</th><th>品名</th><th>規格</th><th>數量</th><th>單位</th>' +
+    var anyStock = (q.items || []).some(function (it) { return stockText(it) !== ''; });
+    h += '<table class="d"><thead><tr><th style="width:3%;">#</th><th>品名</th><th>規格</th>' + (anyStock ? '<th>庫存／儲位</th>' : '') +
+         '<th>數量</th><th>單位</th>' +
          (showAmt ? '<th>單價</th><th>小計</th>' : '') + '<th>到貨處理</th><th>已到貨</th><th>備註</th></tr></thead><tbody>';
     (q.items || []).forEach(function (it, i) {
         var nm = it.buy_item_name || it.item_name, sp = it.buy_spec_text || it.spec_text || '';
         var qty = (it.buy_qty === null || it.buy_qty === undefined || it.buy_qty === '') ? it.qty_requested : it.buy_qty;
-        h += '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(nm) + '</td><td class="l">' + esc(sp) + '</td><td class="r">' + nz(qty) +
+        h += '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(nm) + (it.designated_vendor_name ? '<br>（指定：' + esc(it.designated_vendor_name) + '）' : '') +
+             (parseInt(it.added_at_receive, 10) === 1 ? '<br>（到貨時新增）' : '') + '</td><td class="l">' + esc(sp) + '</td>' +
+             (anyStock ? '<td class="l">' + esc(stockText(it).replace(/^庫存 /, '')) + '</td>' : '') + '<td class="r">' + nz(qty) +
              '</td><td>' + esc(it.unit_label || '') + '</td>' +
              (showAmt ? '<td class="r">' + (it.unit_price === null ? '' : money(it.unit_price)) + '</td><td class="r">' + (it.amount === null ? '' : money(it.amount)) + '</td>' : '') +
              '<td>' + esc((META.receive_modes || {})[it.receive_mode] || '') + '</td><td class="r">' + nz(it.qty_received) +
@@ -1207,7 +1262,7 @@ $(document).on('click', '#dtPrint', function () {
         h += '</tbody></table>';
     }
     h += '<div class="foot">列印：' + esc($('#rWho').val() || '') + '　' + dotDate(META.today) + '</div>';
-    var css = '@page{size:A4 portrait;margin:12mm 12mm 18mm;' +
+    var css = '@page{size:A4 landscape;margin:12mm 12mm 18mm;' +
         (pm.doc_no ? '@bottom-right{content:"' + cssStr(pm.doc_no) + '";font-size:11px;color:#333;}' : '') + '}' +
         '*{box-sizing:border-box;}body{margin:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;font-size:12px;color:#222;}' +
         '.co{text-align:center;font-size:20px;font-weight:bold;}.ti{text-align:center;font-size:16px;margin:2px 0 10px;}' +
@@ -1217,7 +1272,7 @@ $(document).on('click', '#dtPrint', function () {
         'thead{display:table-header-group;}tr{page-break-inside:avoid;}.sec{font-weight:bold;margin:8px 0 3px;}.tot{text-align:right;margin:2px 0 8px;}' +
         '.foot{margin-top:10px;color:#666;font-size:11px;}';
     // 多頁才印頁碼：用列印寬度量高度（視窗寬度與列印寬度不同，量到的頁數會不準）
-    var js = 'window.onload=function(){document.body.style.width="186mm";var multi=document.body.scrollHeight>990;document.body.style.width="";' +
+    var js = 'window.onload=function(){document.body.style.width="273mm";var multi=document.body.scrollHeight>660;document.body.style.width="";' +
         'if(multi){var s=document.createElement("style");s.textContent="@page{@bottom-left{content:\\"第 \\" counter(page) \\" 頁／共 \\" counter(pages) \\" 頁\\";font-size:11px;color:#333;}}";document.head.appendChild(s);}' +
         'setTimeout(function(){window.print();},250);};';
     var doc = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(q.req_no + ' ' + title) + '</title><style>' + css + '</style></head><body>' + h +
@@ -1262,7 +1317,8 @@ function bindCell(it) {
 
 function openQuote() {
     var q = CUR;
-    $('#qVendor').val(q.vendor_name || '').data('vid', q.vendor_id || '');
+    // 申請人有指定廠商時，詢價預設帶那一家（採購仍可改）
+    $('#qVendor').val(q.vendor_name || q.designated_vendor_name || '').data('vid', q.vendor_id || q.designated_vendor_id || '');
     $('#qTax').val(q.tax_type || 'taxable');
     $('#qPayMethod').val(q.pay_method || ''); $('#qExpect').val(q.expected_date || '');
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
@@ -1271,7 +1327,7 @@ function openQuote() {
         // 左半＝申請人填的，唯讀；右半＝採購自己那一層，寫進 buy_* 欄位，不動申請內容
         h += '<tr data-id="' + it.pr_item_id + '" data-qty="' + it.qty_requested + '">' +
             '<td class="l">' + esc(it.item_name) +
-                (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + '</td>' +
+                (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + itemTags(it) + '</td>' +
             '<td class="l">' + esc(it.spec_text || '') + '</td>' +
             '<td class="r">' + nz(it.qty_requested) + '</td><td>' + esc(it.unit_label || '') + '</td>' +
             // 採購料號一律可點：沒綁的來綁，綁錯的可改綁或另建一支（申請人選的也可能買到別支）
@@ -1354,6 +1410,11 @@ function openRecv() {
     // 用途是公司車輛（單頭或任一品項）時，才出現里程數欄
     var isVeh = !!CUR.purpose_vehicle_id || CUR.items.some(function (it) { return !!it.purpose_vehicle_id; });
     $('#rcMileWrap').toggle(isVeh);
+    // 公司車輛／設備維修保養：到貨時可新增細項（做了什麼、換了什麼）
+    var pt0 = CUR.purpose_type || '';
+    var isMaint = pt0 === 'VEHICLE' || pt0 === 'EQUIP_MAINT' ||
+        CUR.items.some(function (it) { return it.purpose_type === 'VEHICLE' || it.purpose_type === 'EQUIP_MAINT'; });
+    $('#rcExtraBody').empty(); $('#rcExtraSec').toggle(isMaint);
     $('#rcMileage').val(CUR.vehicle_mileage || '');
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '';
@@ -1393,6 +1454,17 @@ function openRecv() {
     openMask('mRecv');
 }
 $(document).on('change', '.rc-mode', toggleRecvCols);
+function addExtraRow() {
+    $('#rcExtraBody').append('<tr><td><input type="text" class="x-name" style="width:100%;" autocomplete="off"></td>' +
+        '<td><input type="text" class="x-spec" style="width:100%;" autocomplete="off"></td>' +
+        '<td><input type="number" class="x-qty" step="0.01" value="1" style="width:100%;text-align:right;"></td>' +
+        '<td><input type="number" class="x-price" step="0.01" style="width:100%;text-align:right;"></td>' +
+        '<td><input type="text" class="x-remark" style="width:100%;" autocomplete="off"></td>' +
+        '<td><button class="pq-btn danger x-del" type="button" title="移除">✕</button></td></tr>');
+    $('#rcExtraBody tr:last .x-name').focus();
+}
+$(document).on('click', '#rcExtraAdd', addExtraRow);
+$(document).on('click', '.x-del', function () { $(this).closest('tr').remove(); });
 /* 登錄到貨時上傳進貨單（送貨單）：直接存成這張單的附件，類別＝進貨單，與申請時的附件放在一起 */
 function renderRcAtts() {
     var h = '';
@@ -1702,14 +1774,23 @@ function saveRecv() {
                      receiver_id: $t.find('.rc-recv').data('uid') || 0,
                      remark: $t.find('.rc-remark').val() || '' });
     });
+    var extras = [];
+    $('#rcExtraBody tr').each(function () {
+        var $t = $(this), nm = $.trim($t.find('.x-name').val() || '');
+        if (!nm) return;
+        var q = parseFloat($t.find('.x-qty').val() || 0);
+        if (!(q > 0)) { bad = '細項「' + nm + '」的數量要大於 0'; return; }
+        extras.push({ item_name: nm, spec_text: $t.find('.x-spec').val() || '', qty: q,
+                      unit_price: $t.find('.x-price').val() || '', remark: $t.find('.x-remark').val() || '' });
+    });
     if (bad) { alert(bad); return; }
-    if (!lines.length) { alert('請至少填一筆到貨數量'); return; }
+    if (!lines.length && !extras.length) { alert('請至少填一筆到貨數量，或新增一筆細項'); return; }
     $('#btnSaveRecv').prop('disabled', true);
     var vid = $('#rcVendor').data('vid') || '';
     if (!vid) { alert('請先綁定廠商：輸入廠商名稱或編號搜尋後，從清單點選'); $('#rcVendor').focus(); return; }
     var mil = $.trim($('#rcMileage').val() || '');
     if ($('#rcMileWrap').is(':visible') && mil !== '' && !/^\d{1,7}$/.test(mil)) { alert('里程數請填整數（公里），不確定可以留白'); return; }
-    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, vendor_id: vid, lines: JSON.stringify(lines) }, 'POST')
+    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, vendor_id: vid, extra_items: JSON.stringify(extras), lines: JSON.stringify(lines) }, 'POST')
     .done(function (r) {
         closeMask('mRecv'); reload(); loadBadges();
         alert(r.status === 'received' ? '已全數到貨' : '已登錄部分到貨');

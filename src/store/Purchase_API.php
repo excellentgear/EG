@@ -523,7 +523,11 @@ case 'spec_search': {
                         WHERE " . implode(' AND ', $where) . "
                         ORDER BY i.item_name, s.spec_code LIMIT 200");
     $st->execute($bind);
-    jout(['specs' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+    $specs = $st->fetchAll(PDO::FETCH_ASSOC);
+    $sm = purchase_spec_stock_map($db, array_column($specs, 'spec_id'));
+    foreach ($specs as &$sp) $sp['stock_locs'] = $sm[(int)$sp['spec_id']]['locs'] ?? '';
+    unset($sp);
+    jout(['specs' => $specs]);
 }
 
 /**
@@ -875,6 +879,13 @@ case 'req_detail': {
                         WHERE pi.req_id=? ORDER BY pi.sort_order, pi.pr_item_id");
     $st->execute([$reqId]);
     $req['items'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 品項有綁採購料號的，帶出庫存量與儲位（申請單上看得到就不必另外去查庫存）
+    $sm = purchase_spec_stock_map($db, array_map(fn($x) => (int)($x['buy_spec_id'] ?: $x['spec_id']), $req['items']));
+    foreach ($req['items'] as &$xi) {
+        $sk = (int)($xi['buy_spec_id'] ?: $xi['spec_id']);
+        if ($sk > 0) { $xi['stock_qty'] = (float)($sm[$sk]['qty'] ?? 0); $xi['stock_locs'] = (string)($sm[$sk]['locs'] ?? ''); }
+    }
+    unset($xi);
 
     $st = $db->prepare("SELECT rc.*, COALESCE(l.location_code,'') location_code, u.user_cname created_name
                         FROM purchase_receipt rc
@@ -963,6 +974,9 @@ case 'req_save': {
     }
     if (!$items) jerr('請至少填一筆品項');
 
+    // 指定廠商（整張單）：由主檔驗證並重建名稱；各品項另有指定的在逐列處理
+    try { $dvH = purchase_vendor_pick($db, pv('designated_vendor_id')); }
+    catch (RuntimeException $e) { jerr($e->getMessage()); }
     // 品項的用途留白＝沿用單頭；有填才逐列驗
     $itemPurposes = [];
     foreach ($items as $i => $it) {
@@ -1001,9 +1015,11 @@ case 'req_save': {
         }
         $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?, apply_date=?,
                       " . implode('=?, ', purchase_purpose_cols()) . "=?,
+                      designated_vendor_id=?, designated_vendor_name=?,
                       is_urgent=?, Modified_By=? WHERE req_id=?")
            ->execute([$title, pdate('need_date'), pv('reason') ?: null, $applyDate,
                       ...purchase_purpose_vals($pp),
+                      $dvH['id'] ?? null, $dvH['name'] ?? null,
                       $urgent, $uid, $reqId]);
         $db->prepare("DELETE FROM purchase_request_item WHERE req_id=? AND qty_received=0")->execute([$reqId]);
         $reqNo = $req['req_no'];
@@ -1011,19 +1027,20 @@ case 'req_save': {
         $reqNo = purchase_next_req_no($db);
         $db->prepare("INSERT INTO purchase_request (req_no, title, dept_id, dept_name, requester_id, requester_name,
                       need_date, reason, apply_date, " . implode(', ', purchase_purpose_cols()) . ",
-                      is_urgent, status, Created_By)
-                      VALUES (?,?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?, 'submitted', ?)")
+                      designated_vendor_id, designated_vendor_name, is_urgent, status, Created_By)
+                      VALUES (?,?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?,?,?, 'submitted', ?)")
            ->execute([$reqNo, $title, $u['dept_id'], $u['dept_name'], $uid, $uname,
                       pdate('need_date'), pv('reason') ?: null, $applyDate,
                       ...purchase_purpose_vals($pp),
+                      $dvH['id'] ?? null, $dvH['name'] ?? null,
                       $urgent, $uid]);
         $reqId = (int)$db->lastInsertId();
     }
 
     $ins = $db->prepare("INSERT INTO purchase_request_item (req_id, spec_id, item_name, spec_text, category_id,
                          unit_id, qty_requested, est_price, receive_mode, location_id, remark, is_urgent, sort_order,
-                         " . implode(', ', purchase_purpose_cols()) . ")
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?," . rtrim(str_repeat('?,', count(purchase_purpose_cols())), ',') . ")");
+                         " . implode(', ', purchase_purpose_cols()) . ", designated_vendor_id, designated_vendor_name)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?,?)");
     $sort = 0;
     foreach ($items as $i => $it) {
         $specId = (int)($it['spec_id'] ?? 0) ?: null;
@@ -1033,6 +1050,8 @@ case 'req_save': {
         $mode = (string)($it['receive_mode'] ?? 'stock');
         if (!in_array($mode, array_keys(PURCHASE_RECEIVE_MODES), true)) $mode = 'stock';
         $ip = $itemPurposes[$i] ?? null;   // null = 沿用單頭用途
+        try { $dvI = purchase_vendor_pick($db, (string)($it['designated_vendor_id'] ?? '')); }
+        catch (RuntimeException $e) { $db->rollBack(); jerr($name . '：' . $e->getMessage()); }
         $ins->execute([
             $reqId, $specId, $name, trim((string)($it['spec_text'] ?? '')) ?: null,
             (int)($it['category_id'] ?? 0) ?: null, (int)($it['unit_id'] ?? 0) ?: null,
@@ -1043,6 +1062,7 @@ case 'req_save': {
             // 急件可以只勾其中幾項；沒送逐列值時（舊版前端）沿用單頭
             isset($it['is_urgent']) ? ((int)$it['is_urgent'] ? 1 : 0) : $urgent, $sort++,
             ...purchase_purpose_vals($ip),
+            $dvI['id'] ?? null, $dvI['name'] ?? null,
         ]);
     }
     // 單頭急件旗標＝任一項急件（列表、通知都看這個），一律由品項回推才不會兩邊不一致
@@ -1234,7 +1254,19 @@ case 'receive': {
     $req = purchase_load_req($db, $reqId);
     if (!in_array($req['status'], ['approved', 'ordered', 'partial'], true)) jerr('此單尚未核准，不可收貨');
     $lines = pjson('lines');   // [{pr_item_id, qty, receive_mode, location_id, receiver_id, remark}]
-    if (!$lines) jerr('請至少填一筆到貨數量');
+    // 保養／維修的細項（到貨時才知道實際做了什麼、換了什麼）：[{item_name, spec_text, qty, unit_price, remark}]
+    $extras = [];
+    foreach (pjson('extra_items') as $x) {
+        $xn = trim((string)($x['item_name'] ?? ''));
+        if ($xn === '') continue;
+        $xq = (float)($x['qty'] ?? 0);
+        if (!($xq > 0)) jerr('細項「' . $xn . '」的數量要大於 0');
+        $xp = ($x['unit_price'] ?? '') === '' ? null : (float)$x['unit_price'];
+        if ($xp !== null && $xp < 0) jerr('細項「' . $xn . '」的單價不可為負');
+        $extras[] = ['name' => mb_substr($xn, 0, 120), 'spec' => mb_substr(trim((string)($x['spec_text'] ?? '')), 0, 150) ?: null,
+                     'qty' => $xq, 'price' => $xp, 'remark' => mb_substr(trim((string)($x['remark'] ?? '')), 0, 300) ?: null];
+    }
+    if (!$lines && !$extras) jerr('請至少填一筆到貨數量');
     $rcptDate = pdate('rcpt_date') ?: date('Y-m-d');
     // 進貨一定要綁定廠商 ID（應付對帳、付款沖帳都靠它歸戶，只存名稱字串日後對不起來）
     $vendIn = pv('vendor_id');
@@ -1325,7 +1357,40 @@ case 'receive': {
            ->execute([$qty, $mode, $locId, $stockItemId, (int)$item['pr_item_id']]);
         $done++;
     }
-    if (!$done) { $db->rollBack(); jerr('沒有有效的到貨數量'); }
+    $extraDone = 0;
+    if ($extras) {
+        // 只有用途是公司車輛／設備維修保養的單，才能在到貨時加細項
+        $isMaint = in_array((string)$req['purpose_type'], ['VEHICLE', 'EQUIP_MAINT'], true);
+        if (!$isMaint) {
+            $mq = $db->prepare("SELECT 1 FROM purchase_request_item WHERE req_id=? AND purpose_type IN ('VEHICLE','EQUIP_MAINT') LIMIT 1");
+            $mq->execute([$reqId]);
+            $isMaint = (bool)$mq->fetchColumn();
+        }
+        if (!$isMaint) { $db->rollBack(); jerr('只有公司車輛或設備維修保養的單，才能在到貨時新增細項'); }
+        $sortMax = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM purchase_request_item WHERE req_id=" . (int)$reqId)->fetchColumn();
+        $insX = $db->prepare("INSERT INTO purchase_request_item (req_id, item_name, spec_text, qty_requested, qty_received, unit_price, amount,
+                              receive_mode, remark, is_urgent, sort_order, added_at_receive)
+                              VALUES (?,?,?,?,?,?,?, 'service', ?, 0, ?, 1)");
+        foreach ($extras as $x) {
+            $insX->execute([$reqId, $x['name'], $x['spec'], $x['qty'], $x['qty'], $x['price'],
+                            $x['price'] === null ? null : round($x['qty'] * $x['price'], 2), $x['remark'], ++$sortMax]);
+            $newId = (int)$db->lastInsertId();
+            $insR->execute([$reqId, $newId, $rcptDate, $x['qty'], 'service', null, null, null, null, null, null, $x['remark'], $uid]);
+            $extraDone++;
+        }
+        // 金額重算；細項加總若讓金額超過原本核准的簽核層級，就不准直接進來（避免用細項繞過簽核）
+        $taxT = (string)($req['tax_type'] ?: 'taxable');
+        $tt = purchase_calc_totals($db, $reqId, $taxT);
+        [$l1, $l2] = purchase_thresholds($db);
+        $lvNew = purchase_need_levels($tt['grand_total'], $l1, $l2);
+        if ($lvNew > (int)$req['need_levels'] && !purchase_is_auto_purpose($db, $req, $reqId)) {
+            $db->rollBack();
+            jerr('細項加總後含稅 ' . number_format($tt['grand_total'], 2) . ' 元，超過這張單原本核准的簽核層級，請改走詢價與簽核');
+        }
+        $db->prepare("UPDATE purchase_request SET tax_type=?, subtotal=?, tax_amount=?, grand_total=? WHERE req_id=?")
+           ->execute([$taxT, $tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], $reqId]);
+    }
+    if (!$done && !$extraDone) { $db->rollBack(); jerr('沒有有效的到貨數量'); }
     $status = purchase_refresh_status($db, $reqId, $uid);
     $db->commit();
 

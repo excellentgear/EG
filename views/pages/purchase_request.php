@@ -399,6 +399,14 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             </div>
             <p class="hint" style="margin:4px 0 0;">選了訂單／BOM／料號，這筆花費才算得進該筆的成本；耗材、辦公用品請選「常備品補貨」。</p>
         </div>
+        <div class="pq-fld" style="margin-bottom:10px;"><label>指定廠商（選填）</label>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <input type="text" id="rDVendor" autocomplete="off" style="width:260px;" title="客戶或主管指定要向這家買時才填；輸入廠商名稱或編號，從清單點選">
+                <button class="pq-btn" id="rDVendorClr" type="button" title="清除指定廠商">清除</button>
+                <span class="hint">整張單都向這家買。個別品項要指定別家，在下面品項的「指定廠商」欄填。</span>
+            </div>
+            <div id="rDVendorList"></div>
+        </div>
         <div class="pq-grid">
             <div class="pq-fld"><label>申請日期 <span id="rBackTag" style="display:none;background:#F0A24B;color:#fff;border-radius:8px;padding:0 8px;font-size:11px;">補單</span></label>
                 <input type="date" id="rApply"><span class="hint" id="rApplyHint">補過去的單可改日期，早於今天會標示為補單</span></div>
@@ -590,6 +598,18 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <span class="hint" id="rcAttHint"></span>
             </div>
             <div id="rcAttList" style="margin-top:6px;"></div>
+        </div>
+        <div class="pq-sec" id="rcExtraSec" style="margin-top:8px;display:none;">
+            <h5>保養／維修細項（選填）</h5>
+            <p class="hint" style="margin:0 0 6px;">這次實際做了哪些項目、更換了什麼，逐項記下來日後才方便追查。有金額就填單價（未稅），會一起算進這張單的金額。</p>
+            <div class="pq-wrap">
+                <table class="pq-table">
+                    <thead><tr><th style="width:24%;">品名／項目</th><th style="width:18%;">規格</th><th style="width:8%;">數量</th>
+                        <th style="width:12%;">單價（未稅）</th><th>備註</th><th style="width:4%;"></th></tr></thead>
+                    <tbody id="rcExtraBody"></tbody>
+                </table>
+            </div>
+            <button class="pq-btn" id="rcExtraAdd" type="button" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增細項</button>
         </div>
         <p class="hint" style="margin-top:6px;">沒有採購料號的品項無法入庫：請按該列「綁定料號」，把它綁到既有採購料號、或當場建一支新的（或把該列改成「不列管」）。</p>
     </div>

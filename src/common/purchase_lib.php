@@ -285,9 +285,12 @@ function purchase_ensure_schema(PDO $db): void
     }
     foreach ([
         'purchase_request'      => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
-                                    'purpose_maint_id INT NULL', 'vehicle_mileage INT NULL', 'vehicle_mileage_date DATE NULL'],
+                                    'purpose_maint_id INT NULL', 'vehicle_mileage INT NULL', 'vehicle_mileage_date DATE NULL',
+                                    'designated_vendor_id VARCHAR(11) NULL', 'designated_vendor_name VARCHAR(120) NULL'],
         'purchase_request_item' => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
-                                    'purpose_maint_id INT NULL'],
+                                    'purpose_maint_id INT NULL', 'designated_vendor_id VARCHAR(11) NULL',
+                                    'designated_vendor_name VARCHAR(120) NULL',
+                                    "added_at_receive TINYINT NOT NULL DEFAULT 0 COMMENT '1=到貨時才新增的細項（保養／維修明細）'"],
     ] as $vt => $cols) {
         foreach ($cols as $def) {
             $cn = explode(' ', $def)[0];
@@ -514,6 +517,46 @@ function purchase_set_setting(PDO $db, string $key, string $val): void
     $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
     $st->execute([$key, $val]);
+}
+
+/** 指定廠商：只收主檔裡存在且沒停用的廠商，名稱一律由主檔重建（不採信前端送來的字串）。空字串回 null；查不到丟例外 */
+function purchase_vendor_pick(PDO $db, string $id): ?array
+{
+    $id = trim($id);
+    if ($id === '') return null;
+    $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list WHERE maker_id_no=? AND status <> 'X'");
+    $st->execute([$id]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) throw new RuntimeException('找不到指定的廠商（可能已停用），請重新搜尋並點選');
+    return ['id' => (string)$r['maker_id_no'], 'name' => (string)$r['maker_id']];
+}
+
+/** 採購料號（規格）的庫存與儲位：回 [spec_id => ['qty'=>合計, 'locs'=>'A-01×3、B-02×2']]。沒有庫存紀錄的規格不在回傳裡 */
+function purchase_spec_stock_map(PDO $db, array $specIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $specIds))));
+    if (!$ids) return [];
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT si.purchase_spec_id sid, si.qty, COALESCE(NULLIF(l.location_code,''), NULLIF(si.storage_location,'')) loc
+                        FROM stock_items si LEFT JOIN stock_locations l ON l.location_id = si.location_id
+                        WHERE si.is_active=1 AND si.purchase_spec_id IN ($ph)");
+    $st->execute($ids);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $k = (int)$r['sid'];
+        $q = (float)$r['qty'];
+        if (!isset($out[$k])) $out[$k] = ['qty' => 0.0, 'parts' => []];
+        $out[$k]['qty'] += $q;
+        if ($r['loc'] !== null && $r['loc'] !== '') {
+            $out[$k]['parts'][$r['loc']] = ($out[$k]['parts'][$r['loc']] ?? 0) + $q;
+        }
+    }
+    foreach ($out as $k => $v) {
+        $t = [];
+        foreach ($v['parts'] as $loc => $q) $t[] = $loc . '×' . rtrim(rtrim(number_format($q, 4, '.', ''), '0'), '.');
+        $out[$k] = ['qty' => $v['qty'], 'locs' => implode('、', $t)];
+    }
+    return $out;
 }
 
 /** 設定為「自動簽核」的用途類別代碼（管理員在採購設定勾選）。只回傳目前仍有效的類別 */
