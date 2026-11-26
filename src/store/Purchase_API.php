@@ -40,6 +40,33 @@ function pint($k, $d = 0) { $v = pv($k, ''); return $v === '' ? $d : (int)$v; }
 function pdate($k) { $v = pv($k, ''); return preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) ? $v : null; }
 function pjson($k) { $a = json_decode($_POST[$k] ?? '[]', true); return is_array($a) ? $a : []; }
 
+/** 沖回一筆到貨（庫存反向沖回、已到量扣回；到貨時才新增的細項一併拿掉）。失敗丟 Exception，呼叫端負責交易 */
+function purchase_receipt_reverse(PDO $db, array $rc, array $req, int $uid): void {
+    $qty = (float)$rc['qty'];
+    if ($rc['stock_item_id']) {
+        $sid = (int)$rc['stock_item_id'];
+        $locId = $rc['location_id'] !== null ? (int)$rc['location_id'] : null;
+        if ($rc['txn_out_id']) {   // 直接交付：先把出庫補回，再沖入庫（淨庫存不變）
+            purchase_write_txn($db, $sid, 'in', $qty, $locId, ['txn_date' => date('Y-m-d'), 'remark' => '撤銷到貨（沖回直接交付）' . $req['req_no']], $uid);
+        }
+        if ($rc['txn_in_id']) {
+            $q = $db->prepare("SELECT qty FROM stock_items WHERE stock_item_id=? FOR UPDATE");
+            $q->execute([$sid]);
+            if ((float)$q->fetchColumn() + 0.0001 < $qty) throw new Exception('這批貨已被領用或移出，庫存不足以沖回（現有庫存少於 ' . rtrim(rtrim(number_format($qty, 4, '.', ''), '0'), '.') . '），請先處理庫存');
+            purchase_write_txn($db, $sid, 'out', $qty, $locId, ['txn_date' => date('Y-m-d'), 'remark' => '撤銷到貨 ' . $req['req_no']], $uid);
+        }
+    }
+    $it = $db->prepare("SELECT added_at_receive FROM purchase_request_item WHERE pr_item_id=?");
+    $it->execute([(int)$rc['pr_item_id']]);
+    $added = (int)$it->fetchColumn();
+    $db->prepare("DELETE FROM purchase_receipt WHERE rcpt_id=?")->execute([(int)$rc['rcpt_id']]);
+    if ($added) {
+        $db->prepare("DELETE FROM purchase_request_item WHERE pr_item_id=? AND req_id=?")->execute([(int)$rc['pr_item_id'], (int)$rc['req_id']]);
+    } else {
+        $db->prepare("UPDATE purchase_request_item SET qty_received=GREATEST(0, qty_received-?) WHERE pr_item_id=?")->execute([$qty, (int)$rc['pr_item_id']]);
+    }
+}
+
 function purchase_load_req(PDO $db, int $reqId): array {
     $st = $db->prepare("SELECT * FROM purchase_request WHERE req_id=? AND is_active=1");
     $st->execute([$reqId]);
@@ -1302,7 +1329,9 @@ case 'receive': {
     if (!$perms['canReceive']) jerr('無到貨入庫權限', 403);
     $reqId = pint('req_id');
     $req = purchase_load_req($db, $reqId);
-    if (!in_array($req['status'], ['approved', 'ordered', 'partial'], true)) jerr('此單尚未核准，不可收貨');
+    $replaceKey = pv('replace_key');   // 修改進貨：同一批（登錄時間＋登錄人）先沖回再重寫，整個在同一個交易裡
+    if (!in_array($req['status'], $replaceKey !== '' ? ['approved', 'ordered', 'partial', 'received'] : ['approved', 'ordered', 'partial'], true)) jerr('此單尚未核准，不可收貨');
+    if ($replaceKey !== '' && purchase_acc_locked($db, $reqId)) jerr('這張單已進入對帳並鎖帳，不可修改進貨；請會計先解鎖該月對帳');
     $lines = pjson('lines');   // [{pr_item_id, qty, receive_mode, location_id, receiver_id, remark}]
     // 保養／維修的細項（到貨時才知道實際做了什麼、換了什麼）：[{item_name, spec_text, qty, unit_price, remark}]
     $extras = [];
@@ -1339,6 +1368,14 @@ case 'receive': {
     if ($mil !== '' && (!ctype_digit($mil) || (int)$mil > 9999999)) jerr('里程數請填 0～9999999 的整數（公里）');
 
     $db->beginTransaction();
+    if ($replaceKey !== '') {
+        $oldQ = $db->prepare("SELECT * FROM purchase_receipt WHERE req_id=? AND CONCAT(Created_At,'|',Created_By)=? ORDER BY rcpt_id DESC");
+        $oldQ->execute([$reqId, $replaceKey]);
+        $olds = $oldQ->fetchAll(PDO::FETCH_ASSOC);
+        if (!$olds) { $db->rollBack(); jerr('找不到要修改的進貨（可能已被修改或撤銷），請重新整理'); }
+        try { foreach ($olds as $o) purchase_receipt_reverse($db, $o, $req, $uid); }
+        catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    }
     // 同一張單可分多張進貨單、各自不同廠商：這次進貨的廠商記在每筆到貨上；單頭廠商只在還沒有時才補（不覆蓋詢價時定的廠商）
     $reqV = $req;
     if ($vendName !== null) {   // 名稱一律由主檔重建，不採信前端送來的字串
@@ -1467,7 +1504,7 @@ case 'receive': {
     }
     // 金額重算（細項、改單價、調整含稅總額任一發生）
     $finalIn = pv('grand_total_final');
-    if ($extras || $priceTouched || ($finalIn !== '' && is_numeric($finalIn))) {
+    if ($replaceKey !== '' || $extras || $priceTouched || ($finalIn !== '' && is_numeric($finalIn))) {
         $taxT = (string)($req['tax_type'] ?: 'taxable');
         if ($finalIn !== '' && is_numeric($finalIn)) {
             // 含稅總額人工調整：存「與系統算出的差額」，之後單價再變動仍保留這個差額
@@ -1541,29 +1578,7 @@ case 'receipt_cancel': {
     if (purchase_acc_locked($db, (int)$rc['req_id'])) jerr('這張單已進入對帳並鎖帳，不可撤銷到貨；請會計先解鎖該月對帳');
     $db->beginTransaction();
     try {
-        $qty = (float)$rc['qty'];
-        if ($rc['stock_item_id']) {
-            $sid = (int)$rc['stock_item_id'];
-            $locId = $rc['location_id'] !== null ? (int)$rc['location_id'] : null;
-            if ($rc['txn_out_id']) {   // 直接交付：先把出庫補回，再沖入庫（淨庫存不變）
-                purchase_write_txn($db, $sid, 'in', $qty, $locId, ['txn_date' => date('Y-m-d'), 'remark' => '撤銷到貨（沖回直接交付）' . $req['req_no']], $uid);
-            }
-            if ($rc['txn_in_id']) {
-                $q = $db->prepare("SELECT qty FROM stock_items WHERE stock_item_id=? FOR UPDATE");
-                $q->execute([$sid]);
-                if ((float)$q->fetchColumn() + 0.0001 < $qty) throw new Exception('這批貨已被領用或移出，庫存不足以沖回（現有庫存少於 ' . rtrim(rtrim(number_format($qty, 4, '.', ''), '0'), '.') . '），請先處理庫存');
-                purchase_write_txn($db, $sid, 'out', $qty, $locId, ['txn_date' => date('Y-m-d'), 'remark' => '撤銷到貨 ' . $req['req_no']], $uid);
-            }
-        }
-        $it = $db->prepare("SELECT added_at_receive FROM purchase_request_item WHERE pr_item_id=?");
-        $it->execute([(int)$rc['pr_item_id']]);
-        $added = (int)$it->fetchColumn();
-        $db->prepare("DELETE FROM purchase_receipt WHERE rcpt_id=?")->execute([$rcId]);
-        if ($added) {   // 到貨時才新增的細項：到貨撤銷就連細項一起拿掉
-            $db->prepare("DELETE FROM purchase_request_item WHERE pr_item_id=? AND req_id=?")->execute([(int)$rc['pr_item_id'], (int)$rc['req_id']]);
-        } else {
-            $db->prepare("UPDATE purchase_request_item SET qty_received=GREATEST(0, qty_received-?) WHERE pr_item_id=?")->execute([$qty, (int)$rc['pr_item_id']]);
-        }
+        purchase_receipt_reverse($db, $rc, $req, $uid);
         $tt = purchase_calc_totals($db, (int)$rc['req_id'], (string)($req['tax_type'] ?: 'taxable'));
         $db->prepare("UPDATE purchase_request SET subtotal=?, tax_amount=?, grand_total=? WHERE req_id=?")
            ->execute([$tt['subtotal'], $tt['tax_amount'], $tt['grand_total'], (int)$rc['req_id']]);

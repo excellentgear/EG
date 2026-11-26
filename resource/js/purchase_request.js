@@ -1179,7 +1179,7 @@ function renderDetail(q) {
         var canUndo = q.can.receive && !parseInt(q.acc_locked, 10);
         var svc = q.receipts.filter(function (rc) { return rc.receive_mode === 'service'; });
         var gen = q.receipts.filter(function (rc) { return rc.receive_mode !== 'service'; });
-        var undoBtn = function (rc) { return canUndo ? '<td><a href="javascript:;" class="rc-undo" data-id="' + rc.rcpt_id + '" style="color:#DD5138;">撤銷</a></td>' : ''; };
+        var undoBtn = function (rc) { return canUndo ? '<td style="white-space:nowrap;"><a href="javascript:;" class="rc-edit" data-key="' + esc(rc.Created_At + '|' + rc.Created_By) + '" style="color:#8A5A2B;">修改</a>　<a href="javascript:;" class="rc-undo" data-id="' + rc.rcpt_id + '" style="color:#DD5138;">撤銷</a></td>' : ''; };
         // 保養／維修（服務完成）：不是「收到貨」，記的是「哪台車／機台、哪天、做了什麼」＋下面的項目，所以合併成一張紀錄
         if (svc.length) {
             var tgt = q.purpose_label || '';
@@ -1375,6 +1375,7 @@ $(document).on('click', '.rc-undo', function () {
     if (!confirm('撤銷這筆到貨？\n庫存會沖回、已到數量扣回，之後可重新登錄。')) return;
     api('receipt_cancel', { rcpt_id: id }, 'POST').done(function () { openDetail(CUR.req_id); reload(); loadBadges(); }).fail(fail);
 });
+$(document).on('click', '.rc-edit', function () { var k = $(this).data('key'); closeMask('mDetail'); openRecv(k); });
 $(document).on('click', '#dtAmend', function () {
     var h = '';
     CUR.items.forEach(function (it) {
@@ -1570,17 +1571,22 @@ function syncRcVendor() {
     $('#rcVendorHint').text(ok ? '已綁定廠商編號 ' + $('#rcVendor').data('vid') : '輸入廠商名稱或編號，從清單點選後才算綁定')
         .css('color', ok ? '#4a7a2b' : '#DD5138');
 }
-function openRecv() {
+var RC_EDIT = null;   // 修改進貨：{key, rows:[該批 receipt]}
+function openRecv(editKey) {
+    RC_EDIT = null;
+    if (editKey) { var er = (CUR.receipts || []).filter(function (rc) { return (rc.Created_At + '|' + rc.Created_By) === editKey; }); if (er.length) RC_EDIT = { key: editKey, rows: er }; }
     // 廠商預設帶申請單的廠商（詢價定的；沒有就用指定廠商，再沒有就取品項上第一個指定廠商）；可改，同一張單可分多張進貨單各自不同廠商
     var dv = { id: CUR.vendor_id || CUR.designated_vendor_id || '', name: CUR.vendor_id ? CUR.vendor_name : CUR.designated_vendor_name };
     if (!dv.id) { CUR.items.some(function (it) { if (it.designated_vendor_id) { dv = { id: it.designated_vendor_id, name: it.designated_vendor_name }; return true; } return false; }); }
     $('#rcVendor').val(dv.id ? (dv.name || '') : '').data('vid', dv.id || ''); $('#rcVendorList').empty(); syncRcVendor();
-    $('#rcErp').val(''); syncRcErp();
+    $('#rcErp').val(RC_EDIT ? (RC_EDIT.rows[0].erp_rcpt_no || '') : ''); syncRcErp();
     $('#rcGrand').removeData('touched').val('');
     if (!$('#rcLocList').length) $('body').append('<datalist id="rcLocList"></datalist>');
     var locOpts = ''; (META.recv_locations || META.locations || []).forEach(function (l) { locOpts += '<option value="' + esc(l.location_code) + '">'; });
     $('#rcLocList').html(locOpts);
-    $('#rcDate').val(META.today);
+    $('#rcDate').val(RC_EDIT ? RC_EDIT.rows[0].rcpt_date : META.today);
+    if (RC_EDIT && RC_EDIT.rows[0].vendor_id) { $('#rcVendor').val(RC_EDIT.rows[0].vendor_name || '').data('vid', RC_EDIT.rows[0].vendor_id); syncRcVendor(); }
+    $('#recvEditNote').remove(); if (RC_EDIT) $('#mRecv .m-body').first().prepend('<div id="recvEditNote" class="hint" style="background:#FFF3D1;padding:6px 8px;margin-bottom:6px;color:#8A5A2B;">修改進貨：按「確認到貨」時，這一批原本的到貨會先沖回（庫存一併沖回），再依下面的內容重新登錄。</div>');
     // 用途是公司車輛（單頭或任一品項）時，才出現里程數欄
     var isVeh = !!CUR.purpose_vehicle_id || CUR.items.some(function (it) { return !!it.purpose_vehicle_id; });
     $('#rcMileWrap').toggle(isVeh);
@@ -1593,11 +1599,14 @@ function openRecv() {
     $('#rcMileage').val(CUR.vehicle_mileage || '');
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '';
+    var editRc = {};   // pr_item_id → 該批到貨
+    if (RC_EDIT) RC_EDIT.rows.forEach(function (rc) { editRc[rc.pr_item_id] = rc; });
     CUR.items.forEach(function (it) {
+        if (RC_EDIT && editRc[it.pr_item_id] && parseInt(it.added_at_receive, 10)) return;   // 這批到貨時才加的細項：改成下方「細項」列帶入
         // 到貨要對「採購實際」買的東西與數量；採購沒改才等於申請內容
         var target = (it.buy_qty === null || it.buy_qty === undefined || it.buy_qty === '')
             ? parseFloat(it.qty_requested) : parseFloat(it.buy_qty);
-        var left = target - parseFloat(it.qty_received);
+        var left = target - parseFloat(it.qty_received) + (editRc[it.pr_item_id] ? parseFloat(editRc[it.pr_item_id].qty) : 0);
         var boundSpec = it.buy_spec_id || it.spec_id;
         var shownName = it.buy_item_name || it.item_name;
         var shownSpec = it.buy_spec_text || it.spec_text || '';
@@ -1625,14 +1634,32 @@ function openRecv() {
             '<td><input type="text" class="rc-remark" style="width:100%;"></td></tr>';
     });
     $('#recvBody').html(h);
-    CUR.items.forEach(function (it, i) {
+    $('#recvBody tr').each(function () {
+        var $t = $(this), it = null;
+        CUR.items.forEach(function (x) { if (String(x.pr_item_id) === String($t.data('id'))) it = x; });
+        if (!it) return;
         // 用途是公司車輛／設備維修保養的品項，預設「服務完成」（買的是服務，沒有東西要入庫）；到貨時仍可改
         var pt = it.purpose_type || CUR.purpose_type || '';
         var m = it.receive_mode || 'stock';
         if (m === 'stock' && (pt === 'VEHICLE' || pt === 'EQUIP_MAINT')) m = 'service';
-        $('#recvBody tr').eq(i).find('.rc-mode').val(m);
+        var rc = editRc[it.pr_item_id];
+        if (rc) {   // 修改進貨：帶入這一批原本登錄的內容
+            m = rc.receive_mode; $t.find('.rc-qty').val(nz(rc.qty)).prop('disabled', false);
+            $t.find('.rc-loc').val(rc.location_code || ''); $t.find('.rc-remark').val(rc.remark || '');
+            if (rc.receiver_id) $t.data('recvId', rc.receiver_id);
+        }
+        $t.find('.rc-mode').val(m);
+    });
+    if (RC_EDIT) RC_EDIT.rows.forEach(function (rc) {   // 到貨時才加的細項 → 細項列
+        var it = null; CUR.items.forEach(function (x) { if (String(x.pr_item_id) === String(rc.pr_item_id)) it = x; });
+        if (!it || !parseInt(it.added_at_receive, 10)) return;
+        addExtraRow();
+        var $x = $('#rcExtraBody tr:last');
+        $x.find('.x-name').val(it.item_name); $x.find('.x-spec').val(it.spec_text || ''); $x.find('.x-qty').val(nz(rc.qty));
+        $x.find('.x-price').val(it.unit_price === null || it.unit_price === undefined ? '' : nz(it.unit_price)); $x.find('.x-remark').val(rc.remark || '');
     });
     toggleRecvCols(); updateRecvTotals();
+    if (RC_EDIT) restoreRecvPeople();
     $('#rcAttFile').val(''); $('#rcAttHint').text('選好檔案後按「上傳」；圖片／PDF／Office，單檔 20MB 內');
     renderRcAtts();
     openMask('mRecv');
@@ -1788,6 +1815,17 @@ $(document).on('change', '.rc-recv', function () {
     (RECV_PEOPLE || []).forEach(function (p) { if (p.dept_name === dn) h += '<option value="' + p.id + '">' + esc(p.name) + '</option>'; });
     $s.html(h).val('');
 });
+// 修改進貨：把原本選的交付對象（部門→人員）還原到下拉
+function restoreRecvPeople() {
+    loadRecvPeople(function () {
+        $('#recvBody tr').each(function () {
+            var $t = $(this), uid = $t.data('recvId'); if (!uid || $t.find('.rc-mode').val() !== 'direct') return;
+            var p = null; RECV_PEOPLE.forEach(function (x) { if (String(x.id) === String(uid)) p = x; });
+            if (!p) return;
+            var $s = $t.find('.rc-recv'); $s.html(recvDeptOpts()).val('d:' + p.dept_name).trigger('change'); $s.val(String(p.id));
+        });
+    });
+}
 /* ── 綁定採購料號（採購側）─────────────────────────────
    申請人手打的品名沒有採購料號，由採購在「詢價」或「登錄到貨」時決定它是哪一支。
    舊版只用 prompt 問類別就自動建品項＋自動配號，主檔於是長出一堆同名品項、
@@ -2067,12 +2105,12 @@ function saveRecv() {
         grandFinal = $('#rcGrand').val();
     }
     $('#btnSaveRecv').prop('disabled', true);
-    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, vendor_id: vid,
+    api('receive', { req_id: CUR.req_id, replace_key: RC_EDIT ? RC_EDIT.key : '', rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, vendor_id: vid,
                      erp_rcpt_no: $.trim($('#rcErp').val() || ''), grand_total_final: grandFinal,
                      extra_items: JSON.stringify(extras), lines: JSON.stringify(lines) }, 'POST')
     .done(function (r) {
         closeMask('mRecv'); reload(); loadBadges();
-        alert(r.status === 'received' ? '已全數到貨' : '已登錄部分到貨');
+        alert(RC_EDIT ? '已修改進貨' : (r.status === 'received' ? '已全數到貨' : '已登錄部分到貨'));
     }).fail(fail).always(function () { $('#btnSaveRecv').prop('disabled', false); });
 }
 
