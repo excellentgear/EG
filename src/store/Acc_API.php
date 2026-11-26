@@ -626,13 +626,23 @@ case 'erp_stmt_upload': {
     $token = bin2hex(random_bytes(10));
     $fname = acc_u8((string)$f['name']);
     $_SESSION['acc_erp_stmt'] = array_slice(($_SESSION['acc_erp_stmt'] ?? []) + [$token => [
-        'token' => $token, 'file_name' => $fname, 'entries' => $m['entries']]], -3, 3, true);
+        'token' => $token, 'file_name' => $fname, 'entries' => $m['entries'], 'their_total' => null]], -3, 3, true);
     $sumAmt = 0.0; foreach ($parsed['lines'] as $l) $sumAmt += $l['amount'];
+    $_SESSION['acc_erp_stmt'][$token]['their_total'] = ($parsed['total_declared'] !== null) ? (float)$parsed['total_declared'] : $sumAmt;
     acc_out(['token' => $token, 'file_name' => $fname, 'customer_id' => $parsed['customer_id'],
              'customer_name' => $parsed['customer_name'], 'range' => $parsed['range'],
              'line_cnt' => count($parsed['lines']), 'lines_amount' => $sumAmt,
              'declared_total' => $parsed['total_declared'],
              'entries' => $m['entries'], 'summary' => $m['summary'], 'is_numbers' => $m['is_numbers']]);
+}
+
+case 'erp_stmt_recon_link': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
+    $stash = $_SESSION['acc_erp_stmt'][(string)($_POST['token'] ?? '')] ?? null;
+    if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
+    $r = acc_erp_stmt_recon_target($db, $stash);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
 }
 
 case 'erp_stmt_apply': {
@@ -1455,15 +1465,20 @@ case 'sheet_load': {
 
     $canEdit = ($side === 'ap') ? (bool)$perms['canReconAp'] : (bool)$perms['canReconAr'];
     $sheet = acc_sheet_get($db, $side, $pid, $bm);
+    // 對帳區間：沒指定起訖日＝預設（本月份＋往前未對完的）；已鎖帳的底稿不再往前帶
+    $rgOpt = ['date_from' => trim((string)($s['date_from'] ?? '')),
+              'date_to'   => trim((string)($s['date_to']   ?? '')),
+              'with_prior' => !($sheet && ($sheet['status'] ?? '') === 'confirmed')];
 
     if ($sheet) {
         /* 底稿存起來之後，來源憑證還會變動——最常見的就是「把別的月份的單改成這個月」
            （交接日期前後的帳），改完若不告訴使用者，底稿永遠少那幾筆而且完全沒有徵兆。
            所以每次載入都跟來源即時對一次：missing＝來源有、底稿沒有；stale＝底稿有、來源已不屬於本月。
            兩者都只回報不自動改，因為底稿上的加總／拆分是人對出來的，不可以被自動覆蓋。 */
-        $missing = []; $stale = [];
+        $missing = []; $stale = []; $rangeOut = null;
         try {
-            $src  = acc_sheet_build($db, $side, $pid, $bm);
+            $src  = acc_sheet_build($db, $side, $pid, $bm, $rgOpt);
+            $rangeOut = $src['range'] ?? null;
             $have = [];
             foreach ($sheet['lines'] as $l) {
                 if (($l['src_type'] ?? '') !== 'SPLIT') $have[$l['src_type'] . '-' . (int)$l['src_id']] = true;
@@ -1490,9 +1505,9 @@ case 'sheet_load': {
                  'opt' => acc_recon_party_opt($db, $side, $pid),
                  'settlement' => acc_default_billing_month($db, $side, $pid),
                  'contact_hint' => acc_contact_hint_for($db, $side, $pid),
-                 'missing' => $missing, 'stale' => $stale]);
+                 'missing' => $missing, 'stale' => $stale, 'range' => $rangeOut]);
     }
-    $built = acc_sheet_build($db, $side, $pid, $bm);
+    $built = acc_sheet_build($db, $side, $pid, $bm, $rgOpt);
     $t = acc_sheet_totals($db, $built['lines']);
     acc_out(['from' => 'source',
              'sheet' => ['sheet_id' => null, 'side' => $side, 'party_id' => $pid,
@@ -1505,7 +1520,7 @@ case 'sheet_load': {
              'opt' => acc_recon_party_opt($db, $side, $pid),
              'settlement' => acc_default_billing_month($db, $side, $pid),
              'contact_hint' => acc_contact_hint_for($db, $side, $pid),
-             'missing' => [], 'stale' => []]);
+             'missing' => [], 'stale' => [], 'range' => $built['range'] ?? null]);
 }
 
 /* 暫存底稿 */

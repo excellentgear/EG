@@ -277,3 +277,38 @@ function acc_erp_stmt_apply(PDO $db, array $stash, array $isIds, string $userNam
     return ['success' => true, 'updated' => count($done), 'skipped' => $skip,
             'message' => '已更新 ' . count($done) . ' 筆' . ($skip ? '，略過 ' . count($skip) . ' 筆' : '')];
 }
+
+/**
+ * 把匯入的 ERP 對帳單帶到「對帳作業」：由對應到的出貨明細推出 客戶＋帳款月份（取筆數最多者，
+ * 帳款月份走與對帳作業完全相同的 acc_bm_for／billing_month_override），對方紙本合計＝ERP 檔的本期應收合計。
+ */
+function acc_erp_stmt_recon_target(PDO $db, array $stash): array
+{
+    $ids = [];
+    foreach ($stash['entries'] as $e) if (empty($e['kind']) || $e['kind'] !== 'return') if (!empty($e['is_id'])) $ids[(int)$e['is_id']] = 1;
+    if (!$ids) return ['success' => false, 'message' => '這份 ERP 對帳單沒有對應到任何網頁出貨明細，無法帶到對帳作業'];
+    $ids = array_keys($ids);
+    $global = acc_global_cutoff($db);
+    $cust = acc_customer_by_name($db);
+    $cnt = []; $names = [];
+    for ($o = 0; $o < count($ids); $o += 500) {
+        $part = array_slice($ids, $o, 500);
+        $ph = implode(',', array_fill(0, count($part), '?'));
+        $st = $db->prepare("SELECT Client_name, Order_date, billing_month_override FROM is_list WHERE IS_id IN ($ph)");
+        $st->execute($part);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $n = trim((string)$r['Client_name']);
+            if ($n === '') continue;
+            $bm = trim((string)$r['billing_month_override']);
+            if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_bm_for($db, (string)$r['Order_date'], $cust[$n] ?? null, $global);
+            $names[$n] = ($names[$n] ?? 0) + 1;
+            $cnt[$bm] = ($cnt[$bm] ?? 0) + 1;
+        }
+    }
+    if (!$names || !$cnt) return ['success' => false, 'message' => '查不到客戶或帳款月份'];
+    arsort($names); arsort($cnt);
+    $party = (string)array_key_first($names); $bm = (string)array_key_first($cnt);
+    return ['success' => true, 'side' => 'ar', 'party_id' => $party, 'bm' => $bm,
+            'their_total' => $stash['their_total'] ?? null,
+            'multi_month' => count($cnt) > 1, 'multi_party' => count($names) > 1];
+}

@@ -75,6 +75,10 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <div id="sumBox" style="display:none;">
       <div class="a-stat" id="sumStat"></div>
       <div id="sumWarn"></div>
+      <div class="a-bar" style="background:#fff7e8;">
+        <button id="btnToRecon" class="btn-warm"><i class="fa fa-balance-scale"></i> 帶到對帳作業核對</button>
+        <span style="color:#8a6d45;font-size:13px;">自動開啟這家客戶、這個帳款月份的對帳底稿，並把 ERP 對帳單的「本期應收合計」填入「對方紙本合計」，核對無誤再按「確認正確」。建議先把單價／數量差異更新完再帶過去。</span>
+      </div>
       <div class="a-bar" style="background:var(--a-bg2);">
         <label>狀態</label>
         <select id="fStatus">
@@ -117,6 +121,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <h5>狀態說明</h5>
     <b>一致</b>：不需處理。<b>單價不同</b>：料號與數量相同、單價不同，預設可勾選更新。<b>數量不同</b>：只有料號對得上，數量（與單價）都不同，請確認後再勾選。<b>網頁查無</b>：ERP 有、網頁找不到這張出貨單或料號，只提示，請到出貨單補登。<b>ERP 沒有</b>：網頁有、ERP 對帳單沒有，只提示。<b>已鎖定</b>：已有傳票，或發票已轉出／開立，不可修改。
     <h5>退貨單</h5>對帳單裡數量／金額為負、或單號 IR 開頭的明細視為退貨，會跟網頁退貨單（依單號＋料號＋數量）核對並標「退貨」。退貨單每天由 ERP 自動同步，所以這裡<b>只核對、不更新</b>；若顯示「網頁查無」，代表同步可能漏掉那筆退貨。
+    <h5>帶到對帳作業</h5>比對完（或更新完）按「帶到對帳作業核對」，會自動開啟該客戶、該帳款月份的對帳底稿，並把 ERP 檔的「本期應收合計」填入「對方紙本合計」，差額一目了然；核對無誤再按「確認正確」鎖帳。對帳底稿的帳款月份依客戶結帳日自動判定。
     <h5>注意</h5>更新只改出貨明細的數量與單價；若該筆還在「草稿發票」中，草稿發票的金額會同步更新。每次更新都會留下紀錄（舊值→新值）。
     <h5>權限</h5>檢閱可上傳比對（不需寫入），更新需「會計登錄」以上。
   </div>
@@ -224,6 +229,17 @@ function upd(){
   $('#btnApply').prop('disabled', n===0);
 }
 $('#fStatus,#fKw').on('input change',render);
+$('#btnToRecon').on('click',function(){
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=erp_stmt_recon_link',{token:TOKEN},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok){ toast(esc(r.error||'無法帶入'), true); return; }
+    if((r.multi_party||r.multi_month) && !confirm('這份對帳單涵蓋'+(r.multi_party?'多個客戶名稱':'')+(r.multi_party&&r.multi_month?'、':'')+(r.multi_month?'多個帳款月份':'')
+      +'，將以筆數最多的「'+r.party_id+'／'+r.bm+'」開啟。繼續？')) return;
+    window.open('reconcile.php?side=ar&party_id='+encodeURIComponent(r.party_id)+'&bm='+encodeURIComponent(r.bm)
+      +(r.their_total==null?'':'&their='+encodeURIComponent(r.their_total)),'_blank');
+  },'json').fail(function(x){ $b.prop('disabled',false); var m='無法帶入'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+});
 $(document).on('change','.ck',function(){
   var i=$(this).closest('tr').data('i');
   if(this.checked) SEL[i]=1; else delete SEL[i];

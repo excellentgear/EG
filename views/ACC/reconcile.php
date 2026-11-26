@@ -53,13 +53,15 @@ $bmDefault  = ['ar' => acc_default_billing_month($db, 'ar'),
 
 /* 由對帳單總覽（recon_overview.php）帶參數直接開某一份：
    ?side=ap&party_id=RZ002A&bm=2026-05。沒帶參數就照原本的下拉流程走。 */
-$deep = ['side' => '', 'party_id' => '', 'bm' => ''];
+$deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => ''];
 if (isset($_GET['side']) || isset($_GET['party_id']) || isset($_GET['bm'])) {
     $deep['side']     = (($_GET['side'] ?? '') === 'ap') ? 'ap' : 'ar';
     $deep['party_id'] = trim((string)($_GET['party_id'] ?? ''));
     $bm = trim((string)($_GET['bm'] ?? ''));
     $deep['bm'] = preg_match('/^\d{4}-\d{2}$/', $bm) ? $bm : '';
-    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => ''];
+    $th = trim((string)($_GET['their'] ?? ''));
+    $deep['their'] = is_numeric($th) ? $th : '';   // 由 ERP 對帳單匯入帶來的「對方紙本合計」
+    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => '', 'their' => ''];
 }
 ?>
 <!DOCTYPE html>
@@ -174,6 +176,15 @@ table.a-t tbody tr.dragging{opacity:.4;}
 .dock{position:fixed;left:0;right:0;bottom:0;z-index:900;background:var(--a-brand);color:#fff;
   padding:9px 18px;display:none;align-items:center;gap:16px;box-shadow:0 -2px 10px rgba(0,0,0,.22);}
 .dock b{font-size:17px;}
+.dock{flex-wrap:wrap;}
+.rg-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 8px;padding:8px 12px;border:1px solid #E4D3BC;
+  background:#FFF3DF;border-radius:6px;font-size:13px;color:#5b3a12;}
+.rg-bar input[type=date]{height:30px;padding:0 6px;border:1px solid #C9A56B;border-radius:4px;}
+.rg-bar .rg-in{white-space:nowrap;}
+body.has-dock .right_col{padding-bottom:120px !important;}
+.doc-all{display:inline-block;margin-left:4px;padding:0 4px;font-size:10px;line-height:15px;border:1px solid #C9A56B;
+  border-radius:3px;color:#7A4A12;background:#FBEBD0;cursor:pointer;user-select:none;}
+.doc-all:hover{background:#F0A24B;color:#fff;}
 .dock .sp{margin-left:auto;display:flex;gap:7px;}
 .dock button{height:33px;padding:0 15px;border-radius:5px;border:1px solid #fff;
   background:transparent;color:#fff;font-size:13.5px;cursor:pointer;}
@@ -426,6 +437,14 @@ table.ot tr.lock{color:#a08a6a;}
     </div>
 
     <div id="sheetBox" style="display:none;">
+      <div id="rangeBar" class="rg-bar" style="display:none;">
+        <span id="rgInfo"></span>
+        <span class="rg-in">起 <input type="date" id="rgFrom" title="空白＝不限（往前最多帶 6 個帳款月份；起始日更早會自動往前延伸）"></span>
+        <span class="rg-in">迄 <input type="date" id="rgTo"></span>
+        <button class="btn-mini" id="btnRgApply"><i class="fa fa-refresh"></i> 依此區間重新帶入</button>
+        <button class="btn-mini" id="btnRgReset">還原預設</button>
+        <span class="a-hint" id="rgHint" style="flex-basis:100%;"></span>
+      </div>
       <div id="contactHint" style="display:none;margin:0 0 8px;padding:8px 12px;border:1px solid #E4D3BC;background:#FFF8EC;border-radius:6px;font-size:12px;color:#5b3a12;line-height:1.7;"></div>
       <div class="a-stat">
         <div><span class="st-pill" id="stStatus">—</span></div>
@@ -514,6 +533,7 @@ table.ot tr.lock{color:#a08a6a;}
 <div class="dock" id="dock">
   <span>已對到 <b id="dkChecked">0</b> / <span id="dkLines">0</span> 列</span>
   <span>我方 <b id="dkOur">0</b></span>
+  <span title="只計已勾選（已對到）的列">已勾選：未稅 <b id="dkSelNet">0</b>　稅金 <b id="dkSelTax">0</b>　含稅 <b id="dkSelTotal">0</b></span>
   <span id="dkDiff"></span>
   <span class="sp">
     <button id="btnSave" class="go"><i class="fa fa-save"></i> 暫存進度</button>
@@ -1098,12 +1118,51 @@ function renderContactHint(h){
   $b.html(t).show();
 }
 
-function loadSheet(){
+var RANGE=null;
+function renderRange(){
+  var $b=$('#rangeBar');
+  if(!RANGE || !sheet){ $b.hide(); return; }
+  var locked=(sheet.status==='confirmed');
+  var info='<b>結帳日：'+esc(RANGE.cut_label||'')+'</b>　本次預設截止 <b>'+esc(dispDate(RANGE.default_to))+'</b>'
+    +(RANGE.exception_date?'（此月有臨時結帳日）':'')
+    +'　對帳區間：';
+  $('#rgInfo').html(info);
+  $('#rgFrom').val(RANGE.from||'').prop('disabled',locked);
+  $('#rgTo').val(RANGE.to||RANGE.default_to||'').prop('disabled',locked);
+  $('#btnRgApply,#btnRgReset').prop('disabled',locked);
+  var hint='預設會自動帶入本月以及<b>往前尚未對完（未被其他對帳單或發票佔用）</b>的單據，避免遺漏；'
+    +'要縮小範圍可調整「迄」，要限制更早的單據可填「起」。'
+    +(RANGE.prior_count!==undefined?'　本次往前多帶入 <b>'+RANGE.prior_count+'</b> 筆（回溯 '+RANGE.prior_months+' 個帳款月份）。':'')
+    +(locked?'　（已鎖帳，不可調整）':'');
+  $('#rgHint').html(hint);
+  $b.show();
+}
+var sheetEdited=false;   // 使用者在底稿上動過東西（勾選／金額／拆分…）；區間自動重載時才需要先問
+$(document).on('input change click','#sheetBox',function(e){ if(!$(e.target).closest('#rangeBar').length) sheetEdited=true; });
+function rgReload(reset,auto){
+  if(!sheet || sheet.status==='confirmed') return;
+  var f=reset?'':$('#rgFrom').val(), t=reset?'':$('#rgTo').val();
+  if(!reset && t===RANGE.default_to) t='';         // 迄＝預設截止日視同沒指定
+  if(f && t && f>t){ toast('起始日不可晚於截止日', true); return; }
+  if((!auto || sheetEdited) && !confirm('依新的對帳區間重新帶入？\n尚未按「暫存進度」的修改會先被捨棄；已暫存的底稿會以「提醒」方式列出要加入或移除的單據。')) {
+    if(auto) renderRange();      // 取消＝把日期欄位還原成目前實際生效的區間
+    return;
+  }
+  loadSheet({rg:{date_from:f, date_to:t}});
+}
+$(document).on('click','#btnRgApply',function(){ rgReload(false); });
+$(document).on('click','#btnRgReset',function(){ rgReload(true); });
+// 選好起／迄日就自動重新帶入，不必再按按鈕；底稿上有未暫存的修改時才先問一次
+$(document).on('change','#rgFrom,#rgTo',function(){ rgReload(false,true); });
+
+function loadSheet(o){
   var bm=$('#bm').val(), pid=$('#partySel').val();
   if(!bm || !pid){ toast('請選擇帳款月份與對象', true); return; }
-  $.post(API+'?action=sheet_load',{side:SIDE, party_id:pid, billing_month:bm},function(r){
+  var rg=(o && o.rg) ? o.rg : {};
+  $.post(API+'?action=sheet_load',$.extend({side:SIDE, party_id:pid, billing_month:bm}, rg),function(r){
     if(!r.ok){ toast(esc(r.error||'載入失敗'), true); return; }
     sheet = r.sheet; canEdit = !!r.can_edit;
+    sheetEdited = false;
     keySeq = 0;
     // 統一成前端用的 key 模型：client_key / split_parent_key
     var idMap = {};
@@ -1123,10 +1182,13 @@ function loadSheet(){
          .forEach(function(l){ if(l.checked) l.check_seq = ++checkSeq; });
     closeRef();
     $('#theirTotal').val(sheet.their_total===null||sheet.their_total===undefined ? '' : sheet.their_total);
+    // 由 ERP 對帳單匯入帶來的紙本合計：只在還沒鎖帳、也還沒填過時帶入（不覆蓋人填的）
+    if(DEEP.their!=='' && DEEP.their!=null && $('#theirTotal').val()==='' && sheet.status!=='confirmed') $('#theirTotal').val(DEEP.their);
     $('#emptyBox').hide(); $('#sheetBox').show();
     $('#btnReopen').toggle(P.canAdmin && sheet.status==='confirmed');
     render();
     renderSync(r.missing||[], r.stale||[]);
+    RANGE = r.range || null; renderRange();
     renderContactHint(r.contact_hint);
     toast(r.from==='draft'
       ? '已接續上次暫存的進度（'+esc(sheet.party_name)+' '+esc(sheet.billing_month)+'）'
@@ -1170,7 +1232,8 @@ function render(){
     h+='<tr data-i="'+i+'" class="'+cls.join(' ')+'"'+(canDrag?' draggable="true"':'')+'>'
       +'<td>'+(canDrag?'<span class="drag-h"><i class="fa fa-bars"></i></span>':'')+'</td>'
       +'<td>'+(l.checked?'<i class="fa fa-check" style="color:#5C7A2E;"></i>':'')+'</td>'
-      +'<td class="l">'+esc(l.doc_no||'')+'</td>'
+      +'<td class="l">'+esc(l.doc_no||'')
+        +(editable && l.doc_no && !isChild ? '<span class="doc-all" data-doc="'+esc(l.doc_no)+'" title="一次勾選／取消同一張單號的所有列">全單</span>' : '')+'</td>'
       +'<td>'+esc(dispDate(l.doc_date))+'</td>'
       +'<td>'+kindPill(l)+'</td>'
       +(SIDE==='ap'?'<td>'+esc(l.bom||'')+'</td>':'')
@@ -1323,6 +1386,11 @@ function updateStat(){
 
   $('#dkChecked').text(nf(t.checked)); $('#dkLines').text(nf(t.count));
   $('#dkOur').text(nf(t.net));
+  var pkS=parentKeys(), sNet=0;
+  lines.forEach(function(l){ if(l.checked && !pkS[l.client_key]) sNet+=amtOf(l); });
+  var sTax=Math.round(sNet*TAX_RATE);
+  $('#dkSelNet').text(nf(sNet)); $('#dkSelTax').text(nf(sTax)); $('#dkSelTotal').text(nf(sNet+sTax));
+  $('body').addClass('has-dock');
   $('#dkDiff').html(diff===null?'' : (Math.abs(diff)<0.01
       ? '<b style="color:#CFE8A8;">✓ 與對方紙本相符</b>'
       : '差額 <b style="color:#FFD9CF;">'+nf(diff)+'</b>'));
@@ -1346,7 +1414,7 @@ $('#theirTotal').on('input', updateStat);
 
 /* ══ 點列勾選（已對到→暖淺綠）══ */
 $(document).on('click','#tbody td',function(e){
-  if($(e.target).is('input,button,.drag-h,i')) return;
+  if($(e.target).is('input,button,.drag-h,i,.doc-all')) return;
   var $tr=$(this).closest('tr'), i=parseInt($tr.data('i'),10);
   selIdx=i;
   var l=lines[i];
@@ -1358,6 +1426,20 @@ $(document).on('click','#tbody td',function(e){
   render();
   // 拖移關閉時，點列同時把這一列的報價／訂單對照叫出來（使用者要求）
   if(!dragOn) openRef(l);
+});
+/* 一次勾選／取消同一張出貨單號的所有列（全部已勾→全取消，否則補勾） */
+$(document).on('click','#tbody .doc-all',function(e){
+  e.stopPropagation();
+  if(!canEdit || sheet.status==='confirmed') return;
+  var no=String($(this).data('doc')), pk=parentKeys();
+  var same=lines.filter(function(l){ return String(l.doc_no||'')===no && !pk[l.client_key]; });
+  var allOn=same.length && same.every(function(l){ return l.checked; });
+  same.forEach(function(l){
+    if(allOn){ l.checked=0; l.check_seq=0; }
+    else if(!l.checked){ l.checked=1; l.check_seq=++checkSeq; }
+  });
+  applyAutoOrder(); render();
+  toast((allOn?'已取消':'已勾選')+'單號 '+no+' 共 '+same.length+' 列');
 });
 $('#btnCheckAll').on('click',function(){
   orderedTops().forEach(function(l){ if(!l.checked){ l.checked=1; l.check_seq=++checkSeq; } });
@@ -1704,7 +1786,7 @@ function renderSync(missing, stale){
   if(syncMissing.length){
     var sum=0; syncMissing.forEach(function(l){ sum+=Number(l.orig_amount)||0; });
     h+='<div class="warn" style="display:flex;align-items:center;gap:10px;">'
-      +'<span>有 <b>'+syncMissing.length+'</b> 筆本月份的單據不在這份底稿裡（合計 '+nf(sum)
+      +'<span>有 <b>'+syncMissing.length+'</b> 筆符合對帳區間（本月份或往前未對完）的單據不在這份底稿裡（合計 '+nf(sum)
       +'）——通常是暫存之後才把它們改成本月份，或又有新的出貨。</span>'
       +'<button class="btn-mini" id="btnAddMissing" style="margin-left:auto;">加入這 '+syncMissing.length+' 筆</button>'
       +'<button class="btn-mini" id="btnShowMissing">看看是哪幾筆</button></div>';
