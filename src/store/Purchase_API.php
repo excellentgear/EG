@@ -1236,11 +1236,25 @@ case 'receive': {
     $lines = pjson('lines');   // [{pr_item_id, qty, receive_mode, location_id, receiver_id, remark}]
     if (!$lines) jerr('請至少填一筆到貨數量');
     $rcptDate = pdate('rcpt_date') ?: date('Y-m-d');
+    // 進貨一定要綁定廠商 ID（應付對帳、付款沖帳都靠它歸戶，只存名稱字串日後對不起來）
+    $vendIn = pv('vendor_id');
+    $vendName = null;
+    if ($vendIn !== '') {
+        $vq = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=? AND status <> 'X'");
+        $vq->execute([$vendIn]);
+        $vendName = $vq->fetchColumn();
+        if ($vendName === false) jerr('找不到該廠商（可能已停用），請重新搜尋並點選');
+    } elseif (trim((string)$req['vendor_id']) === '') {
+        jerr('請先綁定廠商：輸入廠商名稱或編號搜尋後，從清單點選');
+    }
     // 車輛保養的里程數（非必填，方便日後查紀錄）；單頭或任一品項用途是車輛才記
     $mil = pv('vehicle_mileage');
     if ($mil !== '' && (!ctype_digit($mil) || (int)$mil > 9999999)) jerr('里程數請填 0～9999999 的整數（公里）');
 
     $db->beginTransaction();
+    if ($vendName !== null) {   // 名稱一律由主檔重建，不採信前端送來的字串
+        $db->prepare("UPDATE purchase_request SET vendor_id=?, vendor_name=? WHERE req_id=?")->execute([$vendIn, $vendName, $reqId]);
+    }
     if ($mil !== '') {
         $isVeh = !empty($req['purpose_vehicle_id']);
         if (!$isVeh) {
@@ -1327,11 +1341,18 @@ case 'save_account': {
     $reqId = pint('req_id');
     $req = purchase_load_req($db, $reqId);
     $payStatus = in_array(pv('pay_status', 'unpaid'), ['unpaid', 'paid'], true) ? pv('pay_status', 'unpaid') : 'unpaid';
+    // 發票號碼：一律轉大寫、去空白；格式＝2 碼英文＋8 碼數字（例 AB12345678），空白代表還沒有發票
+    $inv = strtoupper(preg_replace('/\s+/u', '', pv('invoice_no')));
+    if ($inv !== '' && !preg_match('/^[A-Z]{2}\d{8}$/', $inv)) jerr('發票號碼格式不正確：要是 2 碼英文加 8 碼數字，例如 AB12345678');
+    $invDate = pdate('invoice_date');
+    if ($inv !== '' && !$invDate) jerr('有發票號碼時請一併填發票日期（帳款月份要依發票日期判定）');
     $db->beginTransaction();
-    $db->prepare("UPDATE purchase_request SET invoice_no=?, invoice_date=?, pay_status=?, pay_date=?, pay_method=?, Modified_By=? WHERE req_id=?")
-       ->execute([pv('invoice_no') ?: null, pdate('invoice_date'), $payStatus,
-                  $payStatus === 'paid' ? (pdate('pay_date') ?: date('Y-m-d')) : null,
-                  pv('pay_method') ?: null, $uid, $reqId]);
+    // 付款日／付款方式不在這一頁維護：沒送就保留原值；改成已付而還沒有付款日時才補今天（資料庫日期）
+    $db->prepare("UPDATE purchase_request SET invoice_no=?, invoice_date=?, pay_status=?,
+                  pay_date=CASE WHEN ?='paid' THEN COALESCE(pay_date, CURDATE()) ELSE NULL END,
+                  pay_method=" . (isset($_POST['pay_method']) ? '?' : 'pay_method') . ", Modified_By=? WHERE req_id=?")
+       ->execute(array_merge([$inv ?: null, $invDate, $payStatus, $payStatus],
+                             isset($_POST['pay_method']) ? [pv('pay_method') ?: null] : [], [$uid, $reqId]));
     $db->commit();
     jout([]);
 }

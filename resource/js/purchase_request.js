@@ -274,6 +274,10 @@ function bindAll() {
     bindSearch('#qVendor', '#qVendorList', 'search_vendor', function (v) { return v.maker_id + '（' + v.maker_id_no + '）'; },
         function (v) { $('#qVendor').val(v.maker_id).data('vid', v.maker_id_no);
                        if (v.payment_method && !$('#qPayMethod').val()) $('#qPayMethod').val(v.payment_method); });
+    // 到貨：廠商一定要綁定（ID 或名稱模糊搜尋、點選才算）；手動改字就解除綁定，免得畫面寫 A 實際綁著 B
+    bindSearch('#rcVendor', '#rcVendorList', 'search_vendor', function (v) { return v.maker_id + '（' + v.maker_id_no + '）'; },
+        function (v) { $('#rcVendor').val(v.maker_id).data('vid', v.maker_id_no); syncRcVendor(); });
+    $(document).on('input', '#rcVendor', function () { $(this).data('vid', ''); syncRcVendor(); });
     bindSearch('#itVendor', '#itVendorList', 'search_vendor', function (v) { return v.maker_id + '（' + v.maker_id_no + '）'; },
         function (v) { $('#itVendor').val(v.maker_id).data('vid', v.maker_id_no); });
     // 品名打字即時防重複
@@ -1333,7 +1337,13 @@ function saveQuote() {
 }
 
 /* ── 到貨 ─────────────────────────────────── */
+function syncRcVendor() {
+    var ok = !!$('#rcVendor').data('vid');
+    $('#rcVendorHint').text(ok ? '已綁定廠商編號 ' + $('#rcVendor').data('vid') : '輸入廠商名稱或編號，從清單點選後才算綁定')
+        .css('color', ok ? '#4a7a2b' : '#DD5138');
+}
 function openRecv() {
+    $('#rcVendor').val(CUR.vendor_id ? (CUR.vendor_name || '') : '').data('vid', CUR.vendor_id || ''); $('#rcVendorList').empty(); syncRcVendor();
     $('#rcDate').val(META.today);
     // 用途是公司車輛（單頭或任一品項）時，才出現里程數欄
     var isVeh = !!CUR.purpose_vehicle_id || CUR.items.some(function (it) { return !!it.purpose_vehicle_id; });
@@ -1689,9 +1699,11 @@ function saveRecv() {
     if (bad) { alert(bad); return; }
     if (!lines.length) { alert('請至少填一筆到貨數量'); return; }
     $('#btnSaveRecv').prop('disabled', true);
+    var vid = $('#rcVendor').data('vid') || '';
+    if (!vid) { alert('請先綁定廠商：輸入廠商名稱或編號搜尋後，從清單點選'); $('#rcVendor').focus(); return; }
     var mil = $.trim($('#rcMileage').val() || '');
     if ($('#rcMileWrap').is(':visible') && mil !== '' && !/^\d{1,7}$/.test(mil)) { alert('里程數請填整數（公里），不確定可以留白'); return; }
-    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, lines: JSON.stringify(lines) }, 'POST')
+    api('receive', { req_id: CUR.req_id, rcpt_date: $('#rcDate').val(), vehicle_mileage: mil, vendor_id: vid, lines: JSON.stringify(lines) }, 'POST')
     .done(function (r) {
         closeMask('mRecv'); reload(); loadBadges();
         alert(r.status === 'received' ? '已全數到貨' : '已登錄部分到貨');
@@ -1701,13 +1713,24 @@ function saveRecv() {
 /* ── 記帳 / 簽核 ──────────────────────────── */
 function openAcct() {
     $('#aInvNo').val(CUR.invoice_no || ''); $('#aInvDate').val(CUR.invoice_date || '');
-    $('#aPayStatus').val(CUR.pay_status || 'unpaid'); $('#aPayDate').val(CUR.pay_date || '');
-    $('#aPayMethod').val(CUR.pay_method || '');
+    $('#aPayStatus').val(CUR.pay_status || 'unpaid'); checkInvNo();
     openMask('mAcct');
 }
+/** 發票號碼：輸入當下轉大寫、去空白並即時檢查格式（2 碼英文＋8 碼數字） */
+function normInvNo() { return String($('#aInvNo').val() || '').toUpperCase().replace(/\s+/g, ''); }
+function checkInvNo() {
+    var v = normInvNo(); $('#aInvNo').val(v);
+    var bad = v !== '' && !/^[A-Z]{2}\d{8}$/.test(v);
+    $('#aInvErr').text(bad ? '格式不正確：要是 2 碼英文加 8 碼數字，例如 AB12345678' : '').css('color', '#DD5138');
+    $('#aInvNo').css('border-color', bad ? '#DD5138' : '');
+    return !bad;
+}
+$(document).on('input', '#aInvNo', checkInvNo);
 function saveAcct() {
-    api('save_account', { req_id: CUR.req_id, invoice_no: $('#aInvNo').val(), invoice_date: $('#aInvDate').val(),
-        pay_status: $('#aPayStatus').val(), pay_date: $('#aPayDate').val(), pay_method: $('#aPayMethod').val() }, 'POST')
+    if (!checkInvNo()) { $('#aInvNo').focus(); return; }
+    if (normInvNo() !== '' && !$('#aInvDate').val()) { alert('有發票號碼時請一併填發票日期（帳款月份要依發票日期判定）'); $('#aInvDate').focus(); return; }
+    api('save_account', { req_id: CUR.req_id, invoice_no: normInvNo(), invoice_date: $('#aInvDate').val(),
+        pay_status: $('#aPayStatus').val() }, 'POST')
     .done(function () { closeMask('mAcct'); reload(); loadBadges(); }).fail(fail);
 }
 function openSign() {

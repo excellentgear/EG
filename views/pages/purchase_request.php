@@ -569,6 +569,10 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div class="m-head"><span>登錄到貨</span><span class="m-close" onclick="closeMask('mRecv')">✕</span></div>
     <div class="m-body">
         <div class="pq-grid"><div class="pq-fld"><label>到貨日期</label><input type="date" id="rcDate"></div>
+            <div class="pq-fld"><label>廠商 <span style="color:#DD5138;">*</span></label>
+                <input type="text" id="rcVendor" autocomplete="off">
+                <div id="rcVendorList"></div>
+                <span class="hint" id="rcVendorHint">輸入廠商名稱或編號，從清單點選後才算綁定</span></div>
             <div class="pq-fld" id="rcMileWrap" style="display:none;"><label>里程數（公里，選填）</label>
                 <input type="text" id="rcMileage" inputmode="numeric" data-eg-hint="車輛保養時填目前里程，方便日後查紀錄；不確定可以留白" autocomplete="off"></div></div>
         <div class="pq-wrap">
@@ -673,11 +677,10 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div class="m-head"><span>發票與付款</span><span class="m-close" onclick="closeMask('mAcct')">✕</span></div>
     <div class="m-body">
         <div class="pq-grid">
-            <div class="pq-fld"><label>發票號碼</label><input type="text" id="aInvNo" placeholder="AB12345678"></div>
+            <div class="pq-fld"><label>發票號碼</label><input type="text" id="aInvNo" maxlength="10" autocomplete="off" style="text-transform:uppercase;">
+                <span class="hint" id="aInvErr"></span></div>
             <div class="pq-fld"><label>發票日期</label><input type="date" id="aInvDate"></div>
             <div class="pq-fld"><label>付款狀態</label><select id="aPayStatus"><option value="unpaid">未付</option><option value="paid">已付</option></select></div>
-            <div class="pq-fld"><label>付款日</label><input type="date" id="aPayDate"></div>
-            <div class="pq-fld"><label>付款方式</label><input type="text" id="aPayMethod"></div>
         </div>
         <p class="hint">發票與付款可以事後補；未付款的單會集中在「未付款」分頁。</p>
     </div>
