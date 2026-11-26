@@ -300,6 +300,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
         <label><input type="checkbox" id="expByItem"> 逐品項列出</label>
         <button id="btnInvMark" disabled><i class="fa fa-check-square-o"></i> 標記為已轉出</button>
         <button id="btnBackfillCsv"><i class="fa fa-upload"></i> 匯入平台已開立清單</button>
+        <button id="btnAttUp"><i class="fa fa-paperclip"></i> 上傳發票附件</button>
         <button id="btnAllowance"><i class="fa fa-reply"></i> 開折讓單</button>
         <?php endif; ?>
         <button id="btnInvPrint"><i class="fa fa-print"></i> 列印／PDF</button>
@@ -315,7 +316,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
         <table class="a-t" id="tblInv">
           <thead><tr>
             <th style="width:32px;"><input type="checkbox" id="ivChkAll"></th>
-            <th>類型</th><th>狀態</th><th>發票號碼</th><th>開立日期</th>
+            <th>類型</th><th>狀態</th><th>發票號碼/附件</th><th>開立日期</th>
             <th>客戶</th><th>統一編號</th><th>帳款月份</th>
             <th>未稅</th><th>稅額</th><th>含稅</th><th>已收</th><th>未收</th><th>帳齡</th>
             <th>明細</th><th>操作</th>
@@ -345,6 +346,27 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
 </div></div>
 
 <?php if ($perms['canEdit']): ?>
+<!-- 發票附件：多檔上傳（依檔名發票號碼自動連結）／附件清單 -->
+<div class="a-mask" id="mkAtt"><div class="a-modal">
+  <div class="m-head"><i class="fa fa-paperclip"></i>&nbsp;上傳發票附件（可一次選多個檔）
+    <span class="m-close" data-close="mkAtt">✕</span></div>
+  <div class="m-body">
+    <div class="info">檔名須含發票號碼（英文 2 碼＋數字 8 碼，例如 <b>HW79714300</b>.pdf 或 HW79714300_對帳單.jpg），系統會自動連結到該發票；
+      同一張發票可有多個附件。檔名找不到號碼、或系統還沒有這個發票號碼（尚未回填）的檔不會寫入，會列出原因。單檔上限 20MB。</div>
+    <div class="a-bar"><input type="file" id="attFiles" multiple style="font-size:13px;"></div>
+    <div id="attPreview" style="font-size:13px;"></div>
+    <div id="attResult" style="font-size:13px;margin-top:8px;"></div>
+  </div>
+  <div class="m-foot"><button data-close="mkAtt">關閉</button>
+    <button class="go" id="btnAttGo" disabled><i class="fa fa-upload"></i> 上傳</button></div>
+</div></div>
+<div class="a-mask" id="mkAttList"><div class="a-modal">
+  <div class="m-head"><i class="fa fa-paperclip"></i>&nbsp;<span id="attListTitle">發票附件</span>
+    <span class="m-close" data-close="mkAttList">✕</span></div>
+  <div class="m-body"><div id="attListBody"></div></div>
+  <div class="m-foot"><button data-close="mkAttList">關閉</button></div>
+</div></div>
+
 <!-- 匯入平台已開立清單 -->
 <div class="a-mask" id="mkEinv"><div class="a-modal" style="width:1100px;max-width:96vw;">
   <div class="m-head"><i class="fa fa-file-excel-o"></i>&nbsp;電子發票匯入檔預覽
@@ -864,9 +886,10 @@ function renderInv(){
       +'<td><input type="checkbox" class="iv-ck"'+(invSel[id]?' checked':'')+(isVoid?' disabled':'')+'></td>'
       +'<td>'+(isAllow?'<span class="pill dt-ALLOWANCE">折讓單</span>':'發票')+'</td>'
       +'<td><span class="pill st-'+v.status+'">'+esc(STATUS_LABEL[v.status]||v.status)+'</span></td>'
-      +'<td>'+(canEditNo
+      +'<td style="white-space:nowrap;">'+(canEditNo
           ? '<input type="text" class="no-in" data-id="'+id+'" maxlength="10" value="'+esc(v.invoice_no||'')+'" data-eg-hint="英文2碼＋數字8碼，例 AB12345678" autocomplete="off">'
-          : '<b>'+esc(v.invoice_no||'—')+'</b>')+'</td>'
+          : (Number(v.attach_cnt)>0 ? '<a href="#" class="att-open" data-id="'+id+'" title="開啟附件"><b>'+esc(v.invoice_no||'—')+'</b></a>' : '<b>'+esc(v.invoice_no||'—')+'</b>'))
+        +(Number(v.attach_cnt)>0 ? ' <a href="#" class="att-open" data-id="'+id+'" title="有 '+v.attach_cnt+' 個附件，點選開啟" style="color:#B9793C;"><i class="fa fa-paperclip"></i>'+(v.attach_cnt>1?'<sup>'+v.attach_cnt+'</sup>':'')+'</a>' : '')+'</td>'
       +'<td>'+(v.invoice_date?esc(String(v.invoice_date).replace(/-/g,'.')):'—')+'</td>'
       +'<td class="l">'+esc(v.customer_full||v.customer_name)+'</td>'
       +'<td>'+esc(v.tax_id||'—')+'</td>'
@@ -990,6 +1013,62 @@ document.addEventListener('keydown',function(e){
   if(e.key!=='Enter') return;
   var t=e.target; if(t && t.classList && (t.classList.contains('no-in'))){ e.preventDefault(); e.stopPropagation(); }
 },true);
+
+/* ══ 發票附件 ══ */
+var attNoOf=function(n){ var b=String(n).replace(/\.[^.]*$/,''); var m=b.match(/(?:^|[^A-Za-z0-9])([A-Za-z]{2})[-_ ]?(\d{8})(?!\d)/); return m?(m[1]+m[2]).toUpperCase():''; };
+$('#btnAttUp').on('click',function(){ $('#attFiles').val(''); $('#attPreview,#attResult').empty(); $('#btnAttGo').prop('disabled',true); openMask('mkAtt'); });
+$('#attFiles').on('change',function(){
+  var fs=this.files, h='';
+  $('#attResult').empty();
+  if(fs.length){ h='<table class="a-t"><thead><tr><th>檔名</th><th style="width:140px;">發票號碼</th></tr></thead><tbody>';
+    for(var i=0;i<fs.length;i++){ var no=attNoOf(fs[i].name);
+      h+='<tr><td class="l">'+esc(fs[i].name)+'</td><td>'+(no?'<b>'+no+'</b>':'<span style="color:#DD5138;">檔名找不到號碼</span>')+'</td></tr>'; }
+    h+='</tbody></table>'; }
+  $('#attPreview').html(h); $('#btnAttGo').prop('disabled',!fs.length);
+});
+$('#btnAttGo').on('click',function(){
+  var fs=$('#attFiles')[0].files; if(!fs.length) return;
+  var fd=new FormData(); fd.append('csrf',CSRF); fd.append('action','inv_attach_upload');
+  for(var i=0;i<fs.length;i++) fd.append('files[]',fs[i]);
+  var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 上傳中…');
+  $.ajax({url:API,type:'POST',data:fd,processData:false,contentType:false,dataType:'json'}).done(function(r){
+    $b.html('<i class="fa fa-upload"></i> 上傳');
+    if(!r.ok){ toast(esc(r.error||'上傳失敗'),true); $b.prop('disabled',false); return; }
+    var h='<div style="color:#5C7A2E;"><b>已連結 '+r.ok.length+' 個檔</b></div>';
+    if(r.fail.length){ h+='<div style="color:#DD5138;margin-top:6px;"><b>未寫入 '+r.fail.length+' 個檔：</b></div><ul style="margin:2px 0 0 18px;">';
+      r.fail.forEach(function(f){ h+='<li>'+esc(f.name)+'：'+esc(f.reason)+'</li>'; }); h+='</ul>'; }
+    $('#attResult').html(h); $('#attFiles').val(''); $('#attPreview').empty();
+    loadInv();
+  }).fail(function(){ $b.html('<i class="fa fa-upload"></i> 上傳').prop('disabled',false); toast('上傳失敗',true); });
+});
+function openAtt(id, atts){
+  var v=invRows.filter(function(x){ return x.invoice_id==id; })[0]||{};
+  var h='<table class="a-t"><thead><tr><th>檔名</th><th style="width:90px;">大小</th><th style="width:110px;">上傳人</th><th style="width:130px;">上傳時間</th><th style="width:70px;"></th></tr></thead><tbody>';
+  atts.forEach(function(a){
+    h+='<tr><td class="l"><a href="'+API+'?action=inv_attach_download&att_id='+a.att_id+'" target="_blank" rel="noopener"><i class="fa fa-paperclip"></i> '+esc(a.orig_name)+'</a></td>'
+      +'<td class="r">'+(a.file_size>1048576?(a.file_size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(a.file_size/1024))+' KB')+'</td>'
+      +'<td>'+esc(a.uploaded_by_name||'')+'</td><td>'+esc(String(a.uploaded_at||'').substr(0,16))+'</td>'
+      +'<td>'+(CAN_EDIT?'<button class="btn-mini att-del" data-att="'+a.att_id+'" data-id="'+id+'">刪除</button>':'')+'</td></tr>';
+  });
+  $('#attListTitle').text('發票附件　'+(v.invoice_no||''));
+  $('#attListBody').html(h+'</tbody></table>'); openMask('mkAttList');
+}
+$(document).on('click','.att-open',function(e){
+  e.preventDefault(); var id=$(this).data('id');
+  $.getJSON(API,{action:'inv_attach_list',invoice_id:id},function(r){
+    if(!r.ok||!r.rows.length){ toast('沒有附件',true); loadInv(); return; }
+    if(r.rows.length===1){ window.open(API+'?action=inv_attach_download&att_id='+r.rows[0].att_id,'_blank'); return; }
+    openAtt(id,r.rows);
+  });
+});
+$(document).on('click','.att-del',function(){
+  var att=$(this).data('att'), id=$(this).data('id');
+  if(!confirm('確定刪除這個附件？')) return;
+  $.post(API,{action:'inv_attach_delete',csrf:CSRF,att_id:att},function(r){
+    if(!r.ok){ toast(esc(r.error||'刪除失敗'),true); return; }
+    loadInv(); $.getJSON(API,{action:'inv_attach_list',invoice_id:id},function(x){ if(x.rows&&x.rows.length) openAtt(id,x.rows); else closeMask('mkAttList'); });
+  },'json');
+});
 
 /* 就地回填發票號碼：號碼與日期都填好且格式正確才送出 */
 $(document).on('input','.no-in',function(){

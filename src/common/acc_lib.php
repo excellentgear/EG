@@ -2862,6 +2862,8 @@ function acc_create_invoices(PDO $db, array $sel, string $userId, bool $splitByS
 function acc_invoice_list(PDO $db, array $f): array
 {
     acc_ensure_schema($db);
+    require_once __DIR__ . '/acc_invoice_attach_lib.php';
+    acc_inv_att_ensure($db);
     $where = []; $params = [];
 
     $bmFrom = trim((string)($f['bm_from'] ?? ''));
@@ -2884,6 +2886,7 @@ function acc_invoice_list(PDO $db, array $f): array
 
     $sql = "SELECT i.*,
                    (SELECT COUNT(*) FROM acc_invoice_item x WHERE x.invoice_id = i.invoice_id) AS item_cnt,
+                   (SELECT COUNT(*) FROM acc_invoice_attach iat WHERE iat.invoice_id = i.invoice_id) AS attach_cnt,
                    COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
                              WHERE a.invoice_id = i.invoice_id), 0) AS paid_amt
             FROM acc_invoice i

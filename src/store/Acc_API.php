@@ -371,6 +371,33 @@ case 'inv_list': {
     ]));
 }
 
+/* ── 發票附件（一次多檔，依檔名上的發票號碼自動連到發票；下載走這裡做權限守門） ── */
+case 'inv_attach_upload': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    if (empty($_FILES['files'])) acc_err('沒有選擇檔案');
+    include_once $document_root . '/EGsystem/src/common/acc_invoice_attach_lib.php';
+    acc_out(acc_inv_att_upload($db, $_FILES['files'], (string)($_SESSION['userName'] ?? '')));
+}
+case 'inv_attach_list': {
+    $s = $_POST ?: $_GET;
+    include_once $document_root . '/EGsystem/src/common/acc_invoice_attach_lib.php';
+    acc_out(['rows' => acc_inv_att_list($db, (int)($s['invoice_id'] ?? 0))]);
+}
+case 'inv_attach_download': {
+    include_once $document_root . '/EGsystem/src/common/acc_invoice_attach_lib.php';
+    acc_inv_att_send($db, (int)($_GET['att_id'] ?? 0));
+}
+case 'inv_attach_delete': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    include_once $document_root . '/EGsystem/src/common/acc_invoice_attach_lib.php';
+    if (!acc_inv_att_delete($db, (int)($_POST['att_id'] ?? 0))) acc_err('找不到附件');
+    acc_out(['message' => '已刪除附件']);
+}
+
 /* 單張發票明細 */
 case 'inv_items': {
     $s = $_POST ?: $_GET;
