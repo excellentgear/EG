@@ -396,15 +396,24 @@ function acc_vch_account_upsert(PDO $db, string $code, string $name): void
 function acc_vch_accounts(PDO $db, bool $all = false): array
 {
     acc_voucher_ensure($db);
-    $rows = $db->query("SELECT code, name, active, category, summary, parent_code, note FROM acc_account " . ($all ? '' : 'WHERE active=1 ') . "ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT code, name, active, category, summary, parent_code, note,
+        EXISTS(SELECT 1 FROM acc_voucher_line l WHERE l.code=acc_account.code) AS used FROM acc_account " . ($all ? '' : 'WHERE active=1 ') . "ORDER BY code")->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) $r['side'] = acc_vch_side_of_code($r['code']);
     return $rows;
 }
 
 /** 科目表維護：新增／改名／停用（科目代號不可改，要換就新增一個） */
-function acc_vch_accounts_save(PDO $db, array $rows): array
+function acc_vch_accounts_save(PDO $db, array $rows, array $delete = []): array
 {
     acc_voucher_ensure($db);
+    // 刪除：已被傳票分錄用過、或是預設科目（開傳票自動帶出）的不能刪，只能停用
+    $cfgCodes = array_map(function ($c) { return $c['code']; }, acc_vch_acct_cfg($db));
+    foreach ($delete as $code) {
+        $code = trim((string)$code);
+        if (in_array($code, $cfgCodes, true)) return ['success' => false, 'message' => "科目 {$code} 是預設會計科目，不能刪除"];
+        $q = $db->prepare("SELECT COUNT(*) FROM acc_voucher_line WHERE code=?"); $q->execute([$code]);
+        if ((int)$q->fetchColumn() > 0) return ['success' => false, 'message' => "科目 {$code} 已有傳票使用，不能刪除（可取消啟用）"];
+    }
     $st = $db->prepare("INSERT INTO acc_account (code, name, active, category, summary, parent_code, note) VALUES (?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE name=VALUES(name), active=VALUES(active), category=VALUES(category), summary=VALUES(summary), parent_code=VALUES(parent_code), note=VALUES(note)");
     foreach ($rows as $i => $r) {
@@ -414,11 +423,14 @@ function acc_vch_accounts_save(PDO $db, array $rows): array
         if ($name === '' || mb_strlen($name) > 60) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：請填科目名稱（60 字內）"];
         $sum = trim((string)($r['summary'] ?? '')); $note = trim((string)($r['note'] ?? ''));
         if (mb_strlen($sum) > 200 || mb_strlen($note) > 200) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：摘要／備註請在 200 字內"];
-        $cat = substr($code, 0, 2);   // 類別一律依代號前兩碼（與 111.xlsx 相同）
+        $cat = trim((string)($r['category'] ?? '')); if ($cat === '') $cat = substr($code, 0, 2);
+        if (!preg_match('/^\d{2}$/', $cat)) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：類別須為 2 位數字"];
         $par = trim((string)($r['parent_code'] ?? ''));
         if ($par !== '' && !preg_match('/^\d{4,10}$/', $par)) return ['success' => false, 'message' => "第 {$n} 列（{$code}）：所屬科目須為 4~10 位數字"];
         $st->execute([$code, $name, !empty($r['active']) ? 1 : 0, $cat, $sum ?: null, $par ?: null, $note ?: null]);
     }
+    $dl = $db->prepare("DELETE FROM acc_account WHERE code=?");
+    foreach ($delete as $code) $dl->execute([trim((string)$code)]);
     return ['success' => true, 'message' => '已儲存科目表'];
 }
 

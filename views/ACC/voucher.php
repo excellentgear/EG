@@ -144,10 +144,10 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
   </div>
   <div class="m-foot"><button data-close="mkJ">取消</button><button class="go" id="btnJConfirm"><i class="fa fa-check"></i> 確定開立</button></div>
 </div></div>
-<div class="a-mask" id="mkAcct"><div class="a-modal" style="width:760px;max-width:96vw;">
+<div class="a-mask" id="mkAcct"><div class="a-modal" style="width:1180px;max-width:96vw;">
   <div class="m-head"><i class="fa fa-cog"></i>&nbsp;預設會計科目<span class="m-close" data-close="mkAcct">✕</span></div>
-  <div class="m-body" id="acctBody"></div>
-  <div class="m-foot"><button data-close="mkAcct">關閉</button><?php if ($perms['canAdmin']): ?><button class="go" id="btnAcctSave"><i class="fa fa-check"></i> 儲存預設科目</button><?php endif; ?><button class="go" id="btnAcctListSave"><i class="fa fa-check"></i> 儲存科目表</button></div>
+  <div class="m-body" id="acctBody" style="overflow-x:hidden;"></div>
+  <div class="m-foot"><button data-close="mkAcct">關閉</button><?php if ($perms['canAdmin']): ?><button class="go" id="btnAcctSave"><i class="fa fa-check"></i> 儲存預設科目</button><?php endif; ?><?php if ($perms['canAdmin']): ?><button class="go" id="btnAcctListSave"><i class="fa fa-check"></i> 儲存科目表</button><?php endif; ?></div>
 </div></div>
 <div class="a-mask" id="mkV"><div class="a-modal">
   <div class="m-head"><i class="fa fa-book"></i>&nbsp;<span id="mvTitle">傳票</span><span class="m-close" data-close="mkV">✕</span></div>
@@ -364,40 +364,47 @@ $('#btnJAdd').on('click',function(){
   $('#jCode,#jName,#jAmt,#jMemo').val(''); $('#jSide').hide(); journalRender();
 });
 $(document).on('click','.j-del',function(){ JX.splice(+$(this).data('i'),1); journalRender(); });
+var CATS=[];
+function catOpts(sel){ var h=''; CATS.forEach(function(c){ h+='<option value="'+esc(c.code)+'"'+(c.code===sel?' selected':'')+'>'+esc(c.code+' '+c.name)+'</option>'; }); return h; }
+var IN='style="width:100%;box-sizing:border-box;"';
 function acRow(a){
-  var sd=a.side||sideOfCode(a.code), on=(a.active===undefined||Number(a.active));
-  return '<tr><td>'+esc(a.code)+'<input type="hidden" class="al-code" value="'+esc(a.code)+'"></td><td><input type="text" class="al-name" maxlength="60" value="'+esc(a.name)+'" style="width:150px;"></td><td>'+esc(String(a.code).substr(0,2))+'</td><td>'+(sd==='D'?'借':(sd==='C'?'貸':'<span style="color:#8a6d45;">自選</span>'))+'</td>'
-    +'<td><input type="text" class="al-sum" maxlength="200" value="'+esc(a.summary||'')+'" style="width:150px;"></td><td><input type="text" class="al-note" maxlength="200" value="'+esc(a.note||'')+'" style="width:150px;"></td>'
-    +'<td><input type="text" class="al-par" maxlength="10" value="'+esc(a.parent_code||'')+'" style="width:80px;"></td><td><input type="checkbox" class="al-on"'+(on?' checked':'')+'></td></tr>';
+  var sd=a.side||sideOfCode(a.code), on=(a.active===undefined||Number(a.active)), dis=CAN_ADMIN?'':' disabled', cat=a.category||String(a.code).substr(0,2);
+  var delc=CAN_ADMIN?('<td>'+(Number(a.used)?'<span style="color:#8a6d45;font-size:12px;" title="已有傳票使用，只能取消啟用">使用中</span>':'<input type="checkbox" class="al-del" title="刪除">')+'</td>'):'';
+  return '<tr><td>'+esc(a.code)+'<input type="hidden" class="al-code" value="'+esc(a.code)+'"></td><td><input type="text" class="al-name" maxlength="60" value="'+esc(a.name)+'" '+IN+dis+'></td>'
+    +'<td><select class="al-cat" '+IN+dis+'>'+catOpts(cat)+'</select></td><td style="text-align:center;">'+(sd==='D'?'借':(sd==='C'?'貸':'<span style="color:#8a6d45;">自選</span>'))+'</td>'
+    +'<td><input type="text" class="al-sum" maxlength="200" value="'+esc(a.summary||'')+'" '+IN+dis+'></td><td><input type="text" class="al-note" maxlength="200" value="'+esc(a.note||'')+'" '+IN+dis+'></td>'
+    +'<td><input type="text" class="al-par" maxlength="10" value="'+esc(a.parent_code||'')+'" '+IN+dis+'></td><td style="text-align:center;"><input type="checkbox" class="al-on"'+(on?' checked':'')+dis+'></td>'+delc+'</tr>';
 }
 $('#btnAcctCfg').on('click',function(){
   $.getJSON(API,{action:'vch_accounts'},function(r){
-    var dis=CAN_ADMIN?'':' disabled';
+    var dis=CAN_ADMIN?'':' disabled'; CATS=r.categories||[];
     var h='<div style="font-weight:700;margin-bottom:4px;">① 預設會計科目（開傳票時自動帶出）'+(CAN_ADMIN?'':'<span style="font-weight:400;color:#8a6d45;font-size:12.5px;">　僅會計管理員可修改</span>')+'</div>'
       +'<table class="a-t"><thead><tr><th>用途</th><th>科目代號</th><th>科目名稱</th></tr></thead><tbody>';
     var L=r.labels||{}; Object.keys(L).forEach(function(k){ var c=(r.cfg||{})[k]||{};
       h+='<tr><td class="l">'+esc(L[k])+'</td><td><input type="text" class="ac-code" data-k="'+k+'" maxlength="10" value="'+esc(c.code||'')+'" style="width:100px;"'+dis+'></td><td><input type="text" class="ac-name" data-k="'+k+'" maxlength="40" value="'+esc(c.name||'')+'" style="width:150px;"'+dis+'></td></tr>'; });
     h+='</tbody></table><div class="a-hint" style="margin:4px 0 12px;">借貸方向固定：應收＝應收帳款借／銷項稅額、銷貨收入貸；應付＝進貨／加工費、進項稅額借／應付帳款貸。</div>';
-    h+='<div style="font-weight:700;margin-bottom:4px;">② 科目表（追加科目時可選；新增科目代號＋名稱後按「儲存科目表」）</div>'
-      +'<table class="a-t"><thead><tr><th style="width:100px;">科目代號</th><th>科目名稱</th><th style="width:60px;">類別</th><th style="width:60px;">借貸</th><th>摘要</th><th>備註</th><th style="width:100px;">所屬科目</th><th style="width:50px;">啟用</th></tr></thead><tbody id="acListBody">';
+    h+='<div style="font-weight:700;margin-bottom:4px;">② 科目表（追加科目時可選；新增科目代號＋名稱後按「儲存科目表」）'+(CAN_ADMIN?'':'<span style="font-weight:400;color:#8a6d45;font-size:12.5px;">　唯讀，僅會計管理員可修改</span>')+'</div>'
+      +'<table class="a-t" style="table-layout:fixed;width:100%;"><colgroup><col style="width:90px;"><col style="width:170px;"><col style="width:190px;"><col style="width:48px;"><col><col><col style="width:95px;"><col style="width:48px;">'+(CAN_ADMIN?'<col style="width:60px;">':'')+'</colgroup><thead><tr><th>科目代號</th><th>科目名稱</th><th>類別</th><th>借貸</th><th>摘要</th><th>備註</th><th>所屬科目</th><th>啟用</th>'+(CAN_ADMIN?'<th>刪除</th>':'')+'</tr></thead><tbody id="acListBody">';
     (r.all_accounts||[]).forEach(function(a){ h+=acRow(a); });
-    h+='</tbody></table><div class="a-bar" style="margin-top:6px;"><input type="text" id="alNewCode" maxlength="10" placeholder="新科目代號" style="width:110px;" autocomplete="off"><input type="text" id="alNewName" maxlength="60" placeholder="新科目名稱" style="width:200px;" autocomplete="off"><button id="btnAlAdd"><i class="fa fa-plus"></i> 加入科目表</button><span id="alErr" style="color:#DD5138;font-size:12.5px;"></span></div>';
+    h+='</tbody></table>'+(!CAN_ADMIN?'':'<div class="a-bar" style="margin-top:6px;"><input type="text" id="alNewCode" maxlength="10" placeholder="新科目代號" style="width:110px;" autocomplete="off"><input type="text" id="alNewName" maxlength="60" placeholder="新科目名稱" style="width:200px;" autocomplete="off"><button id="btnAlAdd"><i class="fa fa-plus"></i> 加入科目表</button><span id="alErr" style="color:#DD5138;font-size:12.5px;"></span></div>');
     h+='<div style="font-weight:700;margin:14px 0 4px;">③ 科目分類（前兩碼；1~3 開頭＝資產負債表、4~9 開頭＝損益表，之後報表依此彙總。改完按下方「儲存科目表」一併存）</div>'
-      +'<table class="a-t"><thead><tr><th style="width:70px;">分類代號</th><th>分類名稱</th><th>備註</th><th style="width:60px;">科目數</th><th style="width:60px;">刪除</th></tr></thead><tbody id="catBody">';
+      +'<table class="a-t" style="table-layout:fixed;width:100%;"><colgroup><col style="width:90px;"><col style="width:300px;"><col><col style="width:70px;">'+(CAN_ADMIN?'<col style="width:60px;">':'')+'</colgroup><thead><tr><th>分類代號</th><th>分類名稱</th><th>備註</th><th>科目數</th>'+(CAN_ADMIN?'<th>刪除</th>':'')+'</tr></thead><tbody id="catBody">';
     (r.categories||[]).forEach(function(c){ h+=catRow(c); });
-    h+='</tbody></table><div class="a-bar" style="margin-top:6px;"><input type="text" id="catNewCode" maxlength="2" placeholder="2位代號" style="width:80px;" autocomplete="off"><input type="text" id="catNewName" maxlength="60" placeholder="新分類名稱" style="width:200px;" autocomplete="off"><button id="btnCatAdd"><i class="fa fa-plus"></i> 加入分類</button><span id="catErr" style="color:#DD5138;font-size:12.5px;"></span></div>';
+    h+='</tbody></table>'+(!CAN_ADMIN?'':'<div class="a-bar" style="margin-top:6px;"><input type="text" id="catNewCode" maxlength="2" placeholder="2位代號" style="width:80px;" autocomplete="off"><input type="text" id="catNewName" maxlength="60" placeholder="新分類名稱" style="width:200px;" autocomplete="off"><button id="btnCatAdd"><i class="fa fa-plus"></i> 加入分類</button><span id="catErr" style="color:#DD5138;font-size:12.5px;"></span></div>');
     $('#acctBody').html(h); openMask('mkAcct');
   });
 });
 function catRow(c){
-  return '<tr data-code="'+esc(c.code)+'"><td>'+esc(c.code)+'</td><td><input type="text" class="ct-name" maxlength="60" value="'+esc(c.name)+'" style="width:200px;"></td><td><input type="text" class="ct-note" maxlength="200" value="'+esc(c.note||'')+'" style="width:220px;"></td><td>'+(c.n||0)+'</td><td>'+((c.n||0)?'<span style="color:#8a6d45;font-size:12px;">使用中</span>':'<input type="checkbox" class="ct-del">')+'</td></tr>';
+  var dis=CAN_ADMIN?'':' disabled';
+  return '<tr data-code="'+esc(c.code)+'"><td>'+esc(c.code)+'</td><td><input type="text" class="ct-name" maxlength="60" value="'+esc(c.name)+'" '+IN+dis+'></td><td><input type="text" class="ct-note" maxlength="200" value="'+esc(c.note||'')+'" '+IN+dis+'></td><td style="text-align:center;">'+(c.n||0)+'</td>'
+    +(CAN_ADMIN?'<td style="text-align:center;">'+((c.n||0)?'<span style="color:#8a6d45;font-size:12px;">使用中</span>':'<input type="checkbox" class="ct-del">')+'</td>':'')+'</tr>';
 }
 $(document).on('click','#btnCatAdd',function(){
   var c=$.trim($('#catNewCode').val()), n=$.trim($('#catNewName').val()), e='';
   if(!/^\d{2}$/.test(c)) e='分類代號須為 2 位數字'; else if(!n) e='請填分類名稱';
   else if($('#catBody tr[data-code='+c+']').length) e='分類 '+c+' 已存在';
   $('#catErr').text(e); if(e) return;
-  $('#catBody').append(catRow({code:c,name:n,note:'',n:0})); $('#catNewCode,#catNewName').val('');
+  $('#catBody').append(catRow({code:c,name:n,note:'',n:0})); CATS.push({code:c,name:n}); $('.al-cat').append('<option value="'+esc(c)+'">'+esc(c+' '+n)+'</option>'); $('#catNewCode,#catNewName').val('');
 });
 $(document).on('click','#btnAlAdd',function(){
   var c=$.trim($('#alNewCode').val()), n=$.trim($('#alNewName').val()), e='';
@@ -408,11 +415,12 @@ $(document).on('click','#btnAlAdd',function(){
   $('#alNewCode,#alNewName').val('');
 });
 $('#btnAcctListSave').on('click',function(){
-  var rows=[]; $('#acListBody tr').each(function(){ var $t=$(this); rows.push({code:$t.find('.al-code').val(), name:$.trim($t.find('.al-name').val()), summary:$.trim($t.find('.al-sum').val()), note:$.trim($t.find('.al-note').val()), parent_code:$.trim($t.find('.al-par').val()), active:$t.find('.al-on').is(':checked')?1:0}); });
+  if(!CAN_ADMIN) return;
+  var rows=[], delA=[]; $('#acListBody tr').each(function(){ var $t=$(this); if($t.find('.al-del').is(':checked')){ delA.push(String($t.find('.al-code').val())); return; } rows.push({code:$t.find('.al-code').val(), category:$t.find('.al-cat').val(), name:$.trim($t.find('.al-name').val()), summary:$.trim($t.find('.al-sum').val()), note:$.trim($t.find('.al-note').val()), parent_code:$.trim($t.find('.al-par').val()), active:$t.find('.al-on').is(':checked')?1:0}); });
   var cats=[], del=[]; $('#catBody tr').each(function(){ var $t=$(this), c=$t.data('code'); if($t.find('.ct-del').is(':checked')) del.push(String(c)); else cats.push({code:String(c), name:$.trim($t.find('.ct-name').val()), note:$.trim($t.find('.ct-note').val())}); });
   $.post(API+'?action=vch_categories_save',{csrf:CSRF,rows:JSON.stringify(cats),del:JSON.stringify(del)},function(r0){
     if(!r0.ok){ toast(esc(r0.error||'分類儲存失敗'), true); return; }
-    $.post(API+'?action=vch_accounts_save',{csrf:CSRF,rows:JSON.stringify(rows)},function(r){
+    $.post(API+'?action=vch_accounts_save',{csrf:CSRF,rows:JSON.stringify(rows),del:JSON.stringify(delA)},function(r){
       if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
       toast('已儲存科目表與科目分類'); loadAcct(); $('#btnAcctCfg').click();
     },'json').fail(function(x){ failMsg(x,'儲存失敗'); });

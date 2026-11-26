@@ -797,13 +797,15 @@ case 'vch_accounts': {
 case 'vch_accounts_save': {
     require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
-    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改科目設定', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
-    if (!is_array($rows) || !$rows) acc_err('沒有要儲存的科目');
+    if (!is_array($rows)) acc_err('沒有要儲存的科目');
     foreach ($rows as &$rw) foreach (['name', 'summary', 'note'] as $f) if (isset($rw[$f])) $rw[$f] = acc_u8((string)$rw[$f]);
     unset($rw);
-    $r = acc_vch_accounts_save($db, $rows);
+    $del = json_decode((string)($_POST['del'] ?? '[]'), true);
+    if (!is_array($del)) acc_err('資料格式錯誤');
+    $r = acc_vch_accounts_save($db, $rows, $del);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }
@@ -811,7 +813,7 @@ case 'vch_accounts_save': {
 case 'vch_categories_save': {
     require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
-    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改科目設定', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
     $del  = json_decode((string)($_POST['del'] ?? '[]'), true);
