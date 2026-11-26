@@ -44,7 +44,8 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 .page-help-btn{margin-left:auto;height:30px;padding:0 12px;border:1px solid var(--a-line2);border-radius:15px;background:#fff;color:var(--a-ink);cursor:pointer;}
 .help-doc{font-size:13.5px;line-height:1.9;color:var(--a-ink);}
 .help-doc h5{margin:10px 0 2px;color:var(--a-brand);font-weight:bold;}
-tr.v-ar td{background:#FCE9D4;} tr.v-ap td{background:#EFE9C6;} tr.voided td{background:#EDE6DA;}
+.sd-pill{display:inline-block;padding:2px 12px;border-radius:12px;color:#fff;font-size:12.5px;font-weight:bold;line-height:18px;}
+.sd-ar{background:#5C7A2E;} .sd-ap{background:#DD5138;} td.amt-ap{color:#DD5138;font-weight:bold;}
 .st-open{background:var(--a-ok);color:#6b4522;} .st-void{background:#C9B69F;color:#fff;}
 .lk{color:#8a6d45;} tr.lockedrow{color:#a08a6a;background:#F6EFE2 !important;}
 .vno-in{width:150px;height:28px;border:1px solid var(--a-line2);border-radius:4px;padding:0 6px;color:var(--a-ink);}
@@ -575,9 +576,9 @@ function loadList(){
     var h='';
     if(!r.rows.length) h='<tr><td colspan="10" style="padding:18px;color:#8a6d45;">沒有符合的傳票</td></tr>';
     r.rows.forEach(function(v){
-      h+='<tr class="'+(v.status==='void'?'voided ':'')+(v.side==='ap'?'v-ap':'v-ar')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
-        +'<td>'+dd(v.voucher_date)+'</td><td>'+(v.side==='ap'?'應付':'應收')+'</td><td class="l">'+esc(v.party_name)+'</td>'
-        +'<td>'+esc(v.billing_month||'')+'</td><td class="r">'+nf(v.total_amount)+'</td>'
+      h+='<tr class="'+(v.status==='void'?'voided':'')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
+        +'<td>'+dd(v.voucher_date)+'</td><td><span class="sd-pill '+(v.side==='ap'?'sd-ap">應付':'sd-ar">應收')+'</span></td><td class="l">'+esc(v.party_name)+'</td>'
+        +'<td>'+esc(v.billing_month||'')+'</td><td class="r'+(v.side==='ap'?' amt-ap':'')+'">'+nf(v.total_amount)+'</td>'
         +'<td>'+esc(v.invoice_nos||'')+'</td>'
         +'<td><span class="pill st-'+v.status+'">'+(v.status==='void'?'已作廢':'有效')+'</span></td><td class="l">'+esc(v.note||'')+'</td>'
         +'<td><button class="btn-mini v-open" data-id="'+v.voucher_id+'">明細</button> <button class="btn-mini v-print" data-id="'+v.voucher_id+'"><i class="fa fa-print"></i> 列印</button></td></tr>';
