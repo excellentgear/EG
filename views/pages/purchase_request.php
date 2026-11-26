@@ -298,6 +298,13 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                    第二層＝具「高階核准」角色者。門檻改動只影響之後才送簽的單。</p>
             </div>
             <div class="pq-sec" style="max-width:760px;">
+                <h5>自動簽核的用途類別</h5>
+                <div id="cfgAutoTypes"></div>
+                <p class="hint">勾選的用途，採購詢完價後<b>不論金額都直接視為核准、不通知簽核者，也不通知送單人</b>。
+                   整張單的用途（含各品項另外指定的用途）都要在勾選範圍內才適用，有一項不在就照原本的金額門檻簽核。
+                   沒勾選任何類別＝全部照金額門檻。只影響之後才詢價的單。</p>
+            </div>
+            <div class="pq-sec" style="max-width:760px;">
                 <h5>附件儲存路徑（DB 只存檔名，完整路徑由此設定即時組出）</h5>
                 <div class="pq-fld">
                     <label>實體存放路徑（磁碟或網路資料夾）</label>

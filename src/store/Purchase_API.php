@@ -97,6 +97,7 @@ case 'meta': {
         $resp['attach_nas_raw']      = purchase_setting($db, 'purchase_attach_nas_dir', '');
         $resp['attach_nas_writable'] = is_dir($nas) ? (bool)is_writable($nas) : false;
         $resp['attach_nas_exists']   = is_dir($nas);
+        $resp['auto_approve_types']  = purchase_auto_approve_types($db);
     }
     jout($resp);
 }
@@ -112,6 +113,14 @@ case 'save_settings': {
         // 擋掉把網址填進實體路徑欄的情況——存進去要等到有人上傳附件才會發現壞了
         if (preg_match('#^https?://#i', $nasIn)) jerr('「實體存放路徑」要填磁碟或網路資料夾路徑（例 \\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購 或 \\\\server\\share\\採購），不是網址');
         purchase_set_setting($db, 'purchase_attach_nas_dir', $nasIn);
+    }
+    // 自動簽核的用途類別：沒送這個欄位＝不動；送空陣列＝全部取消。代碼一律對照 PURCHASE_PURPOSE_TYPES 過濾
+    if (isset($_POST['auto_approve_types'])) {
+        $arr = json_decode((string)$_POST['auto_approve_types'], true);
+        if (!is_array($arr)) jerr('自動簽核類別格式不正確');
+        $ok = [];
+        foreach ($arr as $t) { $t = strtoupper(trim((string)$t)); if (isset(PURCHASE_PURPOSE_TYPES[$t])) $ok[$t] = true; }
+        purchase_set_setting($db, 'purchase_auto_approve_types', implode(',', array_keys($ok)));
     }
     if (isset($_POST['print_header'])) purchase_set_setting($db, 'purchase_print_header', pv('print_header'));
     if (isset($_POST['print_footer'])) purchase_set_setting($db, 'purchase_print_footer', pv('print_footer'));
@@ -1094,6 +1103,9 @@ case 'save_quote': {
     $t = purchase_calc_totals($db, $reqId, $taxType);
     [$l1, $l2] = purchase_thresholds($db);
     $levels = purchase_need_levels($t['grand_total'], $l1, $l2);
+    // 用途屬於「自動簽核類別」：不論金額一律免簽核，而且不通知任何人（簽核者與送單人都不通知）
+    $autoQuiet = purchase_is_auto_purpose($db, $req, $reqId);
+    if ($autoQuiet) $levels = 0;
     $status = $levels === 0 ? 'approved' : 'quoted';
     $db->prepare("UPDATE purchase_request SET vendor_id=?, vendor_name=?, tax_type=?, subtotal=?, tax_amount=?,
                   grand_total=?, need_levels=?, level_done=0, status=?, buyer_id=?, buyer_name=?, quoted_at=NOW(),
@@ -1119,7 +1131,7 @@ case 'save_quote': {
         purchase_notify($db, $signers, 'PURCHASE_APPROVAL', $reqId, '採購單待簽核：' . $req['req_no'],
             $uname . ' 送出採購單 ' . $req['req_no'] . '，含稅總額 ' . number_format($t['grand_total'], 2) . ' 元，請簽核。',
             'sign', $uid);
-    } else {
+    } elseif (!$autoQuiet) {
         purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
             '採購申請已核價（免簽核）：' . $req['req_no'],
             '含稅總額 ' . number_format($t['grand_total'], 2) . ' 元，未達簽核門檻，採購可直接下單。', 'read', $uid);

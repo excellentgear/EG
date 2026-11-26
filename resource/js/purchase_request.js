@@ -121,6 +121,13 @@ $(function () {
             $('#cfgNas').val(r.attach_nas_raw || r.attach_nas_dir || '');
             renderNasState(r);
             $('#cfgPh').val(r.print_header || ''); $('#cfgPf').val(r.print_footer || '');
+            var ah = '', cur = r.auto_approve_types || [];
+            $.each(r.purpose_types, function (k, v) {
+                ah += '<label style="display:inline-flex;align-items:center;gap:4px;margin:0 14px 6px 0;font-weight:normal;cursor:pointer;">'
+                    + '<input type="checkbox" class="cfgAutoType" value="' + esc(k) + '" style="width:auto;margin:0;"'
+                    + (cur.indexOf(k) > -1 ? ' checked' : '') + '> ' + esc(v) + '</label>';
+            });
+            $('#cfgAutoTypes').html(ah);
         }
         bindAll();
         reload(); loadBadges();
@@ -1921,6 +1928,7 @@ $(document).on('click', '.am-del', function () {
 });
 function saveCfg() {
     api('save_settings', { l1: $('#cfgL1').val(), l2: $('#cfgL2').val(), nas_dir: $('#cfgNas').val(),
+        auto_approve_types: JSON.stringify($('.cfgAutoType:checked').map(function () { return this.value; }).get()),
         print_header: $('#cfgPh').val(), print_footer: $('#cfgPf').val() }, 'POST')
     .done(function () {
         META.thresholds.l1 = parseFloat($('#cfgL1').val()); META.thresholds.l2 = parseFloat($('#cfgL2').val());

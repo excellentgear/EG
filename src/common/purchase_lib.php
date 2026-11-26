@@ -507,6 +507,34 @@ function purchase_set_setting(PDO $db, string $key, string $val): void
     $st->execute([$key, $val]);
 }
 
+/** 設定為「自動簽核」的用途類別代碼（管理員在採購設定勾選）。只回傳目前仍有效的類別 */
+function purchase_auto_approve_types(PDO $db): array
+{
+    $raw = purchase_setting($db, 'purchase_auto_approve_types', '');
+    $out = [];
+    foreach (explode(',', $raw) as $t) {
+        $t = strtoupper(trim($t));
+        if ($t !== '' && isset(PURCHASE_PURPOSE_TYPES[$t])) $out[$t] = true;
+    }
+    return array_keys($out);
+}
+
+/** 這張單的用途（單頭＋各品項自己另設的）是否全部屬於自動簽核類別 */
+function purchase_is_auto_purpose(PDO $db, array $req, int $reqId): bool
+{
+    $types = purchase_auto_approve_types($db);
+    if (!$types) return false;
+    $hdr = strtoupper((string)($req['purpose_type'] ?? ''));
+    if ($hdr === '' || !in_array($hdr, $types, true)) return false;
+    $st = $db->prepare("SELECT DISTINCT purpose_type FROM purchase_request_item
+                        WHERE req_id=? AND purpose_type IS NOT NULL AND purpose_type<>''");
+    $st->execute([$reqId]);
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $t) {
+        if (!in_array(strtoupper((string)$t), $types, true)) return false;
+    }
+    return true;
+}
+
 /** 簽核金額門檻 [L1, L2] */
 function purchase_thresholds(PDO $db): array
 {
