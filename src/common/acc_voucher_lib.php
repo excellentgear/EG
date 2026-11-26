@@ -145,7 +145,7 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     $side = ($side === 'ap') ? 'ap' : 'ar';
     if (!preg_match('/^\d{4}-\d{2}$/', $bm)) return ['success' => false, 'message' => '帳款月份格式錯誤'];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '傳票日期格式錯誤'];
-    $no = strtoupper(trim((string)$no));
+    $no = acc_vch_no_normalize((string)$no, $date);
     // 開立前一定要先有傳票號碼與日期，號碼格式與日期一致性都要符合
     if ($no === '') return ['success' => false, 'message' => '請先填 ERP 傳票號碼再開立傳票'];
     [$noErr, $noDate] = acc_vch_no_check($no);
@@ -275,7 +275,7 @@ function acc_voucher_update(PDO $db, int $id, ?string $no, string $date, string 
     if (!$v) return ['success' => false, 'message' => '找不到傳票'];
     if ($v['voucher']['status'] === 'void') return ['success' => false, 'message' => '已作廢的傳票不可修改'];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '傳票日期格式錯誤'];
-    $no = strtoupper(trim((string)$no));
+    $no = acc_vch_no_normalize((string)$no, $date);
     if ($no !== '') {
         [$noErr, $noDate] = acc_vch_no_check($no);
         if ($noErr) return ['success' => false, 'message' => $noErr];
@@ -411,6 +411,15 @@ function acc_vch_cname(PDO $db, ?string $uname): string
     if (isset($c[$uname])) return $c[$uname];
     try { $q = $db->prepare("SELECT user_cname FROM user WHERE user_uname=? LIMIT 1"); $q->execute([$uname]); $n = trim((string)$q->fetchColumn()); } catch (Throwable $e) { $n = ''; }
     return $c[$uname] = ($n !== '' ? $n : $uname);
+}
+
+/** 簡寫補全：MMDD＋流水3碼（7 位數字）→ 補上傳票日期的民國年與 V-；民國年MMDD流水3碼（10 位數字）→ 補 V-；其餘原樣回傳 */
+function acc_vch_no_normalize(string $no, string $date): string
+{
+    $no = strtoupper(trim($no));
+    if (preg_match('/^\d{10}$/', $no)) return 'V-' . $no;
+    if (preg_match('/^\d{7}$/', $no) && preg_match('/^(\d{4})-\d{2}-\d{2}$/', $date, $m)) return 'V-' . sprintf('%03d', (int)$m[1] - 1911) . $no;
+    return $no;
 }
 
 /** 傳票號碼格式：V-民國年3碼＋MMDD＋流水3碼（例 V-1151126001）。回 [錯誤訊息|null, 號碼內含的西元日期|null] */

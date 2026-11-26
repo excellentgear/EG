@@ -86,7 +86,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <div id="vBox" style="display:none;">
         <div class="a-bar" style="background:var(--a-bg2);">
           <label>傳票日期<span style="color:#DD5138;">＊</span></label><input type="date" id="vDate">
-          <label>ERP傳票號碼<span style="color:#DD5138;">＊</span></label><input type="text" id="vNo" maxlength="12" class="vno-in" autocomplete="off" data-eg-hint="V-民國年3碼＋MMDD＋流水3碼，例 V-1151126001">
+          <label>ERP傳票號碼<span style="color:#DD5138;">＊</span></label><input type="text" id="vNo" maxlength="12" class="vno-in" autocomplete="off" data-eg-hint="完整 V-1151126001；也可只輸入 MMDD＋流水3碼（1126001）或 民國年MMDD流水3碼，自動補 V- 與民國年">
           <span id="vNoErr" style="color:#DD5138;font-size:12.5px;"></span>
           <label>備註</label><input type="text" id="vNote" maxlength="200" style="width:200px;">
           <button id="btnVAll">全選可開立</button><button id="btnVNone">清除</button>
@@ -272,6 +272,14 @@ function updSel(){
 var ACCT=[], ACFG={}, JX=[], TAXR=0.05, ME='', SLOTS={}, COMPANY='';
 function sideOfCode(c){ var f=String(c||'').charAt(0); return (f&&'156'.indexOf(f)>=0)?'D':((f&&'234'.indexOf(f)>=0)?'C':null); }
 function nf2(n){ return Number(n||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}); }
+/* 簡寫補全：MMDD＋流水3碼（7碼）→ 補傳票日期的民國年與 V-；民國年MMDD流水3碼（10碼）→ 補 V- */
+function normNo(v, date){
+  v=$.trim(String(v||'')).toUpperCase();
+  if(/^\d{10}$/.test(v)) return 'V-'+v;
+  var m=/^(\d{4})-\d{2}-\d{2}$/.exec(date||'');
+  if(/^\d{7}$/.test(v) && m) return 'V-'+('00'+(+m[1]-1911)).slice(-3)+v;
+  return v;
+}
 function noCheck(no, date){
   if(!no) return '請填 ERP 傳票號碼';
   var m=/^V-(\d{3})(\d{2})(\d{2})(\d{3})$/.exec(no);
@@ -289,7 +297,8 @@ function vNoState(){
   return no!=='' && !e;
 }
 $('#vNo').on('input',function(){ this.value=this.value.toUpperCase(); vNoState(); });
-$('#vDate').on('input change',function(){ vNoState(); });
+$('#vNo').on('blur change',function(){ this.value=normNo(this.value, $('#vDate').val()); vNoState(); });
+$('#vDate').on('input change',function(){ var $n=$('#vNo'); if(/^\d{7}$/.test($.trim($n.val()))) $n.val(normNo($n.val(), $(this).val())); vNoState(); });
 function loadAcct(cb){
   $.getJSON(API,{action:'vch_accounts'},function(r){
     if(!r.ok) return; ACCT=r.accounts||[]; ACFG=r.cfg||{}; TAXR=Number(r.tax_rate)||0.05; ME=r.me||''; SLOTS=r.slots||{}; COMPANY=r.company||'';
@@ -440,7 +449,7 @@ $('#btnVNone').on('click',function(){ SEL={}; $('#vCkAll').prop('checked',false)
 $('#btnVCreate').on('click',function(){
   var k=Object.keys(SEL); if(!k.length) return;
   var d=$('#vDate').val(); if(!d){ toast('請先填傳票日期', true); $('#vDate').focus(); return; }
-  var noV=$.trim($('#vNo').val()).toUpperCase(), noE=noCheck(noV, d);
+  var noV=normNo($('#vNo').val(), d), noE=noCheck(noV, d); $('#vNo').val(noV);
   if(noE){ toast('傳票號碼：'+esc(noE), true); $('#vNo').focus(); return; }
   JX=[]; $('#jErr').text('');
   $('#jTitle').text('確認傳票 '+noV);
@@ -449,7 +458,7 @@ $('#btnVCreate').on('click',function(){
 });
 $('#btnJConfirm').on('click',function(){
   var k=Object.keys(SEL); if(!k.length) return;
-  var d=$('#vDate').val(), noV=$.trim($('#vNo').val()).toUpperCase(), noE=noCheck(noV, d);
+  var d=$('#vDate').val(), noV=normNo($('#vNo').val(), d), noE=noCheck(noV, d);
   if(noE){ toast('傳票號碼：'+esc(noE), true); return; }
   if(!jBalanced){ toast('會計分錄借貸不平衡，請調整追加的科目', true); return; }
   var sel=k.map(function(i){ return {src_type:items[i].src_type, src_id:items[i].src_id}; });
@@ -523,7 +532,7 @@ $(document).on('click','.v-sign',function(){
 });
 $(document).on('click','#btnVSave',function(){
   var id=$(this).data('id'), d=$('#evDate').val(); if(!d){ toast('請填傳票日期', true); return; }
-  $.post(API+'?action=vch_update',{csrf:CSRF,voucher_id:id,voucher_no:$('#evNo').val(),voucher_date:d,note:$('#evNote').val()},function(r){
+  $.post(API+'?action=vch_update',{csrf:CSRF,voucher_id:id,voucher_no:normNo($('#evNo').val(), d),voucher_date:d,note:$('#evNote').val()},function(r){
     if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
     toast('已儲存'); closeMask('mkV'); loadList();
   },'json').fail(function(x){ failMsg(x,'儲存失敗'); });
