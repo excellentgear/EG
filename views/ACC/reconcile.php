@@ -1165,6 +1165,7 @@ function erpAutoCheck(){
 var sheetEdited=false;   // 使用者在底稿上動過東西（勾選／金額／拆分…）；區間自動重載時才需要先問
 $(document).on('input change click','#sheetBox',function(e){ if(!$(e.target).closest('#rangeBar').length) sheetEdited=true; });
 function rgReload(reset,auto){
+  DEEP._rgOff=1;
   if(!sheet || sheet.status==='confirmed') return;
   var f=reset?'':$('#rgFrom').val(), t=reset?'':$('#rgTo').val();
   if(!reset && t===RANGE.default_to) t='';         // 迄＝預設截止日視同沒指定
@@ -1185,8 +1186,8 @@ function loadSheet(o){
   if(!bm || !pid){ toast('請選擇帳款月份與對象', true); return; }
   var rg=(o && o.rg) ? o.rg : {};
   // 由 ERP 對帳單帶來：第一次載入用對帳單涵蓋的日期範圍，才不會漏掉落在帳款月截止日之後的明細
-  if(!(o && o.rg) && DEEP.erp && DEEP.rg_from && DEEP.rg_to && !DEEP._rgUsed && pid===DEEP.party_id){
-    DEEP._rgUsed=1; rg={date_to:DEEP.rg_to};   // 只帶結數日（起日留空＝往前未對完的照舊帶入）
+  if(!(o && o.rg) && DEEP.erp && DEEP.rg_from && DEEP.rg_to && !DEEP._rgOff && pid===DEEP.party_id){
+    rg={date_to:DEEP.rg_to};   // 只帶結數日（起日留空＝往前未對完的照舊帶入）
   }
   $.post(API+'?action=sheet_load',$.extend({side:SIDE, party_id:pid, billing_month:bm}, rg),function(r){
     if(!r.ok){ toast(esc(r.error||'載入失敗'), true); return; }
@@ -1821,12 +1822,9 @@ var syncMissing=[], autoAdded=[], exclList=[], staleList=[];
 /* 依出貨單號排序（單號相同依明細 id）；onlyNew＝只把新帶入的列插到同單號／較大單號之前，其餘維持原順序 */
 function sortByDocNo(onlyNew){
   var tops=lines.filter(function(l){ return !l.split_parent_key; });
-  // 退貨單與出貨單混合排序：先依日期，同日再依單號、明細 id
-  var cmp=function(a,b){
-    var da=String(a.doc_date||''), db=String(b.doc_date||'');
-    if(da!==db) return da<db?-1:1;
-    var x=String(a.doc_no||''), y=String(b.doc_no||''); return x<y?-1:(x>y?1:((a.src_id||0)-(b.src_id||0)));
-  };
+  // 單號排序：忽略前綴（IR／IS…）只比後面的數字，退貨單與出貨單自然混排；同單號依明細 id
+  var dn=function(l){ return String(l.doc_no||'').replace(/^[A-Za-z]+/,''); };
+  var cmp=function(a,b){ var x=dn(a), y=dn(b); return x<y?-1:(x>y?1:((a.src_id||0)-(b.src_id||0))); };
   var out;
   if(onlyNew){
     var olds=tops.filter(function(l){ return !l._new; }).sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); });

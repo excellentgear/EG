@@ -445,7 +445,7 @@ function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm, arr
         }));
     }
     if ($side === 'ar') {   // 出貨單依「出貨單號」排序（不依日期），同單號依明細 id 維持 ERP 原順序
-        usort($b['lines'], fn($x, $y) => strcmp((string)$x['doc_no'], (string)$y['doc_no']) ?: ((int)$x['src_id'] <=> (int)$y['src_id']));
+        usort($b['lines'], fn($x, $y) => strcmp(preg_replace('/^[A-Za-z]+/', '', (string)$x['doc_no']), preg_replace('/^[A-Za-z]+/', '', (string)$y['doc_no'])) ?: ((int)$x['src_id'] <=> (int)$y['src_id']));
     } else {
         usort($b['lines'], fn($x, $y) => strcmp((string)$x['doc_date'], (string)$y['doc_date'])
                                        ?: strcmp((string)$x['doc_no'], (string)$y['doc_no']));
