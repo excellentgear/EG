@@ -535,8 +535,8 @@ table.ot tr.lock{color:#a08a6a;}
 <!-- 底部動作條 -->
 <div class="dock" id="dock">
   <span>已對到 <b id="dkChecked">0</b> / <span id="dkLines">0</span> 列</span>
-  <span>我方 <b id="dkOur">0</b></span>
-  <span title="只計已勾選（已對到）的列">已勾選：未稅 <b id="dkSelNet">0</b>　稅金 <b id="dkSelTax">0</b>　含稅 <b id="dkSelTotal">0</b></span>
+  <span>我方 <span id="dkOur">0</span></span>
+  <span title="只計已勾選（已對到）的列" style="font-size:19px;font-weight:bold;">已勾選：未稅 <b id="dkSelNet" style="font-size:26px;">0</b>　稅金 <b id="dkSelTax" style="font-size:26px;">0</b>　含稅 <b id="dkSelTotal" style="font-size:26px;">0</b></span>
   <span id="dkDiff"></span>
   <span class="sp">
     <button id="btnSave" class="go"><i class="fa fa-save"></i> 暫存進度</button>
