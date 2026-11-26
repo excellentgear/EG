@@ -47,6 +47,12 @@ function eg_cust_opt_ensure(PDO $db): void
         if (!isset($have['recon_channels'])) {
             $db->exec("ALTER TABLE customer_list ADD COLUMN recon_channels VARCHAR(200) NULL DEFAULT NULL COMMENT '客戶可接受的對帳單提供方式（逗號分隔，選項見 cust_option recon_channel）'");
         }
+        if (!isset($have['recon_line_contact'])) {
+            $db->exec("ALTER TABLE customer_list ADD COLUMN recon_line_contact VARCHAR(50) NULL DEFAULT NULL COMMENT '勾選私Line時指定的聯絡人姓名（來自 customer_contacts）'");
+            // 欄位第一次建立時順便補上「私Line」選項（只此一次，之後管理員刪除不會被補回）
+            $mx = $db->query("SELECT COALESCE(MAX(sort_order),0) FROM cust_option WHERE kind='recon_channel'")->fetchColumn();
+            $db->prepare("INSERT IGNORE INTO cust_option (kind,opt_name,sort_order) VALUES ('recon_channel','私Line',?)")->execute([(int)$mx + 1]);
+        }
         if (!isset($have['einv_max_pages'])) {
             $db->exec("ALTER TABLE customer_list ADD COLUMN einv_max_pages INT NULL DEFAULT NULL COMMENT '電子發票頁數上限（NULL=不限；1頁=每張發票筆數上限的1倍，超過時同出貨單同料號同數量金額加總）'");
         }

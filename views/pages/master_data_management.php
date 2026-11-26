@@ -4222,6 +4222,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (empty($customer_id)) throw new Exception('客戶代碼不可為空');
             if (empty($customer))    throw new Exception('客戶名稱不可為空');
 
+            // 私Line：勾選時必須從聯絡人挑一位（後端同規則再擋；沒送 recon_channels＝不動）
+            $recon_line_contact = null;   // null＝不動；''＝清除
+            if ($recon_channels !== null) {
+                if (in_array('私Line', explode(',', $recon_channels), true)) {
+                    $rlc = trim((string)($_POST['recon_line_contact'] ?? ''));
+                    $names = [];
+                    foreach ($contacts as $_ct) { $n = trim((string)($_ct['name'] ?? '')); if ($n !== '') $names[] = $n; }
+                    if (!empty($need_recon_stmt) && ($rlc === '' || !in_array($rlc, $names, true))) throw new Exception('已勾選「私Line」，請從聯絡人中選擇一位（聯絡人需先建立）');
+                    $recon_line_contact = in_array($rlc, $names, true) ? $rlc : '';
+                } else {
+                    $recon_line_contact = '';
+                }
+            }
+
             $customer_grade = in_array($customer_grade, ['S','A','B','C','D']) ? $customer_grade : null;
             $customer_fax2 = trim($_POST['customer_fax2'] ?? '');
             $customer_zip  = trim($_POST['customer_zip'] ?? '');
@@ -4296,6 +4310,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 客戶可接受的對帳單提供方式（獨立欄位，沒送＝不動）
             if ($recon_channels !== null) {
                 $pdo->prepare("UPDATE customer_list SET recon_channels=? WHERE customer_id=?")->execute([$recon_channels === '' ? null : $recon_channels, $customer_id]);
+                if ($recon_line_contact !== null) {
+                    $pdo->prepare("UPDATE customer_list SET recon_line_contact=? WHERE customer_id=?")->execute([$recon_line_contact === '' ? null : $recon_line_contact, $customer_id]);
+                }
             }
             // 本次新增欄位（收款方式多選／月結方式／發票收件／出貨無特殊要求）：獨立 UPDATE，
             // 只更新「有權限且前端有送」的欄位，沒送＝保留原值（鐵律8；不動上面既有 INSERT/UPDATE 以免影響現有流程）
@@ -11098,6 +11115,11 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
                 </label>
                 <?php endforeach; ?>
                 <?php if (!empty($is_admin)): ?><button type="button" class="btn btn-xs btn-default" onclick="openCustOptMgr('recon_channel')"><i class="fa fa-cog"></i> 管理選項</button><?php endif; ?>
+            </div>
+            <div id="cf-rlc-row" style="display:none;margin-top:6px;">
+                <label style="font-weight:normal;margin-right:6px;">私Line 聯絡人 <span style="color:#DD5138;">*</span></label>
+                <select id="cf-recon_line_contact" class="form-control input-sm" style="display:inline-block;width:220px;" <?= $mdReconEdit?'':'disabled' ?>></select>
+                <span id="cf-rlc-err" style="color:#DD5138;font-size:12px;margin-left:8px;"></span>
             </div>
         </div>
     </div>
@@ -19822,6 +19844,7 @@ function syncContactsHidden() {
     });
     var el = document.getElementById('cf-contacts');
     if (el) el.value = JSON.stringify(contacts);
+    if (typeof _rlcRefresh === 'function') _rlcRefresh();
 }
 
 function switchCustTab(name, el) {
@@ -20000,7 +20023,38 @@ function onNeedReconStmtChange() {
 }
 // ── 客戶可接受對帳單提供方式（多選）／選項維護 ──
 function _getRcList() { var a = []; document.querySelectorAll('#cf-rc-wrap .cf-rc-chk').forEach(function(c){ if (c.checked) a.push(c.value); }); return a; }
-function _setRcList(list) { list = list || []; document.querySelectorAll('#cf-rc-wrap .cf-rc-chk').forEach(function(c){ c.checked = list.indexOf(c.value) >= 0; }); }
+function _setRcList(list) {
+    list = list || [];
+    document.querySelectorAll('#cf-rc-wrap .cf-rc-chk').forEach(function(c){ c.checked = list.indexOf(c.value) >= 0; });
+    window._rlcSaved = '';
+    var s = document.getElementById('cf-recon_line_contact'); if (s) s.innerHTML = '';
+    _rlcRefresh();
+}
+/** 私Line：勾選時顯示「聯絡人」下拉（選項取自目前聯絡人分頁的姓名），沒勾就隱藏 */
+function _rlcRefresh() {
+    var row = document.getElementById('cf-rlc-row'), sel = document.getElementById('cf-recon_line_contact');
+    if (!row || !sel) return;
+    var on = _getRcList().indexOf('私Line') >= 0;
+    row.style.display = on ? '' : 'none';
+    if (!on) return;
+    var names = [];
+    document.querySelectorAll('#cf-contacts-wrap .contact-row .ct-name').forEach(function(t){
+        var n = t.value.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+        if (n && names.indexOf(n) < 0) names.push(n);
+    });
+    var cur = sel.value || window._rlcSaved || '';
+    if (names.indexOf(cur) < 0) cur = '';
+    sel.innerHTML = '';
+    var o0 = document.createElement('option'); o0.value = ''; o0.textContent = names.length ? '請選擇聯絡人' : '（請先於「聯絡人」分頁建立聯絡人）'; sel.appendChild(o0);
+    names.forEach(function(n){ var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); });
+    sel.value = cur;
+    var err = document.getElementById('cf-rlc-err');
+    if (err) err.textContent = (cur === '') ? '必須選擇一位聯絡人' : '';
+}
+document.addEventListener('change', function(e){
+    var t = e.target;
+    if (t && t.matches && (t.matches('#cf-rc-wrap .cf-rc-chk') || t.id === 'cf-recon_line_contact')) _rlcRefresh();
+});
 /** 管理員維護選項後，重畫勾選清單並保留目前勾選 */
 function _rebuildCustOpt(kind, options) {
     var isPm = kind === 'pay_method';
@@ -20272,10 +20326,12 @@ function openCustomerModal(customer_id, readonly) {
                 var _ep = document.getElementById('cf-einv_max_pages'); if (_ep) _ep.value = d.einv_max_pages || '';
                 var _em = document.getElementById('cf-einv_merge_part'); if (_em) _em.checked = (d.einv_merge_part == 1 || d.einv_merge_part === '1');
                 _setRcList(d.recon_channels ? String(d.recon_channels).split(',').filter(Boolean) : []);
+                window._rlcSaved = d.recon_line_contact || '';
                 onNeedReconStmtChange();
             }
             // Contacts
             loadContactRows(d.contacts||[]);
+            _rlcRefresh();
             if (window.EGPartyExtra) EGPartyExtra.load('cf', d);   // 別名／更名紀錄／其他地址
             // Industries
             var selIndustries = d.industries || [];
@@ -20401,7 +20457,16 @@ function submitCustomerForm() {
         data.einv_max_pages  = document.getElementById('cf-einv_max_pages').value;
         data.einv_merge_part = document.getElementById('cf-einv_merge_part').checked ? 1 : 0;
     }
-    if (document.getElementById('cf-rc-wrap')) data.recon_channels = _getRcList().join(',');   // 無權限者頁面上沒有這組欄位＝不送＝後端不動
+    if (document.getElementById('cf-rc-wrap')) {   // 無權限者頁面上沒有這組欄位＝不送＝後端不動
+        data.recon_channels = _getRcList().join(',');
+        data.recon_line_contact = (document.getElementById('cf-recon_line_contact') || {value:''}).value;
+        var _nrsEl = document.getElementById('cf-need_recon_stmt');
+        if (_nrsEl && _nrsEl.checked && _getRcList().indexOf('私Line') >= 0 && !data.recon_line_contact) {
+            _rlcRefresh();
+            showToast('已勾選「私Line」，請從聯絡人中選擇一位（聯絡人需先建立）','error');
+            return;
+        }
+    }
     if (!data.customer_id) { showToast('客戶代碼不可為空','error'); return; }
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }
     if (data.settlement_mode==='FIXED' && (!data.settlement_day||data.settlement_day<1||data.settlement_day>31)) {
