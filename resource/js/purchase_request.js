@@ -1978,7 +1978,7 @@ function saveItem() {
         default_unit_id: $('#itUnit').val() || 0, default_vendor_name: $('#itVendor').val(),
         default_vendor_id: $('#itVendor').data('vid') || '', note: $('#itNote').val(),
         tag_ids: JSON.stringify(tags) }, 'POST').done(function (r) {
-        if (!ITEMEDIT.id) { alert('已建立品項 ' + r.item_code + '，接著加規格'); loadItems(); openItem(r.item_id); }
+        if (!ITEMEDIT.id) { loadItems(); openItem(r.item_id); }
         else { alert('已儲存'); loadItems(); }
     }).fail(fail);
 }
