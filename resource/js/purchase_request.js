@@ -1587,8 +1587,7 @@ function openRecv() {
             '<td><select class="rc-mode">' + modes + '</select></td>' +
             '<td><input type="text" class="rc-loc" list="rcLocList" autocomplete="off" data-eg-skip placeholder="輸入或選擇儲位" value="' + esc(locCode) + '" style="width:100%;">' +
                 '<select class="rc-cat" style="width:100%;margin-top:3px;display:none;" title="這個品項沒有採購料號：入庫要選「品項種類」（不會建立料號）">' + catOpts + '</select></td>' +
-            '<td class="rc-recv-cell"><select class="rc-dept" data-eg-skip style="width:100%;margin-bottom:3px;"><option value="">（預設：請購人）</option></select>' +
-                '<select class="rc-recv" data-eg-skip style="width:100%;display:none;"><option value="">請選擇人員</option></select></td>' +
+            '<td class="rc-recv-cell"><select class="rc-recv" data-eg-skip style="width:100%;"><option value="">（預設：請購人）</option></select></td>' +
             '<td><input type="text" class="rc-remark" style="width:100%;"></td></tr>';
     });
     $('#recvBody').html(h);
@@ -1722,10 +1721,10 @@ function toggleRecvCols() {
         var isStock = (m === 'stock'), isDirect = (m === 'direct');
         $(this).find('.rc-loc').toggle(isStock);
         $(this).find('.rc-cat').toggle(isStock);
-        $(this).find('.rc-dept').toggle(isDirect);
+        $(this).find('.rc-recv').toggle(isDirect);
         if (!isStock) $(this).find('.rc-loc').val('');
-        if (!isDirect) { $(this).find('.rc-dept').val(''); $(this).find('.rc-recv').val('').hide(); }
-        else { $(this).find('.rc-recv').toggle(!!$(this).find('.rc-dept').val()); fillRecvPeople($(this), true); }
+        if (!isDirect) $(this).find('.rc-recv').html('<option value="">（預設：請購人）</option>').val('');
+        else fillRecvPeople($(this));
     });
 }
 // 交付對象：先選部門再選人，或直接輸入部分姓名（datalist 模糊篩選）；不填＝請購人（後端預設）
@@ -1735,23 +1734,26 @@ function loadRecvPeople(cb) {
     api('recv_people', {}).done(function (r) { RECV_PEOPLE = r.people || []; cb(); }).fail(function () { RECV_PEOPLE = []; cb(); });
 }
 function recvPeopleLabel(p) { return p.name + (p.dept_name ? '（' + p.dept_name + '）' : ''); }
-function fillRecvPeople($tr, initOnly) {
+// 同一個下拉：先列部門，選了部門後同位置換成該部門人員（第一項可回到部門清單）；選到數字＝人員 id
+function recvDeptOpts() {
+    var seen = {}, h = '<option value="">（預設：請購人）</option>';
+    RECV_PEOPLE.forEach(function (p) { if (p.dept_name && !seen[p.dept_name]) { seen[p.dept_name] = 1; h += '<option value="d:' + esc(p.dept_name) + '">' + esc(p.dept_name) + '</option>'; } });
+    return h;
+}
+function fillRecvPeople($tr) {
     loadRecvPeople(function () {
-        var $dept = $tr.find('.rc-dept');
-        if ($dept.find('option').length <= 1) {
-            var seen = {}, h = '<option value="">（預設：請購人）</option>';
-            RECV_PEOPLE.forEach(function (p) { if (p.dept_name && !seen[p.dept_name]) { seen[p.dept_name] = 1; h += '<option value="' + esc(p.dept_name) + '">' + esc(p.dept_name) + '</option>'; } });
-            $dept.html(h);
-        }
-        if (initOnly) return;   // 只補部門選項，不動已選的人
-        var dn = $dept.val(), $r = $tr.find('.rc-recv'), ph = '<option value="">請選擇人員</option>';
-        if (!dn) { $r.html(ph).val('').hide(); return; }
-        RECV_PEOPLE.forEach(function (p) { if (p.dept_name === dn) ph += '<option value="' + p.id + '">' + esc(p.name) + '</option>'; });
-        $r.html(ph).val('').show();
+        var $s = $tr.find('.rc-recv');
+        if ($s.find('option').length <= 1) $s.html(recvDeptOpts());
     });
 }
-// 選了部門才出現人員選單；部門改回預設＝交給請購人
-$(document).on('change', '.rc-dept', function () { fillRecvPeople($(this).closest('tr')); });
+$(document).on('change', '.rc-recv', function () {
+    var $s = $(this), v = String($s.val() || '');
+    if (v === 'back') { $s.html(recvDeptOpts()).val(''); return; }
+    if (v.indexOf('d:') !== 0) return;
+    var dn = v.slice(2), h = '<option value="back">← 重選部門（' + esc(dn) + '）</option><option value="" selected>請選擇人員</option>';
+    (RECV_PEOPLE || []).forEach(function (p) { if (p.dept_name === dn) h += '<option value="' + p.id + '">' + esc(p.name) + '</option>'; });
+    $s.html(h).val('');
+});
 /* ── 綁定採購料號（採購側）─────────────────────────────
    申請人手打的品名沒有採購料號，由採購在「詢價」或「登錄到貨」時決定它是哪一支。
    舊版只用 prompt 問類別就自動建品項＋自動配號，主檔於是長出一堆同名品項、
