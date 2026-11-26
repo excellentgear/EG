@@ -45,6 +45,24 @@ function orp_ensure_schema(PDO $db): void
     } catch (Throwable $e) { error_log('orp_ensure_schema: ' . $e->getMessage()); }
 }
 
+/** 設定權限：管理員全開；其餘只看角色功能碼（刻意不 fail-open：沒指派角色的人一律沒有） */
+function orp_perms(PDO $db, int $uid): array
+{
+    $p = ['add' => false, 'edit' => false, 'del' => false];
+    if ($uid <= 0) return $p;
+    try {
+        require_once __DIR__ . '/order_track_perm_lib.php';
+        if (ot_is_admin($db, $uid)) return ['add' => true, 'edit' => true, 'del' => true];
+        require_once __DIR__ . '/role_features_helper.php';
+        $f = rf_load_user_features_all($db, $uid);
+        if (empty($f)) return $p;
+        $all = rf_has_feature($f, 'all');
+        return ['add' => $all || rf_has_feature($f, 'ot_report_opt_add'),
+                'edit' => $all || rf_has_feature($f, 'ot_report_opt_edit'),
+                'del' => $all || rf_has_feature($f, 'ot_report_opt_delete')];
+    } catch (Throwable $e) { return $p; }
+}
+
 /** 製程大類清單（供設定下拉） */
 function orp_process_types(PDO $db): array
 {
@@ -150,11 +168,14 @@ function orp_apply(PDO $db, int $orderId, array $chk, int $uid): void
     } catch (Throwable $e) { error_log('orp_apply: ' . $e->getMessage()); }
 }
 
-/** 管理員儲存設定。$rows＝[{opt_id?,opt_name,process_type_id,is_active}]（順序即排序）。 */
-function orp_save_defs(PDO $db, array $rows, string $uname): array
+/** 儲存設定（依權限）。$rows＝[{opt_id?,opt_name,process_type_id,is_active}]（順序即排序）。
+ *  新增需 add、改名/大類/啟用/排序需 edit、從清單移除需 del（且該項目未被任何訂單使用）。 */
+function orp_save_defs(PDO $db, array $rows, string $uname, array $perm): array
 {
     orp_ensure_schema($db);
-    $clean = []; $seen = [];
+    $cur = [];
+    foreach ($db->query("SELECT * FROM order_report_opt")->fetchAll(PDO::FETCH_ASSOC) as $o) $cur[(int)$o['opt_id']] = $o;
+    $clean = []; $seen = []; $keepIds = [];
     foreach ($rows as $i => $r) {
         $name = trim((string)($r['opt_name'] ?? ''));
         if ($name === '') return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列：請輸入項目名稱'];
@@ -166,30 +187,39 @@ function orp_save_defs(PDO $db, array $rows, string $uname): array
         if ($pt <= 0) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列（' . $name . '）：請選擇對應的製程大類'];
         $chk = $db->prepare("SELECT 1 FROM process_type WHERE process_type_id=?"); $chk->execute([$pt]);
         if (!$chk->fetchColumn()) return ['ok' => false, 'msg' => '第 ' . ($i + 1) . ' 列：製程大類不存在'];
-        $clean[] = ['id' => (int)($r['opt_id'] ?? 0), 'name' => $name, 'pt' => $pt, 'active' => !empty($r['is_active']) ? 1 : 0, 'sort' => $i + 1];
+        $id = (int)($r['opt_id'] ?? 0);
+        $active = !empty($r['is_active']) ? 1 : 0;
+        if ($id > 0) {
+            if (!isset($cur[$id])) return ['ok' => false, 'msg' => '項目已不存在，請重新開啟設定'];
+            $o = $cur[$id]; $keepIds[] = $id;
+            $changed = $o['opt_name'] !== $name || (int)$o['process_type_id'] !== $pt || (int)$o['is_active'] !== $active || (int)$o['sort_order'] !== $i + 1;
+            if ($changed && empty($perm['edit'])) return ['ok' => false, 'msg' => '您沒有「修改」報告項目的權限'];
+        } elseif (empty($perm['add'])) {
+            return ['ok' => false, 'msg' => '您沒有「新增」報告項目的權限'];
+        }
+        $clean[] = ['id' => $id, 'name' => $name, 'pt' => $pt, 'active' => $active, 'sort' => $i + 1];
     }
-    $keepIds = [];
+    // 要刪除的（原有但這次沒送來）：需 del 權限，且不可已被訂單使用
+    foreach ($cur as $id => $o) {
+        if (in_array($id, $keepIds, true)) continue;
+        if (empty($perm['del'])) return ['ok' => false, 'msg' => '您沒有「刪除」報告項目的權限'];
+        $u = $db->prepare("SELECT COUNT(*) FROM order_report_sel WHERE opt_id=?"); $u->execute([$id]);
+        if ((int)$u->fetchColumn() > 0) return ['ok' => false, 'msg' => '「' . $o['opt_name'] . '」已被訂單使用，不能刪除（可改為取消「啟用」）'];
+    }
     $db->beginTransaction();
     try {
         foreach ($clean as $c) {
             if ($c['id'] > 0) {
                 $db->prepare("UPDATE order_report_opt SET opt_name=?,process_type_id=?,is_active=?,sort_order=? WHERE opt_id=?")
                    ->execute([$c['name'], $c['pt'], $c['active'], $c['sort'], $c['id']]);
-                $keepIds[] = $c['id'];
             } else {
                 $db->prepare("INSERT INTO order_report_opt (opt_name,process_type_id,is_active,sort_order,created_at,created_by) VALUES (?,?,?,?,NOW(),?)")
                    ->execute([$c['name'], $c['pt'], $c['active'], $c['sort'], $uname]);
                 $keepIds[] = (int)$db->lastInsertId();
             }
         }
-        // 從畫面移除的：沒被訂單用過就刪，用過就改為停用（歷史訂單不受影響）
-        $all = $db->query("SELECT opt_id FROM order_report_opt")->fetchAll(PDO::FETCH_COLUMN);
-        foreach ($all as $id) {
-            $id = (int)$id;
-            if (in_array($id, $keepIds, true)) continue;
-            $u = $db->prepare("SELECT COUNT(*) FROM order_report_sel WHERE opt_id=?"); $u->execute([$id]);
-            if ((int)$u->fetchColumn() > 0) $db->prepare("UPDATE order_report_opt SET is_active=0 WHERE opt_id=?")->execute([$id]);
-            else $db->prepare("DELETE FROM order_report_opt WHERE opt_id=?")->execute([$id]);
+        foreach (array_keys($cur) as $id) {
+            if (!in_array($id, $keepIds, true)) $db->prepare("DELETE FROM order_report_opt WHERE opt_id=?")->execute([$id]);
         }
         $db->commit();
     } catch (Throwable $e) {
