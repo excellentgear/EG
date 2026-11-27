@@ -206,7 +206,7 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     $rf = function (float $v) use ($rounding): float {
         if ($rounding === 'round') return round($v, 0, PHP_ROUND_HALF_UP);
         if ($rounding === 'floor') return floor($v + 1e-9);
-        return $v;
+        return round($v, 0, PHP_ROUND_HALF_UP);   // 不處理也一律逐列四捨五入，傳票金額不留小數
     };
     $shipT = $rf($shipT); $retT = $rf($retT);
     $total = round($shipT - $retT, 2);
@@ -333,14 +333,14 @@ function acc_voucher_list(PDO $db, array $f): array
     $w = []; $p = [];
     $kw = trim((string)($f['kw'] ?? ''));
     if ($kw !== '') {
-        $w[] = "(v.voucher_no LIKE ? OR v.party_name LIKE ? OR v.note LIKE ?
+        $w[] = "(v.voucher_no LIKE ? OR v.party_name LIKE ? OR v.note LIKE ? OR v.party_id LIKE ?
                  OR EXISTS (SELECT 1 FROM acc_voucher_item i WHERE i.voucher_id=v.voucher_id AND (i.src_no LIKE ? OR i.product_id LIKE ?))
                  OR EXISTS (SELECT 1 FROM acc_invoice_item ii JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id
                             JOIN acc_voucher_item i2 ON i2.src_type=ii.src_type AND i2.src_id=ii.src_id
                             WHERE i2.voucher_id=v.voucher_id AND inv.invoice_no LIKE ?)
                  OR EXISTS (SELECT 1 FROM acc_recon_sheet vs WHERE v.side='ap' AND vs.side='ap' AND vs.party_id=v.party_id
                             AND vs.billing_month=v.billing_month AND vs.vendor_inv_no LIKE ?))";
-        for ($i = 0; $i < 7; $i++) $p[] = '%' . $kw . '%';
+        for ($i = 0; $i < 8; $i++) $p[] = '%' . $kw . '%';
     }
     foreach (['bm_from' => 'v.billing_month >= ?', 'bm_to' => 'v.billing_month <= ?'] as $k => $c)
         if (preg_match('/^\d{4}-\d{2}$/', (string)($f[$k] ?? ''))) { $w[] = $c; $p[] = $f[$k]; }
