@@ -1907,7 +1907,7 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
                                     customer_address, customer_tel, customer_fax,
                                     billing_contact, settlement_mode, settlement_day,
                                     payment_method, net_days, need_recon_stmt, recon_provide_by,
-                                    recon_channels, billing_note, einv_max_pages, einv_merge_part,
+                                    recon_channels, billing_note, einv_max_pages, einv_merge_part, einv_split_part,
                                     allow_deduct, deduct_pct
                              FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
             $c['alias_of'] = null;
@@ -3010,7 +3010,19 @@ function acc_create_invoices(PDO $db, array $sel, string $userId, bool $splitByS
                 continue;
             }
 
-            $batches = $splitBySrc ? array_map(fn($it) => [$it], $grp['items']) : [$grp['items']];
+            if ($splitBySrc) {
+                $batches = array_map(fn($it) => [$it], $grp['items']);
+            } elseif (!empty((acc_customer_of_name($db, $name) ?? [])['einv_split_part'])) {
+                // 客戶主檔勾了「每種料號一張發票」：依料號分組（有料號主檔 id 用 id，否則用品名規格）
+                $byPart = [];
+                foreach ($grp['items'] as $it) {
+                    $pk = !empty($it['product_id']) ? 'p' . $it['product_id'] : 's' . trim((string)($it['spec'] ?? ''));
+                    $byPart[$pk][] = $it;
+                }
+                $batches = array_values($byPart);
+            } else {
+                $batches = [$grp['items']];
+            }
             foreach ($batches as $items) {
                 $net = 0.0;
                 foreach ($items as $it) $net += $it['amount'];
@@ -3075,6 +3087,10 @@ function acc_invoice_list(PDO $db, array $f): array
     $sql = "SELECT i.*,
                    (SELECT COUNT(*) FROM acc_invoice_item x WHERE x.invoice_id = i.invoice_id) AS item_cnt,
                    (SELECT COUNT(*) FROM acc_invoice_attach iat WHERE iat.invoice_id = i.invoice_id) AS attach_cnt,
+                   (SELECT MAX(vi.voucher_id) FROM acc_invoice_item xi
+                      JOIN acc_voucher_item vi ON vi.src_type = xi.src_type AND vi.src_id = xi.src_id
+                      JOIN acc_voucher av ON av.voucher_id = vi.voucher_id AND av.status <> 'void'
+                     WHERE xi.invoice_id = i.invoice_id) AS vch_id,
                    COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
                              WHERE a.invoice_id = i.invoice_id), 0) AS paid_amt
             FROM acc_invoice i

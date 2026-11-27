@@ -4375,8 +4375,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (_mdPerm('recon', 'edit', $is_admin) && array_key_exists('einv_max_pages', $_POST)) {
                 $_ep = trim((string)$_POST['einv_max_pages']);
                 $_ep = ($_ep === '' || !ctype_digit($_ep) || (int)$_ep < 1) ? null : min(99, (int)$_ep);
-                $pdo->prepare("UPDATE customer_list SET einv_max_pages=?, einv_merge_part=? WHERE customer_id=?")
-                    ->execute([$_ep, intval($_POST['einv_merge_part'] ?? 0) ? 1 : 0, $customer_id]);
+                $pdo->prepare("UPDATE customer_list SET einv_max_pages=?, einv_merge_part=?, einv_split_part=? WHERE customer_id=?")
+                    ->execute([$_ep, intval($_POST['einv_merge_part'] ?? 0) ? 1 : 0, intval($_POST['einv_split_part'] ?? 0) ? 1 : 0, $customer_id]);
             }
             // 客戶可接受的對帳單提供方式（獨立欄位，沒送＝不動）
             if ($recon_channels !== null) {
@@ -11186,6 +11186,9 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
                 <input type="checkbox" id="cf-einv_merge_part" value="1" style="margin-right:6px;" <?= $mdReconEdit?'':'disabled' ?>>同料號合併一筆（不分出貨單，區間內同料號數量加總）
             </label>
             <div style="font-size:11px;color:#888;">頁數上限的筆數＝管理員在「發票開立」設定的每張發票筆數上限 × 頁數；超過時會把同出貨單同料號同數量的金額加總。</div>
+            <label style="font-weight:normal;cursor:pointer;margin-top:8px;">
+                <input type="checkbox" id="cf-einv_split_part" value="1" style="margin-right:6px;" <?= $mdReconEdit?'':'disabled' ?>>每種料號開一張發票（開立發票時自動依料號分開，同一鎖帳資料開成多張）
+            </label>
         </div>
     </div>
 </div>
@@ -20541,6 +20544,7 @@ function openCustomerModal(customer_id, readonly) {
                 if (rpb) rpb.value = d.recon_provide_by || 'company';
                 var _ep = document.getElementById('cf-einv_max_pages'); if (_ep) _ep.value = d.einv_max_pages || '';
                 var _em = document.getElementById('cf-einv_merge_part'); if (_em) _em.checked = (d.einv_merge_part == 1 || d.einv_merge_part === '1');
+                var _es = document.getElementById('cf-einv_split_part'); if (_es) _es.checked = (d.einv_split_part == 1 || d.einv_split_part === '1');
                 _setRcList(d.recon_channels ? String(d.recon_channels).split(',').filter(Boolean) : []);
                 window._rlcSaved = d.recon_line_contact || '';
                 onNeedReconStmtChange();
@@ -20591,6 +20595,7 @@ function openCustomerModal(customer_id, readonly) {
             var rpb0 = document.getElementById('cf-recon_provide_by'); if (rpb0) rpb0.value = 'company';
             var _ep0 = document.getElementById('cf-einv_max_pages'); if (_ep0) _ep0.value = '';
             var _em0 = document.getElementById('cf-einv_merge_part'); if (_em0) _em0.checked = false;
+            var _es0 = document.getElementById('cf-einv_split_part'); if (_es0) _es0.checked = false;
             _setRcList([]);
             onNeedReconStmtChange();
         }
@@ -20676,6 +20681,7 @@ function submitCustomerForm() {
     if (document.getElementById('cf-einv_max_pages')) {
         data.einv_max_pages  = document.getElementById('cf-einv_max_pages').value;
         data.einv_merge_part = document.getElementById('cf-einv_merge_part').checked ? 1 : 0;
+        data.einv_split_part = document.getElementById('cf-einv_split_part').checked ? 1 : 0;
     }
     if (document.getElementById('cf-rc-wrap')) {   // 無權限者頁面上沒有這組欄位＝不送＝後端不動
         data.recon_channels = _getRcList().join(',');

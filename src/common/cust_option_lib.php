@@ -62,6 +62,9 @@ function eg_cust_opt_ensure(PDO $db): void
         if (!isset($have['einv_merge_part'])) {
             $db->exec("ALTER TABLE customer_list ADD COLUMN einv_merge_part TINYINT(1) NOT NULL DEFAULT 0 COMMENT '電子發票同料號合併一筆（1=不分出貨單、區間內同料號數量加總）'");
         }
+        if (!isset($have['einv_split_part'])) {
+            $db->exec("ALTER TABLE customer_list ADD COLUMN einv_split_part TINYINT(1) NOT NULL DEFAULT 0 COMMENT '開發票時每種料號各開一張（1=依料號分開開立不同發票）'");
+        }
     } catch (Throwable $e) { error_log('eg_cust_opt_ensure: ' . $e->getMessage()); }
 }
 
