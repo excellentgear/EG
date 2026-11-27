@@ -704,6 +704,11 @@ if(CAN_EDIT){
     renderLines(arr);
   });
   $(document).on('change','#rlBody .rl-m',function(){ renderLines(readLines()); });
+  /* 支票號碼／客戶銀行帳號：英文自動轉大寫（保留游標位置） */
+  $(document).on('input','#rlBody .rl-cno, #rlBody .rl-cacct',function(){
+    var s=this.selectionStart, e=this.selectionEnd, u=this.value.toUpperCase();
+    if(u!==this.value){ this.value=u; try{ this.setSelectionRange(s,e); }catch(x){} }
+  });
   $(document).on('input','#rlBody .rl-amt',function(){ $(this).data('touched',1); rcUpdTotal(); });
   function rcTerms(){
     var c=$.trim($('#rcCust').val()); if(!c){ $('#rcTerms').text(''); return; }
@@ -916,7 +921,8 @@ if(CAN_EDIT){
           +(cur[v.invoice_id]!==undefined?cur[v.invoice_id]:'')+'"></td></tr>';
     });
     $('#alBox').html(h+'</tbody></table>');
-    updateTally();
+    // 尚未沖過帳：自動依舊到新帶入（收款時已輸入過金額，不必再填一次，仍可修改）
+    if(!allocs.length) $('#btnAlAuto').trigger('click'); else updateTally();
   }
 
   function updateTally(){
