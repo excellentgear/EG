@@ -142,9 +142,9 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <select id="jRound" style="width:auto;"><option value="none">不處理（保留小數）</option><option value="round">四捨五入至整數</option><option value="floor">無條件捨去至整數</option></select>
       <span style="color:#8a6d45;font-size:12.5px;">稅額以處理後的未稅金額計算</span></div>
     <div id="jExp" class="info" style="display:none;margin-bottom:6px;"></div>
-    <table class="a-t" id="tblJ"><thead><tr><th style="width:110px;">會計科目</th><th>科目名稱</th><th style="width:140px;">借方金額</th><th style="width:140px;">貸方金額</th><th style="width:60px;"></th></tr></thead>
+    <table class="a-t" id="tblJ"><thead><tr><th style="width:110px;">會計科目</th><th>科目名稱</th><th style="width:210px;">摘要</th><th style="width:130px;">借方金額</th><th style="width:130px;">貸方金額</th><th style="width:60px;"></th></tr></thead>
       <tbody id="jBody"></tbody>
-      <tfoot><tr><td colspan="2" style="text-align:right;font-weight:700;">合計</td><td class="r" id="jDsum" style="font-weight:700;">0</td><td class="r" id="jCsum" style="font-weight:700;">0</td><td id="jBal"></td></tr></tfoot></table>
+      <tfoot><tr><td colspan="3"style="text-align:right;font-weight:700;">合計</td><td class="r" id="jDsum" style="font-weight:700;">0</td><td class="r" id="jCsum" style="font-weight:700;">0</td><td id="jBal"></td></tr></tfoot></table>
     <div class="a-bar" style="margin-top:6px;">
       <input type="text" id="jCode" list="dlAcct" maxlength="10" placeholder="科目代號" style="width:110px;" autocomplete="off">
       <input type="text" id="jName" readonly tabindex="-1" data-eg-skip placeholder="科目名稱（輸入代號自動帶入）" style="width:200px;background:#f3ece0;cursor:default;" autocomplete="off">
@@ -390,7 +390,9 @@ function autoLines(){
   }
   L=L.filter(function(l){ return l.amount>0.004; });
   // 使用者手改的科目（以該列順序為鍵；借貸方向維持原分錄結構不變）
-  L.forEach(function(l,i){ l.ai=i; var o=AOVR[i]; if(o){ l.code=o.code; l.name=o.name; l.edited=1; } });
+  L.forEach(function(l,i){ l.ai=i; l.sysmemo=l.memo||''; var o=AOVR[i];
+    if(o && o.code && !(l.code==='4103000' && l.sysmemo)){ l.code=o.code; l.name=o.name; l.edited=1; }
+    if(o && o.memo!=null){ l.memo=o.memo; } });
   return L;
 }
 var jBalanced=false, AOVR={};
@@ -403,7 +405,15 @@ $(document).on('change','.j-acode',function(){
       || (function(){ var m=ACCT.filter(function(x){ return (x.code+' '+x.name).toUpperCase().indexOf(up)>=0; }); return m.length===1?m[0]:null; })();
     if(!a){ toast('科目「'+esc(v)+'」不在科目表（或符合多筆），請從清單選擇或輸入完整科目代號', true); journalRender(); return; }
   }
-  if(!a) delete AOVR[ai]; else AOVR[ai]={code:a.code,name:a.name};
+  var keep=AOVR[ai]&&AOVR[ai].memo!=null?AOVR[ai].memo:null;
+  if(!a){ delete AOVR[ai]; if(keep!=null) AOVR[ai]={memo:keep}; } else AOVR[ai]={code:a.code,name:a.name,memo:keep};
+  journalRender();
+});
+/* 摘要：可手動補充；系統帶出的「?%折扣」不可刪除（被刪掉會自動補回） */
+$(document).on('change','.j-amemo',function(){
+  var ai=+$(this).data('ai'), sys=String($(this).data('sys')||''), v=$.trim(this.value);
+  if(sys){ v=sys+(v?' '+v:''); }   // 輸入框只放補充文字，系統摘要固定在前
+  var o=AOVR[ai]||{}; o.memo=v; AOVR[ai]=o;
   journalRender();
 });
 /* 點到會計科目欄自動全選，方便直接覆寫（mouseup 會取消選取，故延後到下一個 tick） */
@@ -422,7 +432,17 @@ function journalRender(){
   var d=0,c=0,h='';
   rows.forEach(function(l){
     if(l.side==='D') d+=l.amount; else c+=l.amount;
-    h+='<tr><td>'+(l.auto&&CAN_EDIT?'<input type="text" class="j-acode" list="dlAcct" data-ai="'+l.ai+'" value="'+esc(l.code)+'" maxlength="40" autocomplete="off" data-eg-skip title="可直接改：輸入科目代號或名稱，從清單選擇" style="width:100%;box-sizing:border-box;'+(l.edited?'background:#FFF3D1;':'')+'">':esc(l.code))+'</td><td class="l" style="'+(l.side==='C'?'padding-left:26px;':'')+'">'+esc(l.name)+(l.memo?'<span style="color:#8a6d45;font-size:12px;">　'+esc(l.memo)+'</span>':'')+(l.auto?'':' <span class="lk">（追加）</span>')+'</td>'
+    var lock=(l.auto && l.code==='4103000' && l.sysmemo);   // 系統帶出的客戶折扣列：科目固定、「?%折扣」不可刪
+    var sysM=l.auto?String(l.sysmemo||''):'';
+    var sufM=sysM?String(l.memo||'').slice(sysM.length).replace(/^\s+/,''):'';
+    var memoCell = sysM
+      ? '<div style="display:flex;gap:4px;align-items:center;"><span style="white-space:nowrap;">'+esc(sysM)+' <span class="lk">🔒</span></span>'
+        +(CAN_EDIT?'<input type="text" class="j-amemo" data-ai="'+l.ai+'" data-sys="'+esc(sysM)+'" maxlength="80" value="'+esc(sufM)+'" placeholder="補充文字" data-eg-skip style="flex:1;min-width:0;box-sizing:border-box;">':esc(sufM))+'</div>'
+      : l.auto
+      ? (CAN_EDIT?'<input type="text" class="j-amemo" data-ai="'+l.ai+'" data-sys="'+esc(l.sysmemo||'')+'" maxlength="100" value="'+esc(l.memo||'')+'" data-eg-skip style="width:100%;box-sizing:border-box;">':esc(l.memo||''))
+      : esc(l.memo||'');
+    h+='<tr><td>'+(l.auto&&CAN_EDIT&&!lock?'<input type="text" class="j-acode" list="dlAcct" data-ai="'+l.ai+'" value="'+esc(l.code)+'" maxlength="40" autocomplete="off" data-eg-skip title="可直接改：輸入科目代號或名稱，從清單選擇" style="width:100%;box-sizing:border-box;'+(l.edited?'background:#FFF3D1;':'')+'">':esc(l.code))+'</td><td class="l" style="'+(l.side==='C'?'padding-left:26px;':'')+'">'+esc(l.name)+(lock?' <span class="lk">🔒</span>':'')+(l.auto?'':' <span class="lk">（追加）</span>')+'</td>'
+      +'<td>'+memoCell+'</td>'
       +'<td class="r">'+(l.side==='D'?nf2(l.amount):'')+'</td><td class="r">'+(l.side==='C'?nf2(l.amount):'')+'</td>'
       +'<td>'+(l.auto?'':'<button class="btn-mini j-del" data-i="'+l.ix+'">移除</button>')+'</td></tr>';
   });
@@ -462,6 +482,7 @@ function acRow(a){
     +'<td><input type="text" class="al-par" maxlength="10" value="'+esc(a.parent_code||'')+'" '+IN+dis+'></td><td style="text-align:center;"><input type="checkbox" class="al-on"'+(on?' checked':'')+dis+'></td>'+delc+'</tr>';
 }
 /* 由「會計設定」頁連過來：?open=acct／coacct 自動開啟對應設定視窗 */
+setTimeout(function(){ var m2=/[?&]vch=(\d+)/.exec(location.search); if(m2) $('<button class="v-open" data-id="'+m2[1]+'">').appendTo('body').hide().click().remove(); },900);
 setTimeout(function(){ var m=/[?&]open=(acct|coacct)/.exec(location.search); if(m) $(m[1]==='acct'?'#btnAcctCfg':'#btnCoAcct').click(); },900);
 /* 本公司入帳帳戶 */
 var CO=[];
