@@ -9,7 +9,7 @@
  *
  * 應入帳日期（依客戶主檔的結帳／付款設定推算）：
  *   依天數（net_unit=days 或未設）：發票日期（沒有則請款日期）＋ net_days 天
- *   月結／次月結：帳款月份「月底」＋ net_days 天（次月結的 net_days 在主檔已含 +30）
+ *   月結／次月結：請款日期（傳票日期）＋ net_days 天（次月結的 net_days 在主檔已含 +30；尚未開傳票才用帳款月份月底）
  *   客戶沒填天數時無法推算（顯示「未設定」，不亂猜）
  * 請款日期＝該發票明細所屬傳票的傳票日期（還沒開傳票則空白）。
  */
@@ -72,8 +72,10 @@ function acc_rcpt_due_date(array $terms, ?string $billingMonth, ?string $invoice
     $n = (int)$terms['net_days'];
     $unit = (string)($terms['net_unit'] ?? '');
     if ($unit === 'month' || $unit === 'next' || $unit === 'months') {
-        if (!preg_match('/^\d{4}-\d{2}$/', (string)$billingMonth)) return null;
-        $base = date('Y-m-t', strtotime($billingMonth . '-01'));
+        // 以「請款日期」（傳票日期）起算；還沒開傳票才退回帳款月份月底
+        if ($voucherDate) $base = $voucherDate;
+        elseif (preg_match('/^\d{4}-\d{2}$/', (string)$billingMonth)) $base = date('Y-m-t', strtotime($billingMonth . '-01'));
+        else return null;
     } else {
         $base = $invoiceDate ?: $voucherDate;
         if (!$base) return null;
