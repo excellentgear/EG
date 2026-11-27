@@ -130,7 +130,7 @@ function acc_rcpt_due_list(PDO $db, array $f): array
         $due = acc_rcpt_due_date($t, $r['billing_month'], $r['invoice_date'], $v['d'] ?? null);
         $out[] = [
             'invoice_id' => (int)$r['invoice_id'], 'invoice_no' => $r['invoice_no'], 'invoice_date' => $r['invoice_date'],
-            'customer_name' => $cn, 'billing_month' => $r['billing_month'],
+            'customer_name' => $cn, 'customer_id' => trim((string)($r['customer_id'] ?: ($t['customer_id'] ?? ''))), 'billing_month' => $r['billing_month'],
             'total_amount' => (float)$r['total_amount'], 'paid' => (float)$r['paid'], 'open' => $open,
             'request_date' => $v['d'] ?? null, 'voucher_no' => $v['nos'] ?? null,
             'due_date' => $due,

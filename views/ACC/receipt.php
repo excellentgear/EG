@@ -210,7 +210,7 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
 
     <div id="paneDue">
       <div class="a-bar">
-        <input type="text" id="dueKw" placeholder="客戶／發票號碼" style="width:200px;">
+        <input type="text" id="dueKw" placeholder="客戶名稱／客戶ID／發票號碼" style="width:200px;">
         <label><input type="checkbox" id="dueOver"> 只看已逾期</label>
         <label><input type="checkbox" id="dueGt"> 只看未收餘額＞含稅金額</label>
         <button id="btnDueLoad" class="btn-warm"><i class="fa fa-refresh"></i> 重新載入</button>
@@ -483,7 +483,7 @@ function renderDue(){
     if(od && !(v.overdue_days>0)) return;
     if(gt && !(Number(v.open)>Number(v.total_amount)+0.005)) return;
     if(kw.length){
-      var hay=[v.customer_name,v.invoice_no,v.voucher_no,v.billing_month].join(' ').toLowerCase();
+      var hay=[v.customer_name,v.customer_id,v.invoice_no,v.voucher_no,v.billing_month].join(' ').toLowerCase();
       for(var k=0;k<kw.length;k++) if(hay.indexOf(kw[k])<0) return;
     }
     list.push(i);
