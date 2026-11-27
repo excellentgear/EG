@@ -254,6 +254,9 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
       <?php if ($perms['canEdit']): ?>
       <button id="btnNew" class="btn-warm"><i class="fa fa-plus"></i> 登錄收款</button>
       <?php endif; ?>
+      <?php if ($perms['canEdit']): ?>
+      <button id="btnBatchVch" class="btn-warm" title="勾選多張收款單（可不同客戶），合併開成一張傳票"><i class="fa fa-files-o"></i> 合併開傳票（<span id="selCnt">0</span>）</button>
+      <?php endif; ?>
       <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
       <button id="btnPrint"><i class="fa fa-print"></i> 列印／PDF</button>
       <a href="invoice_export.php" style="text-decoration:none;">
@@ -282,11 +285,12 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
     <div class="a-wrap">
       <table class="a-t" id="tbl">
         <thead><tr>
+          <?php if ($perms['canEdit']): ?><th style="width:28px;"><input type="checkbox" id="chkAll" title="全選本頁（已開傳票的不會被勾）"></th><?php endif; ?>
           <th>收款單號</th><th>收款日</th><th>客戶</th><th>方式</th>
           <th>收款金額</th><th>手續費</th><th>已沖帳</th><th>暫收款</th><th>狀態</th>
           <th>銀行／票號</th><th>票期</th><th>備註</th><th>操作</th>
         </tr></thead>
-        <tbody id="tbody"><tr><td colspan="13" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
+        <tbody id="tbody"><tr><td colspan="14" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
       </table>
     </div>
     <div class="a-hint">
@@ -308,6 +312,11 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
     <span class="m-close" data-close="mkRc">✕</span></div>
   <div class="m-body">
     <div class="frm">
+      <label>收款單號</label>
+      <div class="full">
+        <input type="text" id="rcNo" maxlength="12" data-eg-skip placeholder="ERP：民國年MMDD＋流水3碼，例 1151126001">
+        <div class="rc-hint" id="rcNoHint" style="color:#B8470C;">請輸入 ERP 收款單號（民國年＋MMDD＋流水號 3 碼，系統自動加 PI 前綴，例 PI1151126001）；沒輸入就用系統自動單號（RC…）。</div>
+      </div>
       <label>客戶 <span style="color:#DD5138;">*</span></label>
       <div class="full">
         <input type="text" id="rcCust" list="custList" placeholder="輸入或選擇客戶簡稱">
@@ -357,6 +366,14 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
     <span class="m-close" data-close="mkRv">✕</span></div>
   <div class="m-body"><div id="rvBody"></div></div>
   <div class="m-foot"><button data-close="mkRv">關閉</button></div>
+</div></div>
+
+<!-- 合併開傳票 -->
+<div class="a-mask" id="mkBv"><div class="a-modal" style="width:1040px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-files-o"></i>&nbsp;<span>合併收款傳票</span>
+    <span class="m-close" data-close="mkBv">✕</span></div>
+  <div class="m-body"><div id="bvBody"></div></div>
+  <div class="m-foot"><button data-close="mkBv">關閉</button></div>
 </div></div>
 
 <!-- 沖帳 -->
@@ -416,7 +433,7 @@ var API = '../../src/store/Acc_API.php';
 var CAN_EDIT  = <?= $perms['canEdit']  ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 
-var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
+var CSRF = '', rows = [], page = 1, perPage = 20, total = 0, SEL = {};
 var alData = null;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
@@ -560,7 +577,7 @@ function filters(){
 }
 
 function load(){
-  $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">查詢中…</td></tr>');
+  $('#tbody').html('<tr><td colspan="14" style="padding:22px;color:#8a6d45;">查詢中…</td></tr>');
   $.post(API+'?action=rcpt_list', filters(), function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     rows=r.rows||[]; total=r.total||0;
@@ -574,7 +591,7 @@ function load(){
 
 function render(){
   if(!rows.length){
-    $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">'
+    $('#tbody').html('<tr><td colspan="14" style="padding:22px;color:#8a6d45;">'
       +'此條件下沒有收款紀錄。'+(CAN_EDIT?'按「登錄收款」新增。':'')+'</td></tr>');
     return;
   }
@@ -584,6 +601,8 @@ function render(){
            : (v.allocated>0.005 ? '<span class="pill p-part">部分沖帳</span>'
                                 : '<span class="pill p-none">未沖帳</span>');
     h+='<tr data-i="'+i+'" data-id="'+v.receipt_id+'">'
+      +(CAN_EDIT?'<td>'+(v.has_rcpt_vch?'<span title="已開傳票 '+esc(v.rcpt_vch_no||'')+'" style="color:#5C7A2E;">✓</span>'
+          :'<input type="checkbox" class="sel-rc" data-id="'+v.receipt_id+'"'+(SEL[v.receipt_id]?' checked':'')+'>')+'</td>':'')
       +'<td><b>'+esc(v.receipt_no)+'</b></td>'
       +'<td>'+esc(v.receipt_date)+'</td>'
       +'<td class="l">'+esc(v.customer_name)+'</td>'
@@ -713,6 +732,9 @@ if(CAN_EDIT){
     pre = pre || {};
     rcLegacy = !!(v && !Number(v.settle_extra));   // 舊收款單：不強迫補應收／扣款
     $('#rcTitle').text(v ? ('修改收款單 '+v.receipt_no) : '登錄收款');
+    $('#rcNo').val(v && /^PI/.test(v.receipt_no||'') ? v.receipt_no : '');
+    $('#rcNoHint').html(v && !/^PI/.test(v.receipt_no||'') ? '目前是系統單號 '+esc(v.receipt_no)+'；要改成 ERP 單號請輸入（民國年MMDD＋流水3碼，自動加 PI），不改請留白。'
+      : '請輸入 ERP 收款單號（民國年＋MMDD＋流水號 3 碼，系統自動加 PI 前綴，例 PI1151126001）；沒輸入就用系統自動單號（RC…）。');
     $('#rcCust').val(pre.customer||(v?v.customer_name:''));
     $('#rcDate').val(v?v.receipt_date:new Date().toISOString().slice(0,10));
     $('#rcDue').val(v?(v.due_amount||''):(pre.due||''));
@@ -824,7 +846,10 @@ if(CAN_EDIT){
   }
   $('#btnRcSave').on('click',function(){
     var lines=readLines();
-    var d={receipt_id:editId, customer_name:$.trim($('#rcCust').val()), receipt_date:$('#rcDate').val(),
+    var noRaw=$.trim($('#rcNo').val()).toUpperCase().replace(/\s+/g,'');
+    if(noRaw!=='' && /^\d{10}$/.test(noRaw)) noRaw='PI'+noRaw;
+    if(noRaw!=='' && !/^PI\d{10}$/.test(noRaw)){ toast('ERP 收款單號格式須為 PI＋民國年(3碼)＋MMDD＋流水號(3碼)，例如 PI1151126001', true); $('#rcNo').focus(); return; }
+    var d={receipt_id:editId, receipt_no:noRaw, customer_name:$.trim($('#rcCust').val()), receipt_date:$('#rcDate').val(),
            lines:lines, fee:parseFloat($('#rcFee').val())||0,
            due_amount:$('#rcDue').val(), deduct_pct:$('#rcPct').val(), deduct_amt:parseFloat($('#rcDed').val())||0,
            note:$.trim($('#rcNote').val())};
@@ -905,7 +930,9 @@ if(CAN_EDIT){
       }
       var rv=live('RCPT',0);
       h+='<div class="rv-sec"><h5>收款傳票（借：現金／應收票據／銀行存款；貸：應收帳款，逐出貨單／退貨單號）</h5>';
-      if(rv) h+=vTable(rv.lines)+'<div class="rv-f"><b>傳票 '+esc(rv.voucher_no)+'</b>　'+dd(rv.voucher_date)+'　<button class="btn-mini rv-void" data-id="'+rv.rv_id+'">作廢傳票</button>'
+      if(rv) h+=vTable(rv.lines)+'<div class="rv-f"><b>傳票 '+esc(rv.voucher_no)+'</b>　'+dd(rv.voucher_date)
+        +(rv.batch_cnt>1?'　<span style="color:#8a6d45;">（合併傳票：與其他 '+(rv.batch_cnt-1)+' 張收款單共用，上表只列本張的分錄）</span>':'')
+        +'　<button class="btn-mini rv-void" data-id="'+rv.rv_id+'">'+(rv.batch_cnt>1?'作廢整張合併傳票':'作廢傳票')+'</button>'
         +'<span style="color:#8a6d45;font-size:12px;">作廢後才可修改收款單／沖帳</span></div>';
       else h+='<div class="rv-f"><button class="btn-mini rv-form" data-kind="RCPT" data-l="0">預覽並開立收款傳票</button>'
         +'<span style="color:#8a6d45;font-size:12px;">先完成沖帳再開；沒沖到的餘額會貸「暫收款」</span></div><div class="vf-box" data-l="0"></div>';
@@ -933,7 +960,7 @@ if(CAN_EDIT){
     },'json').fail(function(x){ $b.prop('disabled',false); var m='建立失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
   });
   $(document).on('click','.rv-void',function(){
-    if(!confirm('確定作廢這張傳票？作廢後可重新開立。')) return;
+    if(!confirm('確定作廢這張傳票？作廢後可重新開立。（若是合併傳票，整張一起作廢）')) return;
     $.post(API+'?action=rcpt_vch_void',{csrf:CSRF,rv_id:$(this).data('id')},function(r){
       if(!r.ok){ toast(esc(r.error||'作廢失敗'), true); return; } toast(esc(r.message)); loadRv(); load();
     },'json');
@@ -952,6 +979,39 @@ if(CAN_EDIT){
     },'json');
   });
   $(document).on('click','.rc-vch',function(){ openRv($(this).data('id'),'傳票／入帳　'+$(this).data('no')); });
+
+  /* ══ 合併開傳票：勾選多張收款單（可跨客戶、可跨頁）→ 一張傳票 ══ */
+  function selIds(){ return Object.keys(SEL).map(Number); }
+  function selRefresh(){ $('#selCnt').text(selIds().length); }
+  $(document).on('change','.sel-rc',function(){
+    var id=Number($(this).data('id')); if(this.checked) SEL[id]=1; else delete SEL[id]; selRefresh();
+  });
+  $(document).on('change','#chkAll',function(){
+    var on=this.checked; $('.sel-rc').each(function(){ this.checked=on; var id=Number($(this).data('id')); if(on) SEL[id]=1; else delete SEL[id]; }); selRefresh();
+  });
+  $('#btnBatchVch').on('click',function(){
+    var ids=selIds();
+    if(!ids.length){ toast('請先勾選要開傳票的收款單（可跨客戶、可換頁繼續勾）', true); return; }
+    openMask('mkBv'); $('#bvBody').html('<div style="padding:14px;color:#8a6d45;">產生分錄中…</div>');
+    $.post(API+'?action=rcpt_vch_batch_preview',{ids:JSON.stringify(ids)},function(r){
+      if(!r.ok){ $('#bvBody').html('<div class="warn">'+esc(r.error||'無法產生')+'</div>'); return; }
+      var h='<div style="margin-bottom:8px;color:#6b5a45;font-size:13px;">共 <b>'+r.receipts.length+'</b> 張收款單、合計 <b>'+nf(r.debit)+'</b>：'
+        +r.receipts.map(function(x){ return esc(x.receipt_no)+'（'+esc(x.customer)+' '+nf(x.amount)+'）'; }).join('、')+'</div>'
+        +vTable(r.lines)
+        +'<div class="rv-f"><label>傳票日期</label><input type="date" id="bvDate" value="'+esc(r.receipt_date)+'">'
+        +'<label>ERP 傳票號碼</label><input type="text" id="bvNo" maxlength="14" placeholder="V-1151126001，或只輸入流水號" data-eg-skip>'
+        +'<button class="btn-mini" id="bvSave"'+(r.balanced?'':' disabled')+'>建立合併傳票</button></div>'
+        +'<div style="color:#8a6d45;font-size:12px;margin-top:6px;">每張收款單的分錄原樣併入：借＝現金／應收票據／銀行存款（＋扣款、匯費），貸＝應收帳款（逐出貨單／退貨單號）；入帳（支票兌現）另開入帳傳票。</div>';
+      $('#bvBody').html(h);
+    },'json').fail(function(x){ var m='產生失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} $('#bvBody').html('<div class="warn">'+esc(m)+'</div>'); });
+  });
+  $(document).on('click','#bvSave',function(){
+    var $b=$(this); $b.prop('disabled',true);
+    $.post(API+'?action=rcpt_vch_batch_save',{csrf:CSRF,ids:JSON.stringify(selIds()),voucher_date:$('#bvDate').val(),voucher_no:$('#bvNo').val()},function(r){
+      if(!r.ok){ $b.prop('disabled',false); toast(esc(r.error||'建立失敗'), true); return; }
+      toast(esc(r.message)); SEL={}; selRefresh(); $('#mkBv').removeClass('show'); load();
+    },'json').fail(function(x){ $b.prop('disabled',false); var m='建立失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+  });
 
   /* ══ 沖帳 ══ */
   function openAlloc(rid){

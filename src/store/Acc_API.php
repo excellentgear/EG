@@ -1189,6 +1189,56 @@ case 'rcpt_vch_void': {
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     acc_out(acc_rm_voucher_void($db, (int)($_POST['rv_id'] ?? 0)));
 }
+/* 多張收款單（可不同客戶）合併成一張傳票：預覽／建立 */
+case 'rcpt_vch_batch_preview': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    $r = acc_rm_batch_build($db, is_array($ids) ? $ids : []);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+case 'rcpt_vch_batch_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    $r = acc_rm_batch_save($db, is_array($ids) ? $ids : [], acc_u8((string)($_POST['voucher_no'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
+        (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+/* 付款傳票（應付側）：預覽、合併建立、作廢、某付款單的傳票 */
+case 'pay_vch_batch_preview': {
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    $r = acc_pv_batch_build($db, is_array($ids) ? $ids : []);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+case 'pay_vch_batch_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    $r = acc_pv_batch_save($db, is_array($ids) ? $ids : [], acc_u8((string)($_POST['voucher_no'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')),
+        (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+case 'pay_vch_void': {
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    acc_out(acc_pv_void($db, (int)($_POST['pv_id'] ?? 0)));
+}
+case 'pay_vch_of': {
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    $s = $_POST ?: $_GET;
+    acc_out(['vouchers' => acc_pv_of($db, (int)($s['payment_id'] ?? 0))]);
+}
 
 /* 銀行代號（7 碼文字）：查詢名稱（所有人，供收款支票開票銀行即時顯示）、清單、維護與匯入（會計管理員） */
 case 'bank_lookup': {
@@ -1431,14 +1481,17 @@ case 'purc_set_mode': {
 
 case 'payment_list': {
     $s = $_POST ?: $_GET;
-    acc_out(acc_payment_list($db, [
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    $pl = acc_payment_list($db, [
         'date_from'    => trim((string)($s['date_from'] ?? '')),
         'date_to'      => trim((string)($s['date_to'] ?? '')),
         'kw'           => acc_u8(trim((string)($s['kw'] ?? ''))),
         'only_unalloc' => !empty($s['only_unalloc']),
         'page'         => max(1, (int)($s['page'] ?? 1)),
         'per_page'     => (int)($s['per_page'] ?? 20),
-    ]));
+    ]);
+    acc_pv_attach($db, $pl['rows']);
+    acc_out($pl);
 }
 
 /* 某廠商還沒付完的採購單（挑要沖哪幾張用） */
@@ -1489,6 +1542,8 @@ case 'payment_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canEdit']) acc_err('無會計登錄權限（付款屬會計作業）', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    if ($lk = acc_pv_lock($db, (int)($_POST['payment_id'] ?? 0))) acc_err($lk);
     $d = [];
     foreach (['payment_id', 'vendor_id', 'vendor_name', 'pay_date', 'method', 'amount',
               'fee', 'bank', 'check_no', 'check_due', 'note'] as $k) {
@@ -1505,6 +1560,8 @@ case 'payment_alloc_save': {
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $allocs = json_decode($_POST['allocs'] ?? '[]', true);
     if (!is_array($allocs)) acc_err('資料格式錯誤');
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    if ($lk = acc_pv_lock($db, (int)($_POST['payment_id'] ?? 0))) acc_err($lk);
     $r = acc_payment_alloc_save($db, (int)($_POST['payment_id'] ?? 0), $allocs, (string)$uid);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
@@ -1514,6 +1571,8 @@ case 'payment_delete': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canAdmin']) acc_err('僅會計管理員可刪除付款單', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    require_once $document_root . '/EGsystem/src/common/acc_payment_voucher_lib.php';
+    if ($lk = acc_pv_lock($db, (int)($_POST['payment_id'] ?? 0))) acc_err($lk);
     $r = acc_payment_delete($db, (int)($_POST['payment_id'] ?? 0), (string)$uid);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
@@ -1837,19 +1896,19 @@ case 'recon_parties': {
                                                         'sheet_id' => (int)$x['sheet_id']];
     // 「不提供對帳單」的對象要在清單上就看得出來（不會有對方紙本金額可比）
     $optMap = acc_recon_party_opt_map($db, $side);
-    $noMaster = 0;
+    $noMaster = 0; $noMasterNames = [];
     foreach ($out as &$o) {
         $o['sheet'] = $map[$o['party_id']] ?? null;
         $o['no_statement'] = (int)($optMap[$o['party_id']]['no_statement'] ?? 0);
         // 應收：出貨簡稱對不到客戶主檔（也對不到別名）的要標出來
         $o['in_master'] = ($side === 'ap') ? true : !empty($o['customer_id']);
-        if (!$o['in_master']) $noMaster++;
+        if (!$o['in_master']) { $noMaster++; $noMasterNames[] = (string)$o['party_name']; }
     }
     unset($o);
 
     acc_out(['side' => $side, 'billing_month' => $bm, 'parties' => $out,
              'summary' => ['count' => count($out), 'with_sheet' => count($map),
-                           'no_master' => $noMaster],
+                           'no_master' => $noMaster, 'no_master_names' => $noMasterNames],
              'can_bind' => (bool)$perms['canAdmin']]);
 }
 

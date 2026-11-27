@@ -118,6 +118,12 @@ table.a-t tbody tr:hover{background:#F6EBDA;}
   background:#fff;cursor:pointer;color:var(--a-ink);font-size:12px;}
 .btn-mini:hover{background:var(--a-ok);}
 
+.rv-t{width:100%;border-collapse:collapse;font-size:13px;}
+.rv-t th,.rv-t td{border:1px solid var(--a-line);padding:4px 8px;}
+.rv-t th{background:var(--a-bg2);}
+.rv-t td.r{text-align:right;}
+.rv-f{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;}
+.rv-f input{height:30px;border:1px solid var(--a-line2);border-radius:4px;padding:0 6px;}
 .a-mask{display:none;position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;
   background:rgba(60,40,20,.45);z-index:9999;overflow:auto;padding:34px 12px;}
 .a-mask.show{display:block;}
@@ -208,6 +214,9 @@ table.a-t tbody tr:hover{background:#F6EBDA;}
       <?php if ($perms['canEdit']): ?>
       <button id="btnNew" class="btn-warm"><i class="fa fa-plus"></i> 登錄付款</button>
       <?php endif; ?>
+      <?php if ($perms['canEdit']): ?>
+      <button id="btnBatchVch" class="btn-warm" title="勾選多張付款單（可不同廠商），合併開成一張傳票"><i class="fa fa-files-o"></i> 合併開傳票（<span id="selCnt">0</span>）</button>
+      <?php endif; ?>
       <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
       <button id="btnPrint"><i class="fa fa-print"></i> 列印／PDF</button>
       <a href="ap_statement.php" style="text-decoration:none;">
@@ -234,11 +243,12 @@ table.a-t tbody tr:hover{background:#F6EBDA;}
     <div class="a-wrap">
       <table class="a-t" id="tbl">
         <thead><tr>
+          <?php if ($perms['canEdit']): ?><th style="width:28px;"><input type="checkbox" id="chkAll" title="全選本頁（已開傳票的不會被勾）"></th><?php endif; ?>
           <th>付款單號</th><th>出帳日</th><th>廠商</th><th>方式</th>
           <th>付款金額</th><th>匯費</th><th>已沖帳</th><th>暫付款</th><th>狀態</th>
           <th>銀行／票號</th><th>票期</th><th>備註</th><th>操作</th>
         </tr></thead>
-        <tbody id="tbody"><tr><td colspan="13" style="padding:22px;color:#7d6242;">載入中…</td></tr></tbody>
+        <tbody id="tbody"><tr><td colspan="14" style="padding:22px;color:#7d6242;">載入中…</td></tr></tbody>
       </table>
     </div>
     <div class="a-hint">
@@ -254,6 +264,20 @@ table.a-t tbody tr:hover{background:#F6EBDA;}
 </div>
 
 <?php if ($perms['canEdit']): ?>
+<!-- 合併開傳票 -->
+<div class="a-mask" id="mkBv"><div class="a-modal" style="width:1040px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-files-o"></i>&nbsp;<span>合併付款傳票</span>
+    <span class="m-close" data-close="mkBv">✕</span></div>
+  <div class="m-body"><div id="bvBody"></div></div>
+  <div class="m-foot"><button data-close="mkBv">關閉</button></div>
+</div></div>
+<!-- 付款單傳票 -->
+<div class="a-mask" id="mkPv"><div class="a-modal" style="width:1040px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-file-text-o"></i>&nbsp;<span id="pvTitle">傳票</span>
+    <span class="m-close" data-close="mkPv">✕</span></div>
+  <div class="m-body"><div id="pvBody"></div></div>
+  <div class="m-foot"><button data-close="mkPv">關閉</button></div>
+</div></div>
 <!-- 付款單編輯 -->
 <div class="a-mask" id="mkPy"><div class="a-modal narrow">
   <div class="m-head"><i class="fa fa-credit-card"></i>&nbsp;<span id="pyTitle">登錄付款</span>
@@ -355,7 +379,7 @@ var API = '../../src/store/Acc_API.php';
 var CAN_EDIT  = <?= $perms['canEdit']  ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 
-var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
+var CSRF = '', rows = [], page = 1, perPage = 20, total = 0, SEL = {};
 var vendors = [], alData = null;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
@@ -400,7 +424,7 @@ function filters(){
 }
 
 function load(){
-  $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#7d6242;">查詢中…</td></tr>');
+  $('#tbody').html('<tr><td colspan="14" style="padding:22px;color:#7d6242;">查詢中…</td></tr>');
   $.post(API+'?action=payment_list', filters(), function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     rows=r.rows||[]; total=r.total||0;
@@ -414,7 +438,7 @@ function load(){
 
 function render(){
   if(!rows.length){
-    $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#7d6242;">'
+    $('#tbody').html('<tr><td colspan="14" style="padding:22px;color:#7d6242;">'
       +'此條件下沒有付款紀錄。'+(CAN_EDIT?'按「登錄付款」新增。':'')+'</td></tr>');
     return;
   }
@@ -424,6 +448,8 @@ function render(){
            : (v.allocated>0.005 ? '<span class="pill p-part">部分沖帳</span>'
                                 : '<span class="pill p-none">未沖帳</span>');
     h+='<tr data-i="'+i+'" data-id="'+v.payment_id+'">'
+      +(CAN_EDIT?'<td>'+(v.has_pay_vch?'<span title="已開傳票 '+esc(v.pay_vch_no||'')+'" style="color:#5C7A2E;">✓</span>'
+          :'<input type="checkbox" class="sel-py" data-id="'+v.payment_id+'"'+(SEL[v.payment_id]?' checked':'')+'>')+'</td>':'')
       +'<td><b>'+esc(v.payment_no)+'</b></td>'
       +'<td>'+esc(v.pay_date)+'</td>'
       +'<td class="l">'+esc(v.vendor_name)
@@ -440,7 +466,8 @@ function render(){
       +'<td>'
         +(CAN_EDIT?'<button class="btn-mini py-alloc" data-id="'+v.payment_id+'">沖帳'
           +(v.alloc_cnt?'('+v.alloc_cnt+')':'')+'</button> '
-          +'<button class="btn-mini py-edit" data-i="'+i+'">修改</button> ':'')
+          +'<button class="btn-mini py-edit" data-i="'+i+'">修改</button> '
+          +'<button class="btn-mini py-vch" data-id="'+v.payment_id+'" data-no="'+esc(v.payment_no)+'">傳票'+(v.has_pay_vch?'✓':'')+'</button> ':'')
         +(CAN_ADMIN?'<button class="btn-mini py-del" data-id="'+v.payment_id+'">刪除</button>':'')
       +'</td></tr>';
   });
@@ -568,6 +595,67 @@ if(CAN_EDIT){
     },'json').fail(function(){ $('#alBox').html('<div class="warn">載入失敗</div>'); });
   }
   $(document).on('click','.py-alloc',function(){ openAlloc($(this).data('id')); });
+
+  /* ══ 付款傳票：勾選多張付款單（可跨廠商、可跨頁）→ 一張傳票 ══ */
+  function vTable(lines){
+    var d=0,c=0,h='<table class="rv-t"><thead><tr><th style="width:150px;">會計科目</th><th>摘要</th><th style="width:110px;">借方</th><th style="width:110px;">貸方</th></tr></thead><tbody>';
+    (lines||[]).forEach(function(l){
+      if(l.side==='D') d+=Number(l.amount); else c+=Number(l.amount);
+      h+='<tr><td>'+esc(l.code+' '+l.name)+'</td><td class="l" style="'+(l.side==='C'?'padding-left:22px;':'')+'">'+esc(l.memo||'')+'</td>'
+        +'<td class="r">'+(l.side==='D'?Number(l.amount).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}):'')+'</td>'
+        +'<td class="r">'+(l.side==='C'?Number(l.amount).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}):'')+'</td></tr>';
+    });
+    d=Math.round(d*100)/100; c=Math.round(c*100)/100;
+    return h+'<tr><td colspan="2" class="r"><b>合計</b>'+(Math.abs(d-c)<0.01?' <span style="color:#5C7A2E;">✓ 平衡</span>':' <span style="color:#C0392B;">不平衡</span>')+'</td><td class="r"><b>'+nf(d)+'</b></td><td class="r"><b>'+nf(c)+'</b></td></tr></tbody></table>';
+  }
+  function selIds(){ return Object.keys(SEL).map(Number); }
+  function selRefresh(){ $('#selCnt').text(selIds().length); }
+  $(document).on('change','.sel-py',function(){
+    var id=Number($(this).data('id')); if(this.checked) SEL[id]=1; else delete SEL[id]; selRefresh();
+  });
+  $(document).on('change','#chkAll',function(){
+    var on=this.checked; $('.sel-py').each(function(){ this.checked=on; var id=Number($(this).data('id')); if(on) SEL[id]=1; else delete SEL[id]; }); selRefresh();
+  });
+  $('#btnBatchVch').on('click',function(){
+    var ids=selIds();
+    if(!ids.length){ toast('請先勾選要開傳票的付款單（可跨廠商、可換頁繼續勾）', true); return; }
+    openMask('mkBv'); $('#bvBody').html('<div style="padding:14px;color:#7d6242;">產生分錄中…</div>');
+    $.post(API+'?action=pay_vch_batch_preview',{ids:JSON.stringify(ids)},function(r){
+      if(!r.ok){ $('#bvBody').html('<div class="warn">'+esc(r.error||'無法產生')+'</div>'); return; }
+      $('#bvBody').html('<div style="margin-bottom:8px;color:#6b5a45;font-size:13px;">共 <b>'+r.payments.length+'</b> 張付款單、合計 <b>'+nf(r.debit)+'</b>：'
+        +r.payments.map(function(x){ return esc(x.payment_no)+'（'+esc(x.vendor)+' '+nf(x.amount)+'）'; }).join('、')+'</div>'
+        +vTable(r.lines)
+        +'<div class="rv-f"><label>傳票日期</label><input type="date" id="bvDate" value="'+esc(r.pay_date)+'">'
+        +'<label>ERP 傳票號碼</label><input type="text" id="bvNo" maxlength="14" placeholder="V-1151126001，或只輸入流水號" data-eg-skip>'
+        +'<button class="btn-mini" id="bvSave"'+(r.balanced?'':' disabled')+'>建立合併傳票</button></div>'
+        +'<div style="color:#7d6242;font-size:12px;margin-top:6px;">借＝應付帳款（逐採購單）、沒沖到的餘額借預付貨款、匯費借銀行手續費；貸＝現金／應付票據（支票）／銀行存款。</div>');
+    },'json').fail(function(x){ var m='產生失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} $('#bvBody').html('<div class="warn">'+esc(m)+'</div>'); });
+  });
+  $(document).on('click','#bvSave',function(){
+    var $b=$(this); $b.prop('disabled',true);
+    $.post(API+'?action=pay_vch_batch_save',{csrf:CSRF,ids:JSON.stringify(selIds()),voucher_date:$('#bvDate').val(),voucher_no:$('#bvNo').val()},function(r){
+      if(!r.ok){ $b.prop('disabled',false); toast(esc(r.error||'建立失敗'), true); return; }
+      toast(esc(r.message)); SEL={}; selRefresh(); $('#mkBv').removeClass('show'); load();
+    },'json').fail(function(x){ $b.prop('disabled',false); var m='建立失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+  });
+  $(document).on('click','.py-vch',function(){
+    var pid=$(this).data('id'); $('#pvTitle').text('付款傳票　'+$(this).data('no')); openMask('mkPv');
+    $('#pvBody').html('<div style="padding:14px;color:#7d6242;">載入中…</div>');
+    $.post(API+'?action=pay_vch_of',{payment_id:pid},function(r){
+      var v=(r.vouchers||[]).filter(function(x){ return x.status==='ok'; })[0];
+      if(!v){ $('#pvBody').html('<div style="padding:10px;color:#7d6242;">這張付款單還沒開傳票。請在清單勾選後按「合併開傳票」（只勾一張就是單張傳票）。</div>'); return; }
+      $('#pvBody').html(vTable(v.lines)+'<div class="rv-f"><b>傳票 '+esc(v.voucher_no)+'</b>　'+esc(String(v.voucher_date).replace(/-/g,'.'))
+        +(v.batch_cnt>1?'　<span style="color:#7d6242;">（合併傳票：與其他 '+(v.batch_cnt-1)+' 張付款單共用，上表只列本張的分錄）</span>':'')
+        +'　<button class="btn-mini pv-void" data-id="'+v.pv_id+'">'+(v.batch_cnt>1?'作廢整張合併傳票':'作廢傳票')+'</button>'
+        +'<span style="color:#7d6242;font-size:12px;">作廢後才可修改付款單／沖帳</span></div>');
+    },'json').fail(function(){ $('#pvBody').html('<div class="warn">載入失敗</div>'); });
+  });
+  $(document).on('click','.pv-void',function(){
+    if(!confirm('確定作廢這張傳票？作廢後可重新開立。（若是合併傳票，整張一起作廢）')) return;
+    $.post(API+'?action=pay_vch_void',{csrf:CSRF,pv_id:$(this).data('id')},function(r){
+      if(!r.ok){ toast(esc(r.error||'作廢失敗'), true); return; } toast(esc(r.message)); $('#mkPv').removeClass('show'); load();
+    },'json');
+  });
 
   function renderAlloc(){
     var ps=alData.purchases||[], allocs=alData.allocs||[];

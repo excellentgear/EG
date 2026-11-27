@@ -70,6 +70,11 @@ function acc_rm_ensure(PDO $db): void
         created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (rv_id), KEY idx_rv_rcpt (receipt_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-收款傳票／支票入帳傳票'");
+    // 合併傳票：多張收款單（可不同客戶）共用一張 ERP 傳票時，每張收款單各留一列、batch_id 相同（＝第一列的 rv_id）
+    $have = [];
+    foreach ($db->query("SHOW COLUMNS FROM acc_rcpt_voucher")->fetchAll(PDO::FETCH_ASSOC) as $c) $have[$c['Field']] = 1;
+    if (!isset($have['batch_id']))
+        $db->exec("ALTER TABLE acc_rcpt_voucher ADD COLUMN batch_id INT NULL COMMENT '合併傳票批次（多張收款單共用一張傳票）', ADD KEY idx_rv_batch (batch_id)");
 }
 
 /* ── 本公司入帳帳戶 ─────────────────────────────────────────── */
@@ -237,7 +242,7 @@ function acc_rm_receipt_save(PDO $db, array $d, string $uid): array
     if ($ded > 0) { $t = acc_rcpt_cust_terms($db, trim((string)($d['customer_name'] ?? ''))); if (!(int)$t['allow_deduct']) $warn[] = '此客戶在主檔未勾選「接受扣%」，請確認扣款是否已與客戶約定'; }
 
     $core = ['receipt_id' => $id, 'customer_name' => $d['customer_name'] ?? '', 'customer_id' => $d['customer_id'] ?? '',
-             'receipt_date' => $d['receipt_date'] ?? '', 'method' => $hd['method'], 'amount' => $lc['total'], 'fee' => $fee,
+             'receipt_date' => $d['receipt_date'] ?? '', 'method' => $hd['method'], 'receipt_no' => $d['receipt_no'] ?? '', 'amount' => $lc['total'], 'fee' => $fee,
              'bank' => $hd['bank'], 'check_no' => $hd['check_no'], 'check_due' => $hd['check_due'], 'note' => $d['note'] ?? ''];
     $r = acc_receipt_save($db, $core, $uid);
     if (!$r['success']) return $r;
@@ -404,10 +409,90 @@ function acc_rm_deposit_build(PDO $db, int $lineId): array
 function acc_rm_vouchers(PDO $db, int $rid): array
 {
     acc_rm_ensure($db);
-    $q = $db->prepare("SELECT rv_id, kind, line_id, voucher_no, voucher_date, total_amount, status, lines_json FROM acc_rcpt_voucher WHERE receipt_id=? ORDER BY rv_id"); $q->execute([$rid]);
+    $q = $db->prepare("SELECT rv_id, kind, line_id, voucher_no, voucher_date, total_amount, status, lines_json, batch_id,
+                              (SELECT COUNT(*) FROM acc_rcpt_voucher b WHERE b.batch_id=v.batch_id AND b.status='ok') AS batch_cnt
+                       FROM acc_rcpt_voucher v WHERE receipt_id=? ORDER BY rv_id"); $q->execute([$rid]);
     $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) { $r['lines'] = json_decode((string)$r['lines_json'], true) ?: []; unset($r['lines_json']); }
+    foreach ($rows as &$r) { $r['lines'] = json_decode((string)$r['lines_json'], true) ?: []; unset($r['lines_json']); $r['batch_cnt'] = (int)$r['batch_cnt']; }
     return $rows;
+}
+
+/** 合併傳票分錄（預覽用）：多張收款單各自的分錄串起來，借方在前、貸方在後 */
+function acc_rm_batch_build(PDO $db, array $rids): array
+{
+    acc_rm_ensure($db);
+    $rids = array_values(array_unique(array_filter(array_map('intval', $rids), fn($x) => $x > 0)));
+    if (count($rids) < 1) return ['success' => false, 'message' => '請勾選要開傳票的收款單'];
+    if (count($rids) > 100) return ['success' => false, 'message' => '一次最多合併 100 張收款單'];
+    $D = []; $C = []; $recs = []; $maxDate = '';
+    foreach ($rids as $rid) {
+        if ($lk = acc_rm_voucher_lock($db, $rid)) {
+            $q = $db->prepare("SELECT receipt_no FROM acc_receipt WHERE receipt_id=?"); $q->execute([$rid]);
+            return ['success' => false, 'message' => (string)$q->fetchColumn() . '：' . $lk];
+        }
+        $b = acc_rm_voucher_build($db, $rid);
+        if (!$b['success']) return $b;
+        if (!$b['balanced']) return ['success' => false, 'message' => $b['receipt_no'] . '：借貸不平衡，請先單獨處理'];
+        foreach ($b['lines'] as $l) { if ($l['side'] === 'D') $D[] = $l; else $C[] = $l; }
+        $recs[] = ['receipt_id' => $rid, 'receipt_no' => $b['receipt_no'], 'customer' => $b['customer'], 'receipt_date' => $b['receipt_date'], 'amount' => $b['debit']];
+        if ($b['receipt_date'] > $maxDate) $maxDate = $b['receipt_date'];
+    }
+    $L = array_merge($D, $C);
+    $d = 0.0; $c = 0.0; foreach ($L as $l) { if ($l['side'] === 'D') $d += $l['amount']; else $c += $l['amount']; }
+    return ['success' => true, 'lines' => $L, 'debit' => round($d, 2), 'credit' => round($c, 2), 'balanced' => abs($d - $c) < 0.01,
+            'receipts' => $recs, 'receipt_date' => $maxDate];
+}
+
+/** 合併開立：以當下資料逐張重算分錄（不信前端），多張收款單共用同一張 ERP 傳票號碼 */
+function acc_rm_batch_save(PDO $db, array $rids, string $no, string $date, string $uname): array
+{
+    acc_rm_ensure($db);
+    require_once __DIR__ . '/acc_voucher_lib.php';
+    acc_voucher_ensure($db);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '傳票日期格式錯誤'];
+    $no = acc_vch_no_normalize($no, $date);
+    if ($no === '') return ['success' => false, 'message' => '請先填 ERP 傳票號碼'];
+    [$er, $nd] = acc_vch_no_check($no);
+    if ($er) return ['success' => false, 'message' => $er];
+    if ($nd !== $date) return ['success' => false, 'message' => '傳票號碼裡的日期（' . $nd . '）與傳票日期（' . $date . '）不一致'];
+    if (acc_vch_no_taken($db, $no)) return ['success' => false, 'message' => '傳票號碼 ' . $no . ' 已存在'];
+    $rids = array_values(array_unique(array_filter(array_map('intval', $rids), fn($x) => $x > 0)));
+    $items = [];
+    foreach ($rids as $rid) {
+        $b = acc_rm_voucher_build($db, $rid);
+        if (!$b['success']) return $b;
+        if (!$b['balanced']) return ['success' => false, 'message' => $b['receipt_no'] . '：借貸不平衡'];
+        if ($lk = acc_rm_voucher_lock($db, $rid)) return ['success' => false, 'message' => $b['receipt_no'] . '：' . $lk];
+        $items[$rid] = $b;
+    }
+    if (!$items) return ['success' => false, 'message' => '請勾選要開傳票的收款單'];
+    try {
+        $db->beginTransaction();
+        $ins = $db->prepare("INSERT INTO acc_rcpt_voucher (kind,receipt_id,line_id,voucher_no,voucher_date,total_amount,lines_json,created_by) VALUES ('RCPT',?,0,?,?,?,?,?)");
+        $first = 0;
+        foreach ($items as $rid => $b) {
+            foreach ($b['lines'] as $l) acc_vch_account_upsert($db, $l['code'], $l['name']);
+            $ins->execute([$rid, $no, $date, $b['debit'], json_encode($b['lines'], JSON_UNESCAPED_UNICODE), $uname]);
+            if (!$first) $first = (int)$db->lastInsertId();
+        }
+        $db->prepare("UPDATE acc_rcpt_voucher SET batch_id=? WHERE voucher_no=? AND kind='RCPT' AND status='ok' AND created_by=? AND batch_id IS NULL AND receipt_id IN (" . implode(',', array_keys($items)) . ")")
+           ->execute([$first, $no, $uname]);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); return ['success' => false, 'message' => '建立失敗：' . $e->getMessage()]; }
+    return ['success' => true, 'message' => '已合併 ' . count($items) . ' 張收款單，建立傳票 ' . $no];
+}
+
+/** ERP 傳票號碼是否已被銷貨傳票／收款傳票／付款傳票使用（作廢者不算） */
+function acc_vch_no_taken(PDO $db, string $no): bool
+{
+    $q = $db->prepare("SELECT 1 FROM acc_voucher WHERE voucher_no=? UNION SELECT 1 FROM acc_rcpt_voucher WHERE voucher_no=? AND status='ok'");
+    $q->execute([$no, $no]);
+    if ($q->fetchColumn()) return true;
+    try {
+        $q = $db->prepare("SELECT 1 FROM acc_pay_voucher WHERE voucher_no=? AND status='ok' LIMIT 1"); $q->execute([$no]);
+        if ($q->fetchColumn()) return true;
+    } catch (Throwable $e) { /* 付款傳票表尚未建立 */ }
+    return false;
 }
 
 /** 以當下資料重算分錄後存成傳票（不信前端分錄）；ERP 傳票號碼規則與銷貨傳票相同 */
@@ -423,8 +508,7 @@ function acc_rm_voucher_save(PDO $db, string $kind, int $rid, int $lineId, strin
     [$er, $nd] = acc_vch_no_check($no);
     if ($er) return ['success' => false, 'message' => $er];
     if ($nd !== $date) return ['success' => false, 'message' => '傳票號碼裡的日期（' . $nd . '）與傳票日期（' . $date . '）不一致'];
-    $q = $db->prepare("SELECT 1 FROM acc_voucher WHERE voucher_no=? UNION SELECT 1 FROM acc_rcpt_voucher WHERE voucher_no=? AND status='ok' LIMIT 1"); $q->execute([$no, $no]);
-    if ($q->fetchColumn()) return ['success' => false, 'message' => '傳票號碼 ' . $no . ' 已存在'];
+    if (acc_vch_no_taken($db, $no)) return ['success' => false, 'message' => '傳票號碼 ' . $no . ' 已存在'];
     $b = $kind === 'RCPT' ? acc_rm_voucher_build($db, $rid) : acc_rm_deposit_build($db, $lineId);
     if (!$b['success']) return $b;
     if (!$b['balanced']) return ['success' => false, 'message' => '借貸不平衡：借 ' . number_format($b['debit'], 2) . '／貸 ' . number_format($b['credit'], 2)];
@@ -442,6 +526,12 @@ function acc_rm_voucher_save(PDO $db, string $kind, int $rid, int $lineId, strin
 function acc_rm_voucher_void(PDO $db, int $rvId): array
 {
     acc_rm_ensure($db);
-    $db->prepare("UPDATE acc_rcpt_voucher SET status='void', voucher_no=LEFT(CONCAT(voucher_no,'~廢',rv_id),20) WHERE rv_id=? AND status='ok'")->execute([$rvId]);
-    return ['success' => true, 'message' => '已作廢傳票，可重新開立'];
+    // 合併傳票：同一批次的每張收款單一起作廢（傳票是一整張，不能只作廢其中一部分）
+    $q = $db->prepare("SELECT batch_id FROM acc_rcpt_voucher WHERE rv_id=?"); $q->execute([$rvId]);
+    $bid = (int)$q->fetchColumn();
+    if ($bid > 0)
+        $db->prepare("UPDATE acc_rcpt_voucher SET status='void', voucher_no=LEFT(CONCAT(voucher_no,'~廢',rv_id),20) WHERE batch_id=? AND status='ok'")->execute([$bid]);
+    else
+        $db->prepare("UPDATE acc_rcpt_voucher SET status='void', voucher_no=LEFT(CONCAT(voucher_no,'~廢',rv_id),20) WHERE rv_id=? AND status='ok'")->execute([$rvId]);
+    return ['success' => true, 'message' => $bid > 0 ? '已作廢整張合併傳票，各收款單可重新開立' : '已作廢傳票，可重新開立'];
 }

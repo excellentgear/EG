@@ -1907,7 +1907,7 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
                                     customer_address, customer_tel, customer_fax,
                                     billing_contact, settlement_mode, settlement_day,
                                     payment_method, net_days, need_recon_stmt, recon_provide_by,
-                                    recon_channels, billing_note, einv_max_pages, einv_merge_part, einv_split_part,
+                                    recon_channels, recon_line_contact, billing_note, einv_max_pages, einv_merge_part, einv_split_part,
                                     allow_deduct, deduct_pct
                              FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
             $c['alias_of'] = null;
@@ -3442,6 +3442,22 @@ function acc_open_invoices(PDO $db, string $clientName, ?int $includeReceiptId =
     return $out;
 }
 
+/**
+ * ERP 收款單號：PI＋民國年3碼＋MMDD＋流水3碼（例 PI1151126001）。只輸入 10 碼數字會自動補 PI。
+ * 回 [正規化後單號, 錯誤訊息]；空白＝不指定（由系統自動編 RC 單號）
+ */
+function acc_receipt_no_norm(string $no): array
+{
+    $no = strtoupper(preg_replace('/\s+/u', '', $no));
+    if ($no === '') return ['', ''];
+    if (preg_match('/^\d{10}$/', $no)) $no = 'PI' . $no;
+    if (!preg_match('/^PI(\d{3})(\d{2})(\d{2})(\d{3})$/', $no, $m))
+        return ['', 'ERP 收款單號格式須為 PI＋民國年(3碼)＋MMDD＋流水號(3碼)，例如 PI1151126001'];
+    if ((int)$m[2] < 1 || (int)$m[2] > 12 || (int)$m[3] < 1 || (int)$m[3] > 31)
+        return ['', 'ERP 收款單號裡的月日（' . $m[2] . $m[3] . '）不正確'];
+    return [$no, ''];
+}
+
 /** 建立或更新收款單（不含沖帳明細，沖帳走 acc_alloc_save） */
 function acc_receipt_save(PDO $db, array $d, string $userId): array
 {
@@ -3468,6 +3484,13 @@ function acc_receipt_save(PDO $db, array $d, string $userId): array
     $ckDue   = trim((string)($d['check_due'] ?? ''));
     $note    = trim((string)($d['note'] ?? ''));
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ckDue)) $ckDue = null;
+    [$manNo, $noErr] = acc_receipt_no_norm((string)($d['receipt_no'] ?? ''));
+    if ($noErr) return ['success' => false, 'message' => $noErr];
+    if ($manNo !== '') {
+        $q = $db->prepare("SELECT 1 FROM acc_receipt WHERE receipt_no=? AND receipt_id<>? LIMIT 1");
+        $q->execute([$manNo, $id]);
+        if ($q->fetchColumn()) return ['success' => false, 'message' => '收款單號 ' . $manNo . ' 已存在'];
+    }
 
     try {
         $db->beginTransaction();
@@ -3488,11 +3511,12 @@ function acc_receipt_save(PDO $db, array $d, string $userId): array
                                 Modified_By=?, Modified_At=NOW() WHERE receipt_id=?");
             $st->execute([$cid ?: null, $name, $date, $method, $amt, $fee, $bank ?: null,
                           $ckNo ?: null, $ckDue, $note ?: null, $userId, $id]);
+            if ($manNo !== '') $db->prepare("UPDATE acc_receipt SET receipt_no=? WHERE receipt_id=?")->execute([$manNo, $id]);   // 沒填＝維持原單號
             $db->commit();
             return ['success' => true, 'receipt_id' => $id, 'message' => '已更新收款單'];
         }
 
-        $no = acc_receipt_next_no($db, $date);
+        $no = $manNo !== '' ? $manNo : acc_receipt_next_no($db, $date);
         $st = $db->prepare("INSERT INTO acc_receipt
                             (receipt_no, customer_id, customer_name, receipt_date, method, amount,
                              fee, bank, check_no, check_due, note, Created_By)
