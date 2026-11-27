@@ -771,11 +771,14 @@ $(document).on('click','.v-sign',function(){
   },'json').fail(function(x){ failMsg(x,'簽章失敗'); });
 });
 function evLineRow(l){
-  l=l||{}; var auto=(+l.is_auto===1);
-  return '<tr data-auto="'+(auto?1:0)+'"><td><input type="text" class="ev-code" list="dlAcct" maxlength="10" style="width:100px;" value="'+esc(l.code||'')+'">'+(l.name?'<div class="ev-nm" style="font-size:11.5px;color:#8a6d45;">'+esc(l.name)+'</div>':'')+'</td>'
-    +'<td><select class="ev-side"><option value="D"'+(l.side==='C'?'':' selected')+'>借</option><option value="C"'+(l.side==='C'?' selected':'')+'>貸</option></select></td>'
-    +'<td><input type="number" step="0.01" class="ev-amt" style="width:130px;text-align:right;" value="'+(l.amount!=null?l.amount:'')+'"></td>'
-    +'<td><input type="text" class="ev-memo" maxlength="100" style="width:220px;" value="'+esc(l.memo||'')+'"></td>'
+  l=l||{}; var auto=(+l.is_auto===1), disc=(auto&&l.code==='4103000'), sysM=disc?String(l.memo||''):'';
+  var memoCell = sysM
+    ? '<span style="white-space:nowrap;">'+esc(sysM)+' 🔒</span> <input type="text" class="ev-memo" data-sys="'+esc(sysM)+'" maxlength="80" style="width:130px;" placeholder="補充文字" value="'+esc(String(l.memo||'').slice(sysM.length).replace(/^\s+/,''))+'">'
+    : '<input type="text" class="ev-memo" maxlength="100" style="width:220px;" value="'+esc(l.memo||'')+'">';
+  return '<tr data-auto="'+(auto?1:0)+'"><td><input type="text" class="ev-code" list="dlAcct" maxlength="10" style="width:100px;" value="'+esc(l.code||'')+'"'+(disc?' readonly title="客戶折扣列，科目已鎖定"':'')+'>'+(l.name?'<div class="ev-nm" style="font-size:11.5px;color:#8a6d45;">'+esc(l.name)+'</div>':'')+'</td>'
+    +'<td><select class="ev-side"'+(auto?' disabled':'')+'><option value="D"'+(l.side==='C'?'':' selected')+'>借</option><option value="C"'+(l.side==='C'?' selected':'')+'>貸</option></select></td>'
+    +'<td><input type="number" step="0.01" class="ev-amt" style="width:130px;text-align:right;" value="'+(l.amount!=null?l.amount:'')+'"'+(auto?' readonly title="系統自動帶出，金額已鎖定"':'')+'></td>'
+    +'<td>'+memoCell+'</td>'
     +'<td>'+(auto?'':'<button class="ev-del" title="刪除此列">×</button>')+'</td></tr>';
 }
 function evBalance(){
@@ -803,7 +806,7 @@ $(document).on('click','.ev-del',function(){ $(this).closest('tr').remove(); evB
 $(document).on('input change','#evLines input,#evLines select',evBalance);
 $(document).on('click','#btnVSave',function(){
   var id=$(this).data('id'), d=$('#evDate').val(); if(!d){ toast('請填傳票日期', true); return; }
-  var lines=[]; $('#evLines tr').each(function(){ var $t=$(this); lines.push({code:$.trim($t.find('.ev-code').val()),side:$t.find('.ev-side').val(),amount:$t.find('.ev-amt').val(),memo:$t.find('.ev-memo').val(),is_auto:$t.data('auto')}); });
+  var lines=[]; $('#evLines tr').each(function(){ var $t=$(this); lines.push({code:$.trim($t.find('.ev-code').val()),side:$t.find('.ev-side').val(),amount:$t.find('.ev-amt').val(),memo:(function(){ var $m=$t.find('.ev-memo'), sys=String($m.data('sys')||''), v=$.trim($m.val()); return sys?(sys+(v?' '+v:'')):$m.val(); })(),is_auto:$t.data('auto')}); });
   var post={csrf:CSRF,voucher_id:id,voucher_no:normNo($('#evNo').val(), d),voucher_date:d,note:$('#evNote').val()};
   if($('#evLines').length) post.lines=JSON.stringify(lines);
   $.post(API+'?action=vch_update',post,function(r){
