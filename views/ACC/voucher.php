@@ -775,9 +775,15 @@ function evLineRow(l){
   var memoCell = sysM
     ? '<span style="white-space:nowrap;">'+esc(sysM)+' 🔒</span> <input type="text" class="ev-memo" data-sys="'+esc(sysM)+'" maxlength="80" style="width:130px;" placeholder="補充文字" value="'+esc(String(l.memo||'').slice(sysM.length).replace(/^\s+/,''))+'">'
     : '<input type="text" class="ev-memo" maxlength="100" style="width:220px;" value="'+esc(l.memo||'')+'">';
-  return '<tr data-auto="'+(auto?1:0)+'"><td><input type="text" class="ev-code" list="dlAcct" maxlength="10" style="width:100px;" value="'+esc(l.code||'')+'"'+(disc?' readonly title="客戶折扣列，科目已鎖定"':'')+'>'+(l.name?'<div class="ev-nm" style="font-size:11.5px;color:#8a6d45;">'+esc(l.name)+'</div>':'')+'</td>'
-    +'<td><select class="ev-side"'+(auto?' disabled':'')+'><option value="D"'+(l.side==='C'?'':' selected')+'>借</option><option value="C"'+(l.side==='C'?' selected':'')+'>貸</option></select></td>'
-    +'<td><input type="number" step="0.01" class="ev-amt" style="width:130px;text-align:right;" value="'+(l.amount!=null?l.amount:'')+'"'+(auto?' readonly title="系統自動帶出，金額已鎖定"':'')+'></td>'
+  if(disc){   // 客戶折扣列：科目、借貸、金額鎖定成文字（隱藏欄位供儲存時讀取）
+    return '<tr data-auto="1" data-disc="1"><td><b>'+esc(l.code)+'</b> 🔒<input type="hidden" class="ev-code" value="'+esc(l.code)+'"><div class="ev-nm" style="font-size:11.5px;color:#8a6d45;">'+esc(l.name||'')+'</div></td>'
+      +'<td>'+(l.side==='C'?'貸':'借')+'<input type="hidden" class="ev-side" value="'+esc(l.side||'D')+'"></td>'
+      +'<td style="text-align:right;">'+nf2(Number(l.amount)||0)+'<input type="hidden" class="ev-amt" value="'+esc(l.amount)+'"></td>'
+      +'<td>'+memoCell+'</td><td></td></tr>';
+  }
+  return '<tr data-auto="'+(auto?1:0)+'"><td><input type="text" class="ev-code" list="dlAcct" maxlength="10" style="width:100px;" value="'+esc(l.code||'')+'">'+(l.name?'<div class="ev-nm" style="font-size:11.5px;color:#8a6d45;">'+esc(l.name)+'</div>':'')+'</td>'
+    +'<td><select class="ev-side"><option value="D"'+(l.side==='C'?'':' selected')+'>借</option><option value="C"'+(l.side==='C'?' selected':'')+'>貸</option></select></td>'
+    +'<td><input type="number" step="0.01" class="ev-amt" style="width:130px;text-align:right;" value="'+(l.amount!=null?l.amount:'')+'"></td>'
     +'<td>'+memoCell+'</td>'
     +'<td>'+(auto?'':'<button class="ev-del" title="刪除此列">×</button>')+'</td></tr>';
 }

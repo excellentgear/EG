@@ -458,18 +458,14 @@ function acc_voucher_update(PDO $db, int $id, ?string $no, string $date, string 
                            'auto' => !empty($l['is_auto']) ? 1 : 0, 'memo' => mb_substr(trim((string)($l['memo'] ?? '')), 0, 100)];
         }
         if (!$newLines) return ['success' => false, 'message' => '分錄不可為空'];
-        // 系統自動帶出的分錄：借貸方向與金額鎖定；銷貨折讓列科目固定、「?%折扣」摘要不可刪（與開立時相同）
+        // 客戶折扣（銷貨折讓）自動列：科目、借貸、金額鎖定，「?%折扣」摘要不可刪；其他自動列照舊可改
         foreach ($v['lines'] as $i => $o) {
-            if (empty($o['is_auto'])) continue;
+            if (empty($o['is_auto']) || $o['code'] !== '4103000') continue;
             $n = $i + 1; $nl = $newLines[$i] ?? null;
-            if (!$nl || empty($nl['auto'])) return ['success' => false, 'message' => "分錄第 {$n} 列為系統自動帶出，不可刪除或改為追加列"];
-            if ($nl['side'] !== $o['side'] || abs($nl['amount'] - (float)$o['amount']) > 0.004)
-                return ['success' => false, 'message' => "分錄第 {$n} 列為系統自動帶出，借貸方向與金額已鎖定"];
-            if ($o['code'] === '4103000') {
-                if ($nl['code'] !== '4103000') return ['success' => false, 'message' => "分錄第 {$n} 列為客戶折扣（銷貨折讓），科目已鎖定"];
-                $sysM = (string)($o['memo'] ?? '');
-                if ($sysM !== '' && mb_strpos($nl['memo'], $sysM) !== 0) return ['success' => false, 'message' => "分錄第 {$n} 列摘要「{$sysM}」為系統帶出，不可刪除"];
-            }
+            if (!$nl || $nl['code'] !== '4103000' || $nl['side'] !== $o['side'] || abs($nl['amount'] - (float)$o['amount']) > 0.004)
+                return ['success' => false, 'message' => "分錄第 {$n} 列為客戶折扣（銷貨折讓），科目與金額已鎖定"];
+            $sysM = (string)($o['memo'] ?? '');
+            if ($sysM !== '' && mb_strpos($nl['memo'], $sysM) !== 0) return ['success' => false, 'message' => "分錄第 {$n} 列摘要「{$sysM}」為系統帶出，不可刪除"];
         }
         [$dSum, $cSum] = acc_vch_lines_balance($newLines);
         if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2)];
