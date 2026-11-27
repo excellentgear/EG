@@ -3459,7 +3459,10 @@ function acc_receipt_save(PDO $db, array $d, string $userId): array
             // 縮小金額時不可小於已沖總額
             $alloc = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM acc_receipt_alloc
                                         WHERE receipt_id = " . (int)$id)->fetchColumn();
-            if ($amt < $alloc - 0.005) {
+            // 新版收款單（settle_extra=1）沖帳上限含客戶扣款與匯費，縮小金額的檢查要一併算進去
+            $xq = $db->query("SELECT settle_extra, deduct_amt FROM acc_receipt WHERE receipt_id = " . (int)$id)->fetch(PDO::FETCH_ASSOC);
+            $capExtra = ($xq && !empty($xq['settle_extra'])) ? (float)$xq['deduct_amt'] + $fee : 0.0;
+            if ($amt + $capExtra < $alloc - 0.005) {
                 $db->rollBack();
                 return ['success' => false, 'message' => '收款金額 ' . number_format($amt)
                         . ' 小於已沖帳金額 ' . number_format($alloc) . '，請先調整沖帳明細'];

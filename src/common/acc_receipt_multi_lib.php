@@ -224,6 +224,12 @@ function acc_rm_receipt_save(PDO $db, array $d, string $uid): array
     $ded = round((float)($d['deduct_amt'] ?? 0), 2); $fee = round((float)($d['fee'] ?? 0), 2);
     if ($ded < 0 || $fee < 0) return ['success' => false, 'message' => '扣款與手續費不可為負數'];
     if ($pct !== null && ($pct < 0 || $pct > ACC_RCPT_DEDUCT_MAX)) return ['success' => false, 'message' => '扣%最多 ' . ACC_RCPT_DEDUCT_MAX . '%'];
+    if ($id > 0) {   // 已沖到發票的收款單不可再扣%（只有沒對應發票的收款才可扣%）；與原值相同則放行
+        $q = $db->prepare("SELECT (SELECT COUNT(*) FROM acc_receipt_alloc WHERE receipt_id=r.receipt_id) n, r.deduct_amt, r.deduct_pct FROM acc_receipt r WHERE r.receipt_id=?");
+        $q->execute([$id]); $o = $q->fetch(PDO::FETCH_ASSOC);
+        if ($o && (int)$o['n'] > 0 && (abs($ded - (float)$o['deduct_amt']) > 0.005 || ($pct !== null && abs($pct - (float)$o['deduct_pct']) > 0.0005) || ($pct === null && (float)$o['deduct_pct'] > 0)))
+            return ['success' => false, 'message' => '此收款單已沖到發票，不可再扣%或改扣款金額（只有沒對應發票的收款才可扣%）'];
+    }
     if (!$legacy && $due !== null && abs(($due - $ded - $fee) - $lc['total']) > 0.5)
         return ['success' => false, 'message' => '金額不符：應收 ' . number_format($due) . ' － 扣款 ' . number_format($ded) . ' － 匯費 ' . number_format($fee)
                 . ' ＝ ' . number_format($due - $ded - $fee) . '，與各筆收款合計 ' . number_format($lc['total']) . ' 不同'];

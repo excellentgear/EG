@@ -583,7 +583,7 @@ $('#btnPrint').on('click',function(){ window.print(); });
 
 /* ══ 收款單編輯（混合收款：多筆收款明細）══ */
 if(CAN_EDIT){
-  var editId = 0, rcLegacy=false, ACCTS=[], METHODS=['匯款','支票','現金','信用狀','其他'];
+  var editId = 0, rcLegacy=false, rcDedLock=false, ACCTS=[], METHODS=['匯款','支票','現金','信用狀','其他'];
   function acctOpts(sel){
     var h='<option value="">選擇本公司帳戶</option>';
     ACCTS.forEach(function(a){ h+='<option value="'+a.acct_id+'"'+(String(sel)===String(a.acct_id)?' selected':'')+'>'
@@ -669,6 +669,11 @@ if(CAN_EDIT){
     // 由勾選的發票帶入的客戶、應收金額：只顯示文字，不可更改
     $('#rcCust').prop('readonly',!!pre.customer).toggleClass('rc-fixed',!!pre.customer);
     $('#rcDue').prop('readonly',!!pre.due).toggleClass('rc-fixed',!!pre.due);
+    // 扣%：只有「沒對應發票」的收款才可扣。從勾選發票帶入、或已沖到發票的收款單，扣%／扣款金額鎖定
+    rcDedLock = !!pre.due || !!(v && Number(v.alloc_cnt)>0);
+    if(rcDedLock && !v){ $('#rcPct').val(''); $('#rcDed').val(0); }
+    $('#rcPct,#rcDed').prop('readonly',rcDedLock).toggleClass('rc-fixed',rcDedLock);
+    $('#rcPctErr').text(rcDedLock?'此收款對應發票，不可扣%（只有沒對應發票的收款才可扣%）':'').toggle(rcDedLock);
     var show=function(lines){
       renderLines(lines); rcAutoFill(); rcTerms();
       openMask('mkRc');
@@ -709,7 +714,7 @@ if(CAN_EDIT){
       $('#rcTerms').html('收帳條件：'+esc(t.terms_text)+(Number(t.allow_deduct)?'　<b>此客戶接受扣%'+(p>0?'（'+p+'%）':'')+'</b>':'　（主檔未勾選接受扣%）')
         +(t.payment_methods?'　常用收款方式：'+esc(t.payment_methods):''));
       // 新收款單且客戶接受扣%：預帶主檔的折扣百分比
-      if(!editId && Number(t.allow_deduct) && p>0 && p<=DEDUCT_MAX && $('#rcPct').val()===''){ $('#rcPct').val(p); rcPctToDed(); }
+      if(!rcDedLock && !editId && Number(t.allow_deduct) && p>0 && p<=DEDUCT_MAX && $('#rcPct').val()===''){ $('#rcPct').val(p); rcPctToDed(); }
     },'json');
   }
   /* 扣%一變（或應收一變）就重算扣款金額；直接改扣款金額則以金額為準（扣%留著當參考） */
@@ -724,6 +729,7 @@ if(CAN_EDIT){
     var el=document.getElementById('rcPct'), v=el.value.replace(/[^0-9.]/g,''), p=v.split('.');
     if(p.length>2) v=p[0]+'.'+p.slice(1).join(''); p=v.split('.'); if(p[1]!==undefined) v=p[0]+'.'+p[1].slice(0,3);
     if(v!==el.value) el.value=v;
+    if(rcDedLock) return '';
     var msg=''; if(v!=='' && (isNaN(parseFloat(v)) || parseFloat(v)>DEDUCT_MAX)) msg='扣%最多 '+DEDUCT_MAX+'%';
     $('#rcPctErr').text(msg).toggle(!!msg); el.style.borderColor=msg?'#DD5138':'';
     return msg;
