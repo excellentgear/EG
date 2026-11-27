@@ -2468,6 +2468,7 @@ function acc_ar_summary(PDO $db, array $f): array
 
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
+        $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $name = trim((string)$r['Client_name']);
@@ -2620,6 +2621,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth, bool $
     $st2->execute(array_merge($nmList, [$scanFrom, $scanTo, $billingMonth]));
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
+        $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);   // 退貨一律是扣款：數量與單價存正數，金額由呼叫端取負
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (!$withZero && abs($amt) < 0.0001) continue;
         $bm = trim((string)$r['billing_month_override']);
@@ -2709,12 +2711,31 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
     /* 這個帳款月份若客戶已有「已確認鎖帳」的對帳單，只能開立對帳單裡有的憑證（未對到的不開、留待下次對帳） */
     $confSet = [];
     try {
-        $cq = $db->prepare("SELECT s.party_id, l.src_type, l.src_id FROM acc_recon_line l
+        $cq = $db->prepare("SELECT s.party_id, l.src_type, l.src_id, l.adj_qty, l.adj_price, l.adj_amount, l.split_parent FROM acc_recon_line l
                              JOIN acc_recon_sheet s ON s.sheet_id = l.sheet_id
                              WHERE s.side='ar' AND s.status='confirmed' AND s.billing_month=? AND l.src_id>0");
         $cq->execute([$bm]);
-        foreach ($cq->fetchAll(PDO::FETCH_ASSOC) as $cr) $confSet[$cr['party_id']][strtoupper($cr['src_type']) . '-' . (int)$cr['src_id']] = true;
+        $cnt = [];
+        foreach ($cq->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+            $k = strtoupper($cr['src_type']) . '-' . (int)$cr['src_id'];
+            $cnt[$cr['party_id']][$k] = ($cnt[$cr['party_id']][$k] ?? 0) + 1;
+            $hasAdj = $cr['adj_qty'] !== null || $cr['adj_price'] !== null || $cr['adj_amount'] !== null;
+            // 對帳單上調整過的數量／單價／金額，開發票時以它為準（拆分列不套用：同一憑證有多列）
+            $confSet[$cr['party_id']][$k] = ($hasAdj && empty($cr['split_parent'])) ? $cr : true;
+        }
+        foreach ($cnt as $pn => $ks) foreach ($ks as $k => $n) if ($n > 1) $confSet[$pn][$k] = true;
     } catch (Throwable $e) {}
+    // 套用對帳單調整：回傳 [數量, 單價, 金額]（退貨數量與金額為負、單價存正數）
+    $applyAdj = function (string $name, string $key, float $qty, float $price, float $amt, bool $ret) use (&$confSet): array {
+        $c = $confSet[$name][$key] ?? null;
+        if (!is_array($c)) return [$qty, $price, $amt];
+        $q = $c['adj_qty'] !== null ? (float)$c['adj_qty'] : $qty;
+        $p = $c['adj_price'] !== null ? abs((float)$c['adj_price']) : $price;
+        if ($ret) $q = -abs($q);
+        $a = $c['adj_amount'] !== null ? (float)$c['adj_amount'] : $q * $p;
+        if ($ret && $a > 0) $a = -$a;
+        return [$q, $p, $a];
+    };
 
     $groups = [];
     $touch = function (string $name) use (&$groups, $cust, $bm) {
@@ -2757,11 +2778,13 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         if (isset($confSet[$name]) && !isset($confSet[$name]['IS-' . (int)$r['IS_id']])) continue;   // 已鎖帳的對帳單沒有這筆
 
         $touch($name);
+        [$aq, $ap, $aa] = $applyAdj($name, 'IS-' . (int)$r['IS_id'], (float)$r['Qty'], (float)$r['Unit_price'], $amt, false);
+        $amt = $aa;
         $groups[$name]['items'][] = [
             'src_type' => 'IS', 'src_id' => (int)$r['IS_id'], 'src_no' => $r['IS_number'],
             'src_date' => $r['d'], 'product_id' => $r['Product_id'],
-            'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
-            'unit_price' => (float)$r['Unit_price'], 'amount' => $amt,
+            'spec' => $r['Specification'], 'qty' => (int)$aq,
+            'unit_price' => $ap, 'amount' => $aa,
         ];
         $groups[$name]['net_amt'] += $amt;
     }
@@ -2778,6 +2801,7 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
     $st2->execute([$scanFrom, $scanTo]);
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
+        $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);   // 退貨一律是扣款：數量與單價存正數，金額由呼叫端取負
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $name = trim((string)$r['Client_name']);
@@ -2791,13 +2815,14 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         if (isset($confSet[$name]) && !isset($confSet[$name]['IR-' . (int)$r['IR_id']])) continue;
 
         $touch($name);
+        [$aq, $ap, $aa] = $applyAdj($name, 'IR-' . (int)$r['IR_id'], -(float)$r['Qty'], (float)$r['Unit_price'], -$amt, true);
         $groups[$name]['items'][] = [
             'src_type' => 'IR', 'src_id' => (int)$r['IR_id'], 'src_no' => $r['IR_no'],
             'src_date' => $r['d'], 'product_id' => $r['d_id'],
-            'spec' => $r['Specification'], 'qty' => -(int)$r['Qty'],
-            'unit_price' => (float)$r['Unit_price'], 'amount' => -$amt,
+            'spec' => $r['Specification'], 'qty' => (int)$aq,
+            'unit_price' => $ap, 'amount' => $aa,
         ];
-        $groups[$name]['net_amt'] -= $amt;
+        $groups[$name]['net_amt'] += $aa;
     }
 
     // 已鎖帳的對帳單：對帳單上的憑證即為開立依據。對帳單可能帶入「依結帳日屬於別的帳款月份」的單
@@ -2816,22 +2841,25 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
                 $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
                 if (abs($amt) < 0.0001) continue;
                 $touch($pName);
+                [$aq, $ap, $amt] = $applyAdj($pName, $k, (float)$r['Qty'], (float)$r['Unit_price'], $amt, false);
                 $groups[$pName]['items'][] = ['src_type' => 'IS', 'src_id' => $sid, 'src_no' => $r['IS_number'], 'src_date' => $r['d'],
-                    'product_id' => $r['Product_id'], 'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
-                    'unit_price' => (float)$r['Unit_price'], 'amount' => $amt];
+                    'product_id' => $r['Product_id'], 'spec' => $r['Specification'], 'qty' => (int)$aq,
+                    'unit_price' => $ap, 'amount' => $amt];
                 $groups[$pName]['net_amt'] += $amt;
             } elseif ($tp === 'IR') {
                 $q = $db->prepare("SELECT IR_id, IR_no, DATE_FORMAT(IR_date,'%Y-%m-%d') AS d, d_id, Specification, Qty, Unit_price
                                    FROM ir_track WHERE IR_id=?");
                 $q->execute([$sid]); $r = $q->fetch(PDO::FETCH_ASSOC);
                 if (!$r) continue;
+                $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);   // 退貨一律是扣款：數量與單價存正數，金額由呼叫端取負
                 $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
                 if (abs($amt) < 0.0001) continue;
                 $touch($pName);
+                [$aq, $ap, $aa] = $applyAdj($pName, $k, -(float)$r['Qty'], (float)$r['Unit_price'], -$amt, true);
                 $groups[$pName]['items'][] = ['src_type' => 'IR', 'src_id' => $sid, 'src_no' => $r['IR_no'], 'src_date' => $r['d'],
-                    'product_id' => $r['d_id'], 'spec' => $r['Specification'], 'qty' => -(int)$r['Qty'],
-                    'unit_price' => (float)$r['Unit_price'], 'amount' => -$amt];
-                $groups[$pName]['net_amt'] -= $amt;
+                    'product_id' => $r['d_id'], 'spec' => $r['Specification'], 'qty' => (int)$aq,
+                    'unit_price' => $ap, 'amount' => $aa];
+                $groups[$pName]['net_amt'] += $aa;
             }
         }
         if (isset($groups[$pName])) usort($groups[$pName]['items'], fn($a, $b) => strcmp((string)$a['src_date'], (string)$b['src_date']) ?: strcmp((string)$a['src_no'], (string)$b['src_no']));
@@ -3290,6 +3318,7 @@ function acc_create_allowance(PDO $db, int $refInvoiceId, array $irIds, string $
                       . ($u['invoice_no'] ?: '#' . $u['invoice_id']) . "），已略過";
             continue;
         }
+        $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);   // 退貨一律是扣款：數量與單價存正數，金額由呼叫端取負
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) { $errors[] = "退貨單 {$r['IR_no']} 金額為 0，已略過"; continue; }
         $items[] = ['src_id' => (int)$r['IR_id'], 'src_no' => $r['IR_no'], 'src_date' => $r['d'],
@@ -3366,6 +3395,7 @@ function acc_uninvoiced_returns(PDO $db, string $clientName): array
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
         if (isset($used['IR-' . (int)$r['IR_id']])) continue;
+        $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);   // 退貨一律是扣款：數量與單價存正數，金額由呼叫端取負
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $r['amount'] = $amt;
@@ -5285,6 +5315,7 @@ function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, a
     $st2->execute($p2);
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
+        $r['Qty'] = abs((float)$r['Qty']); $r['Unit_price'] = abs((float)$r['Unit_price']);   // 退貨一律是扣款：數量與單價存正數，金額由呼叫端取負
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $ovr = trim((string)$r['billing_month_override']);

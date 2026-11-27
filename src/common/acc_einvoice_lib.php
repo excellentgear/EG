@@ -230,8 +230,9 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
                 $qty = $l['qty'];
                 $amt = round($l['amt']);
                 $price = ($l['merged'] > 1 || $mode !== '') ? ($qty != 0 ? round($l['amt'] / $qty, 4) : 0) : ($qty != 0 ? round($l['amt'] / $qty, 4) : 0);
+                if (!empty($l['ret'])) { $qty = abs($qty); $price = -abs($price); $amt = -abs($amt); }   // 退貨：數量為正，單價與金額為負
                 $note = '';
-                if (!empty($l['ret']) && $l['no'] !== '') $note = '退貨 ' . $l['no'];   // 退貨列每筆都註明退貨單號
+                if (!empty($l['ret']) && $l['no'] !== '') $note = $l['no'];   // 退貨列每筆都註明退貨單號
                 elseif ($l['no'] !== '' && $l['no'] !== $lastNo) $note = $l['no'];
                 $lastNo = $l['no'];
                 $rows[] = [
