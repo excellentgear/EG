@@ -1102,6 +1102,15 @@ function purchase_notify(PDO $db, array $userIds, string $refType, int $refId,
                          string $title, string $content, string $mode = 'read', ?int $createdBy = null): int
 {
     $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+    // 不通知申請人自己（自己提出的申請、進貨、核准結果）；待簽核(sign)仍要通知，否則簽核人兼申請人會卡住
+    if ($userIds && $refId > 0 && $mode !== 'sign') {
+        try {
+            $st = $db->prepare("SELECT requester_id FROM purchase_request WHERE req_id=?");
+            $st->execute([$refId]);
+            $rq = (int)$st->fetchColumn();
+            if ($rq > 0) $userIds = array_values(array_filter($userIds, fn($u) => $u !== $rq));
+        } catch (Throwable $e) {}
+    }
     if (!$userIds) return 0;
     // 測試紀律：標題含 __ 的單據視為測試單，不建立公告也不推播。
     // 一定要回頭查「單據本身」的標題——只檢查訊息字串會漏掉（訊息不一定帶得到單據標題），
