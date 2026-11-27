@@ -687,10 +687,12 @@ if(CAN_EDIT){
       },'json').fail(function(){ toast('載入收款明細失敗', true); });
     } else show([{method:'匯款',amount:pre.due||'',acct_id:defAcct()}]);
   }
-  $('#btnNew').on('click',function(){ openRc(null); });
+  var rcPickIds=[];
+  $('#btnNew').on('click',function(){ rcPickIds=[]; openRc(null); });
   $('#btnDueRecv').on('click',function(){
     var k=Object.keys(dueSel); if(!k.length) return;
     var amt=0, nos=[]; k.forEach(function(i){ amt+=dueRows[i].open; nos.push(dueRows[i].invoice_no); });
+    rcPickIds=k.map(function(i){ return Number(dueRows[i].invoice_id); });
     openRc(null,{customer:dueRows[k[0]].customer_name, due:Math.round(amt*100)/100, note:'發票 '+nos.join('、').substr(0,150)});
   });
   $('#rlAdd').on('click',function(){
@@ -747,6 +749,25 @@ if(CAN_EDIT){
   $.getJSON(API,{action:'rcpt_accts'},function(r){ if(r.ok) ACCTS=r.accts||[]; });
   $(document).on('click','.rc-edit',function(){ openRc(rows[parseInt($(this).data('i'),10)]); });
 
+  /* 新收款存檔後自動沖帳：勾選的發票合計＝收款可沖額，或客戶只有一張發票且金額相同 → 直接沖完；對不起來才開人工沖帳視窗 */
+  function rcAutoAlloc(rid, pick){
+    var manual=function(){ openAlloc(rid); };
+    $.post(API+'?action=rcpt_alloc_options',{receipt_id:rid},function(r){
+      if(!r.ok){ manual(); return; }
+      var cap=rcCap(r.receipt), invs=(r.invoices||[]).filter(function(v){ return Number(v.available)>0.005; }), sel=null;
+      if(pick&&pick.length){
+        var chosen=invs.filter(function(v){ return pick.indexOf(Number(v.invoice_id))>=0; });
+        var sum=chosen.reduce(function(a,v){ return a+Number(v.available); },0);
+        if(chosen.length===pick.length && Math.abs(sum-cap)<0.005) sel=chosen;
+      } else if(invs.length===1 && Math.abs(Number(invs[0].available)-cap)<0.005) sel=invs;
+      if(!sel || (r.allocs||[]).length){ manual(); return; }
+      var allocs=sel.map(function(v){ return {invoice_id:Number(v.invoice_id), amount:Number(v.available)}; });
+      $.post(API+'?action=rcpt_alloc_save',{csrf:CSRF,receipt_id:rid,allocs:JSON.stringify(allocs)},function(x){
+        if(x.ok){ toast('已自動沖帳（金額與發票一致）：'+sel.map(function(v){ return v.invoice_no||('#'+v.invoice_id); }).join('、')); load(); loadDue(); }
+        else manual();
+      },'json').fail(manual);
+    },'json').fail(manual);
+  }
   $('#btnRcSave').on('click',function(){
     var lines=readLines();
     var d={receipt_id:editId, customer_name:$.trim($('#rcCust').val()), receipt_date:$('#rcDate').val(),
@@ -778,7 +799,7 @@ if(CAN_EDIT){
       closeMask('mkRc'); toast(esc(r.message));
       load();
       // 新建立的收款單直接接著開沖帳畫面
-      if(!editId && r.receipt_id) setTimeout(function(){ openAlloc(r.receipt_id); },400);
+      if(!editId && r.receipt_id){ var pick=rcPickIds; rcPickIds=[]; rcAutoAlloc(r.receipt_id, pick); }
     },'json').fail(function(x){
       $b.prop('disabled',false).html('<i class="fa fa-check"></i> 存檔');
       var m='存檔失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
