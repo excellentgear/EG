@@ -29,6 +29,39 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
          : ($perms['canAdmin'] ? '會計管理員'
          : ($perms['canEdit'] ? '會計登錄'
          : ($perms['canView'] ? '會計檢閱' : '無權限')));
+
+/* 能不能開主檔管理的客戶編輯跳窗：判定與 master_data_management.php 的 _mdPerm('customer','edit') 同一套
+   （頁面權限含 A＝本頁管理員、RBAC all、或功能碼 mdata_customer_edit）。主檔頁自己仍會再擋一次。 */
+$canOpenMaster = !empty($perms['isAdmin']);
+if (!$canOpenMaster) {
+    try {
+        require_once __DIR__ . '/../../src/common/rbac.php';
+        $mdFeats = rbac_user_features($db, (int)($_SESSION['id'] ?? 0));
+        $canOpenMaster = in_array('all', $mdFeats, true) || in_array('mdata_customer_edit', $mdFeats, true);
+        if (!$canOpenMaster) {
+            $st = $db->prepare("SELECT smp.page_id, smp.group_id FROM system_module_pages smp
+                                WHERE smp.page_url LIKE '%/views/pages/master_data_management.php' LIMIT 1");
+            $st->execute();
+            $pi = $st->fetch(PDO::FETCH_ASSOC);
+            if ($pi) {
+                $q = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=?");
+                $q->execute([(int)$_SESSION['id'], $pi['page_id']]);
+                $pp = $q->fetchAll(PDO::FETCH_COLUMN);
+                if (!$pp && !empty($pi['group_id'])) {
+                    $g = $db->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+                    $g->execute([$pi['group_id']]);
+                    $mc = $g->fetchColumn();
+                    if ($mc) {
+                        $q = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='group' AND module_code=?");
+                        $q->execute([(int)$_SESSION['id'], $mc]);
+                        $pp = $q->fetchAll(PDO::FETCH_COLUMN);
+                    }
+                }
+                foreach ($pp as $p) if (strpos((string)$p, 'A') !== false) { $canOpenMaster = true; break; }
+            }
+        }
+    } catch (Throwable $e) { /* 判定失敗＝不開放連結 */ }
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -334,6 +367,7 @@ $(document).ready(function () {
 'use strict';
 var API = '../../src/store/Acc_API.php';
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
+var CAN_OPEN_MASTER = <?= $canOpenMaster ? 'true' : 'false' ?>;
 
 var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = 'ship_amt', sortDir = 'desc';
@@ -416,7 +450,9 @@ function render(){
   var h='';
   rows.forEach(function(r,i){
     h+='<tr data-i="'+i+'" data-cid="'+esc(r.customer_id)+'">'
-      +'<td>'+esc(r.customer_id)+'</td>'
+      +'<td>'+(CAN_OPEN_MASTER
+          ? '<a href="../pages/master_data_management.php?edit_customer='+encodeURIComponent(r.customer_id)+'" target="_blank" rel="noopener" title="另開主檔管理並開啟此客戶編輯視窗">'+esc(r.customer_id)+'</a>'
+          : esc(r.customer_id))+'</td>'
       +'<td class="l">'+esc(r.customer)+'</td>'
       +'<td class="l">'+cell(r,'customer_full',true)+'</td>'
       +'<td>'+cell(r,'tax_id')+'</td>'

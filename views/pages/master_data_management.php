@@ -31070,6 +31070,22 @@ $(function() {
             }, 500);
         }
 
+        // ?edit_customer=<客戶代碼>：切到客戶分頁、篩選出該客戶並開啟編輯跳窗
+        // （客戶發票資料維護點客戶編號連進來；沒有客戶編輯權限者只篩選、不開跳窗，並提示）
+        var editCustomer = (params.get('edit_customer') || '').trim();
+        if (editCustomer) {
+            var ecEl = document.getElementById('customers-search');
+            if (ecEl) ecEl.value = editCustomer;
+            setTimeout(function() {
+                if (typeof switchTab === 'function') {
+                    var btn = document.querySelector('.master-tab-btn[onclick*="customers"]');
+                    switchTab('customers', btn);
+                }
+                if (!CAN_CUST_EDIT) { showToast('無客戶修改權限，僅顯示篩選結果', 'error'); return; }
+                setTimeout(function() { openCustomerModal(editCustomer, false); }, 300);
+            }, 100);
+        }
+
         // ?view_customer=<客戶代碼>：以唯讀方式直接開啟該客戶檢視跳窗
         // （給訂單分析等其他頁面用新跳窗連進來看，不吃 CAN_UPDATE 權限，只看不改；
         //   側欄／頂欄／清單已經在 <head> 用 CSS 藏起來，這裡不需要再切分頁）
