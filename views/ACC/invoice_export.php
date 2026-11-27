@@ -845,6 +845,17 @@ $('#btnEinvDl').on('click',function(){
     },1200);
   },'json').fail(function(x){ var m='開立日期儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
 });
+// 按「稍後再說」／關閉：不下載、不標記已轉出，但仍把預覽的開立日期記回這些發票（之後可直接填發票號碼）
+$(document).on('click','[data-close="mkEinv"]',function(){
+  if(!einvIds.length || !$('#mkEinv').hasClass('show')) return;
+  if(!einvDateCheck(true)) return;
+  var d=$('#einvDate').val(), ids=einvIds.slice();
+  $.post(API+'?action=inv_set_date',{csrf:CSRF,ids:ids.join(','),inv_date:d},function(r){
+    if(!r.ok){ toast(esc(r.error||'開立日期儲存失敗'), true); return; }
+    toast('已記錄開立日期 '+esc(d)+'（尚未轉出），可直接填發票號碼');
+    invRows=[]; $('.tab-btn[data-tab=inv]').click();
+  },'json');
+});
 /* 發票管理頁的「轉出」也可走同一個預覽（選取後按鈕） */
 
 $('#btnCandLoad').on('click', loadCand);
@@ -908,8 +919,10 @@ function renderInv(){
       +'<td class="r">'+(v.open_amt>0.005 && !isVoid?'<b style="color:#DD5138;">'+nf(v.open_amt)+'</b>':'')+'</td>'
       +'<td>'+(v.age_bucket?'<span class="pill age-'+v.age_bucket+'">'+v.age_days+'天</span>':'')+'</td>'
       +'<td><button class="btn-mini iv-detail" data-id="'+id+'">'+nf(v.item_cnt)+' 筆</button></td>'
-      +'<td>'+(CAN_EDIT && v.status==='issued' && !isAllow
-          ? '<button class="btn-mini iv-vch" data-bm="'+esc(v.billing_month)+'" data-c="'+esc(v.customer_name)+'" title="到傳票管理，帶入這家客戶與帳款月份">開傳票</button> ' : '')
+      +'<td>'+(Number(v.vch_id)>0
+          ? '<button class="btn-mini iv-vch-open" data-vch="'+Number(v.vch_id)+'" style="background:#DDEBCB;border-color:#B7CF98;color:#4F6B2E;" title="已開傳票，點選另開視窗查看傳票明細"><i class="fa fa-check-square-o"></i></button> '
+          : (CAN_EDIT && v.status==='issued' && !isAllow
+          ? '<button class="btn-mini iv-vch" data-bm="'+esc(v.billing_month)+'" data-c="'+esc(v.customer_name)+'" title="到傳票管理，帶入這家客戶與帳款月份">開傳票</button> ' : ''))
         +(CAN_EDIT && !isVoid
           ? '<button class="btn-mini iv-void" data-id="'+id+'">作廢</button>' : '')+'</td>'
       +'</tr>';
@@ -1108,6 +1121,9 @@ $(document).on('blur','.no-in', function(){
     });
 });
 
+$(document).on('click','.iv-vch-open',function(){
+  window.open('voucher.php?vch='+encodeURIComponent($(this).data('vch')),'_blank');
+});
 $(document).on('click','.iv-vch',function(){
   window.open('voucher.php?side=ar&bm='+encodeURIComponent($(this).data('bm'))+'&party='+encodeURIComponent($(this).data('c')),'_blank');
 });
