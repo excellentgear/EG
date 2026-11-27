@@ -19550,7 +19550,7 @@ function renderCustomersTable(rows, total, pg, pages) {
     html += '<th style="min-width:110px;">客戶名稱</th>';
     html += '<th style="width:30px;text-align:center;">等級</th>';
     html += '<th style="min-width:90px;">產業別</th>';
-    html += '<th style="min-width:100px;white-space:nowrap;">主要業務 / 代理業務</th>';
+    html += '<th style="min-width:100px;white-space:nowrap;">收帳天數</th>';
     html += '<th style="width:95px;">電話</th>';
     html += '<th style="min-width:90px;">地址</th>';
     html += '<th style="min-width:80px;">出貨要求</th>';
@@ -19584,12 +19584,12 @@ function renderCustomersTable(rows, total, pg, pages) {
             html += '<td><strong style="font-size:12px;">'+escHtml(r.customer)+'</strong>'+ownBadge+'</td>';
             html += '<td style="text-align:center;">'+(r.customer_grade?'<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;color:#fff;font-size:10px;font-weight:700;'+(gradeStyle[r.customer_grade]||'background:#eee;')+'">'+escHtml(r.customer_grade)+'</span>':'<span style="color:#ddd;">—</span>')+'</td>';
             html += '<td>'+indHtml+'</td>';
-            var _spri = r.sales_primary ? escHtml(r.sales_primary) : '';
-            var _sdep = r.sales_deputy  ? escHtml(r.sales_deputy)  : '';
-            var _salesHtml = _spri && _sdep
-                ? '<span style="color:#555;">'+_spri+'</span> <span style="color:#bbb;font-size:10px;">/</span> <span style="color:#999;font-size:11px;">'+_sdep+'</span>'
-                : (_spri ? '<span style="color:#555;">'+_spri+'</span>' : (_sdep ? '<span style="color:#999;font-size:11px;">/ '+_sdep+'</span>' : '<span style="color:#ddd;">—</span>'));
-            html += '<td style="white-space:nowrap;">'+_salesHtml+'</td>';
+            var _nd = (r.net_days!==null && r.net_days!==undefined && r.net_days!=='') ? parseInt(r.net_days,10) : null, _netHtml;
+            if (_nd===null || isNaN(_nd)) _netHtml = '<span style="color:#ddd;">—</span>';
+            else if (r.net_unit==='next') _netHtml = '次月結 <span style="color:#999;font-size:11px;">（'+(r.net_months!=null&&r.net_months!==''?parseInt(r.net_months,10):Math.max(0,_nd-30))+'天＋30天＝'+_nd+'天）</span>';
+            else if (r.net_unit==='month' || r.net_unit==='months') _netHtml = '月結 '+_nd+' 天';
+            else _netHtml = _nd+' 天';
+            html += '<td style="white-space:nowrap;">'+_netHtml+'</td>';
             html += '<td style="color:#555;white-space:nowrap;">'+(escHtml(r.customer_tel)||'<span style="color:#ddd;">—</span>')+'</td>';
             var _addr = r.customer_address || '';
             var _addrCell = _addr
