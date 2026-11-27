@@ -745,6 +745,7 @@ $('#btnCdCreate').on('click',function(){
 });
 /* 電子發票匯入檔預覽／下載 */
 var einvIds=[], CAN_CFG=false;
+setTimeout(function(){ if(/[?&]open=einv/.test(location.search)) $('#btnEinvCfg').click(); },1200);   // 由「會計設定」頁連過來
 function einvLoad(){
   var d=$('#einvDate').val(), tm=$.trim($('#einvTime').val());
   if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(tm)){ $('#btnEinvDl').prop('disabled',true); toast('發票時間格式須為 HH:MM（例 18:30）', true); return; }

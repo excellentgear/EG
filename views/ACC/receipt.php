@@ -306,7 +306,8 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
       <label>應收金額</label>
       <input type="number" id="rcDue" step="0.01" min="0" data-eg-hint="沖帳對象的未收合計；填了之後單筆收款的金額會自動算">
       <label>扣 %</label>
-      <input type="number" id="rcPct" step="0.001" min="0" max="100" data-eg-hint="客戶現金／票據扣款百分比">
+      <input type="text" id="rcPct" inputmode="decimal" maxlength="5" data-eg-skip data-eg-hint="客戶付款時扣的百分比，最多 5%（最多 3 位小數）">
+      <span id="rcPctErr" style="grid-column:2 / span 3;font-size:12px;color:#DD5138;display:none;"></span>
       <label>扣款金額</label>
       <input type="number" id="rcDed" step="0.01" min="0" value="0">
       <label>手續費（匯費）</label>
@@ -600,8 +601,9 @@ if(CAN_EDIT){
       +'<td>'+(m==='匯款'?'<select class="rl-acct">'+acctOpts(l.acct_id)+'</select>':'')
         +(m==='支票'?'<input type="text" class="rl-cno" maxlength="30" placeholder="支票號碼" value="'+esc(l.check_no||'')+'">':'')+dep+'</td>'
       +'<td>'+(m==='支票'?'<input type="date" class="rl-due" value="'+esc(l.check_due||'')+'">':'')+'</td>'
-      +'<td>'+(m==='支票'?'<div class="two"><input type="text" class="rl-cbank" maxlength="50" placeholder="開票銀行" value="'+esc(l.check_bank||'')+'">'
-        +'<input type="text" class="rl-cacct" maxlength="40" placeholder="客戶銀行帳號" value="'+esc(l.check_acct||'')+'"></div>':'')+'</td>'
+      +'<td>'+(m==='支票'?'<div class="two"><input type="text" class="rl-cbank" maxlength="7" inputmode="numeric" placeholder="開票銀行代號(7碼)" data-eg-skip value="'+esc(l.check_bank||'')+'">'
+        +'<input type="text" class="rl-cacct" maxlength="40" placeholder="客戶銀行帳號" value="'+esc(l.check_acct||'')+'"></div>'
+        +'<div class="rl-bname" style="font-size:12px;min-height:16px;margin-top:2px;"></div>':'')+'</td>'
       +'<td><button type="button" class="btn-mini rl-del" title="移除這筆">✕</button></td></tr>';
   }
   function readLines(){
@@ -617,9 +619,27 @@ if(CAN_EDIT){
   }
   function renderLines(arr){
     $('#rlBody').html(arr.map(lineRow).join(''));
-    $('#rlBody tr').each(function(i){ var l=arr[i]; if(l.deposit_date) $(this).data('dep',l.deposit_date); if(l._touched) $(this).find('.rl-amt').data('touched',1); });
+    $('#rlBody tr').each(function(i){ var l=arr[i]; if(l.deposit_date) $(this).data('dep',l.deposit_date); if(l._touched) $(this).find('.rl-amt').data('touched',1); bankLook($(this).find('.rl-cbank')); });
     bindRules($('#mkRc')); rcUpdTotal();
   }
+  /* 開票銀行代號：只收數字（7 碼，開頭 0 保留，文字儲存），輸入滿 7 碼即時 AJAX 顯示銀行名稱 */
+  var bankTimer={};
+  function bankLook($in){
+    var $n=$in.closest('td').find('.rl-bname'), v=$in.val();
+    if(!$n.length) return;
+    if(v===''){ $n.text('').css('color',''); $in.css('borderColor',''); return; }
+    if(!/^\d{7}$/.test(v)){ $n.text('銀行代號須為 7 碼數字（已輸入 '+v.length+' 碼）').css('color','#DD5138'); $in.css('borderColor','#DD5138'); return; }
+    var key=v; $n.text('查詢中…').css('color','#8a6d45');
+    $.post(API+'?action=bank_lookup',{code:v},function(r){
+      if($in.val()!==key) return;   // 已經改成別的代號，丟掉舊結果
+      if(r.ok && r.found){ $n.text(r.bank.name+(r.bank.category?'（'+r.bank.category+'）':'')).css('color','#5C7A2E'); $in.css('borderColor','').data('bankok',1); }
+      else { $n.text('查無此銀行代號').css('color','#DD5138'); $in.css('borderColor','#DD5138').data('bankok',0); }
+    },'json');
+  }
+  $(document).on('input','#rlBody .rl-cbank',function(){
+    var c=this.value.replace(/\D/g,'').slice(0,7); if(c!==this.value) this.value=c;
+    var $i=$(this); $i.data('bankok',0); bankLook($i);
+  });
   function rcSum(){ var s=0; $('#rlBody .rl-amt').each(function(){ s+=parseFloat(this.value)||0; }); return Math.round(s*100)/100; }
   function rcNeed(){ var due=parseFloat($('#rcDue').val()); if(isNaN(due)) return null;
     return Math.round((due-(parseFloat($('#rcDed').val())||0)-(parseFloat($('#rcFee').val())||0))*100)/100; }
@@ -658,7 +678,7 @@ if(CAN_EDIT){
       $.post(API+'?action=rcpt_detail',{receipt_id:editId},function(r){
         if(r.accts) ACCTS=r.accts;
         show((r.lines||[]).map(function(l){ return {line_id:l.line_id,method:l.method,amount:l.amount,acct_id:l.acct_id||'',check_no:l.check_no,
-          check_due:l.check_due,check_bank:l.check_bank,check_acct:l.check_acct,deposit_date:l.deposit_date,_touched:1}; }));
+          check_due:l.check_due,check_bank:(/^\d{7}$/.test(l.check_bank||'')?l.check_bank:''),check_acct:l.check_acct,deposit_date:l.deposit_date,_touched:1}; }));
       },'json').fail(function(){ toast('載入收款明細失敗', true); });
     } else show([{method:'匯款',amount:pre.due||'',acct_id:defAcct()}]);
   }
@@ -689,7 +709,7 @@ if(CAN_EDIT){
       $('#rcTerms').html('收帳條件：'+esc(t.terms_text)+(Number(t.allow_deduct)?'　<b>此客戶接受扣%'+(p>0?'（'+p+'%）':'')+'</b>':'　（主檔未勾選接受扣%）')
         +(t.payment_methods?'　常用收款方式：'+esc(t.payment_methods):''));
       // 新收款單且客戶接受扣%：預帶主檔的折扣百分比
-      if(!editId && Number(t.allow_deduct) && p>0 && $('#rcPct').val()===''){ $('#rcPct').val(p); rcPctToDed(); }
+      if(!editId && Number(t.allow_deduct) && p>0 && p<=DEDUCT_MAX && $('#rcPct').val()===''){ $('#rcPct').val(p); rcPctToDed(); }
     },'json');
   }
   /* 扣%一變（或應收一變）就重算扣款金額；直接改扣款金額則以金額為準（扣%留著當參考） */
@@ -698,7 +718,18 @@ if(CAN_EDIT){
     if(!isNaN(due) && !isNaN(pct)) $('#rcDed').val(Math.round(due*pct)/100);
     rcAutoFill();
   }
-  $('#rcPct,#rcDue').on('input',rcPctToDed);
+  /* 扣%：只收數字（最多 3 位小數）、不可超過 5% */
+  var DEDUCT_MAX=5;
+  function pctCheck(){
+    var el=document.getElementById('rcPct'), v=el.value.replace(/[^0-9.]/g,''), p=v.split('.');
+    if(p.length>2) v=p[0]+'.'+p.slice(1).join(''); p=v.split('.'); if(p[1]!==undefined) v=p[0]+'.'+p[1].slice(0,3);
+    if(v!==el.value) el.value=v;
+    var msg=''; if(v!=='' && (isNaN(parseFloat(v)) || parseFloat(v)>DEDUCT_MAX)) msg='扣%最多 '+DEDUCT_MAX+'%';
+    $('#rcPctErr').text(msg).toggle(!!msg); el.style.borderColor=msg?'#DD5138':'';
+    return msg;
+  }
+  $('#rcPct').on('input',function(){ if(!pctCheck()) rcPctToDed(); });
+  $('#rcDue').on('input',rcPctToDed);
   $('#rcDed,#rcFee').on('input',rcAutoFill);
   $('#rcCust').on('change',rcTerms);
   $.getJSON(API,{action:'rcpt_opts'},function(r){ if(r.ok&&r.methods) METHODS=r.methods; });
@@ -712,12 +743,18 @@ if(CAN_EDIT){
            due_amount:$('#rcDue').val(), deduct_pct:$('#rcPct').val(), deduct_amt:parseFloat($('#rcDed').val())||0,
            note:$.trim($('#rcNote').val())};
     if(!d.customer_name){ toast('請填客戶', true); $('#rcCust').focus(); return; }
+    if(pctCheck()){ toast('扣%最多 '+DEDUCT_MAX+'%', true); $('#rcPct').focus(); return; }
     if(!d.receipt_date){ toast('請填收款日', true); return; }
     for(var i=0;i<lines.length;i++){
       var l=lines[i], n=i+1, a=parseFloat(l.amount)||0;
       if(!(a>0)){ toast('第 '+n+' 筆收款：金額必須大於 0', true); $('#rlBody tr').eq(i).find('.rl-amt').focus(); return; }
       if(l.method==='匯款' && !l.acct_id){ toast('第 '+n+' 筆（匯款）：請選擇本公司入帳帳戶（尚未設定請先到「傳票管理→科目設定」新增）', true); return; }
       if(l.method==='支票' && !l.check_no){ toast('第 '+n+' 筆（支票）：請填支票號碼', true); $('#rlBody tr').eq(i).find('.rl-cno').focus(); return; }
+      if(l.method==='支票' && l.check_bank){
+        var $bi=$('#rlBody tr').eq(i).find('.rl-cbank');
+        if(!/^\d{7}$/.test(l.check_bank)){ toast('第 '+n+' 筆（支票）：開票銀行代號須為 7 碼數字', true); $bi.focus(); return; }
+        if(!$bi.data('bankok')){ toast('第 '+n+' 筆（支票）：查無開票銀行代號 '+esc(l.check_bank), true); $bi.focus(); return; }
+      }
       if(l.method==='支票' && !l.check_due){ toast('第 '+n+' 筆（支票）：請填票期（到期日）', true); $('#rlBody tr').eq(i).find('.rl-due').focus(); return; }
     }
     var total=rcSum();

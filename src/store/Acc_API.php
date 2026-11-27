@@ -1189,6 +1189,49 @@ case 'rcpt_vch_void': {
     acc_out(acc_rm_voucher_void($db, (int)($_POST['rv_id'] ?? 0)));
 }
 
+/* 銀行代號（7 碼文字）：查詢名稱（所有人，供收款支票開票銀行即時顯示）、清單、維護與匯入（會計管理員） */
+case 'bank_lookup': {
+    require_once $document_root . '/EGsystem/src/common/acc_bank_lib.php';
+    $s = $_POST ?: $_GET;
+    $c = trim((string)($s['code'] ?? ''));
+    if (!preg_match('/^\d{7}$/', $c)) acc_out(['found' => false, 'valid' => false]);
+    $b = acc_bank_lookup($db, $c);
+    acc_out(['found' => (bool)$b, 'valid' => true, 'bank' => $b]);
+}
+case 'bank_list': {
+    require_once $document_root . '/EGsystem/src/common/acc_bank_lib.php';
+    $s = $_POST ?: $_GET; $s['kw'] = acc_u8(trim((string)($s['kw'] ?? ''))); $s['category'] = acc_u8(trim((string)($s['category'] ?? '')));
+    acc_out(acc_bank_list($db, $s) + ['can_admin' => (bool)$perms['canAdmin']]);
+}
+case 'bank_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_bank_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以維護銀行代號', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $d = json_decode($_POST['data'] ?? '{}', true); if (!is_array($d)) acc_err('資料格式錯誤');
+    foreach (['code', 'category', 'name', 'phone', 'address', 'note'] as $k) if (isset($d[$k])) $d[$k] = acc_u8((string)$d[$k]);
+    $r = acc_bank_save($db, $d); if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+case 'bank_del': {
+    require_once $document_root . '/EGsystem/src/common/acc_bank_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以維護銀行代號', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    acc_out(acc_bank_delete($db, (string)($_POST['code'] ?? '')));
+}
+case 'bank_import': {
+    require_once $document_root . '/EGsystem/src/common/acc_bank_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以匯入銀行代號', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $f = $_FILES['file'] ?? null;
+    if (!$f || $f['error'] !== UPLOAD_ERR_OK) acc_err('請選擇 xlsx 檔案');
+    if (strtolower(pathinfo((string)$f['name'], PATHINFO_EXTENSION)) !== 'xlsx') acc_err('只接受 .xlsx 檔');
+    $r = acc_bank_import($db, $f['tmp_name']); if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
 /* 客戶下拉（有已開立發票或有收款紀錄的） */
 case 'rcpt_customers': {
     $rows = $db->query("SELECT customer_name, MAX(customer_id) AS customer_id, COUNT(*) AS cnt

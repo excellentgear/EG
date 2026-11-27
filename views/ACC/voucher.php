@@ -461,6 +461,8 @@ function acRow(a){
     +'<td><input type="text" class="al-sum" maxlength="200" value="'+esc(a.summary||'')+'" '+IN+dis+'></td><td><input type="text" class="al-note" maxlength="200" value="'+esc(a.note||'')+'" '+IN+dis+'></td>'
     +'<td><input type="text" class="al-par" maxlength="10" value="'+esc(a.parent_code||'')+'" '+IN+dis+'></td><td style="text-align:center;"><input type="checkbox" class="al-on"'+(on?' checked':'')+dis+'></td>'+delc+'</tr>';
 }
+/* 由「會計設定」頁連過來：?open=acct／coacct 自動開啟對應設定視窗 */
+setTimeout(function(){ var m=/[?&]open=(acct|coacct)/.exec(location.search); if(m) $(m[1]==='acct'?'#btnAcctCfg':'#btnCoAcct').click(); },900);
 /* 本公司入帳帳戶 */
 var CO=[];
 function coRow(a){

@@ -12,6 +12,8 @@
  */
 require_once __DIR__ . '/acc_receipt_ext_lib.php';
 
+const ACC_RCPT_DEDUCT_MAX = 5;   // 客戶付款時扣%的上限
+
 function acc_rm_gl(): array
 {
     return ['cash' => ['1101000', '現金'], 'notes' => ['1141000', '應收票據'], 'bank' => ['1102000', '銀行存款'],
@@ -155,9 +157,15 @@ function acc_rm_lines_check(PDO $db, array $lines): array
             if ($ckNo === '') return ['ok' => false, 'message' => "第 {$i} 列（支票）：請填支票號碼"];
             if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ckDue)) return ['ok' => false, 'message' => "第 {$i} 列（支票）：請填票期（到期日）"];
         } else { $ckNo = ''; $ckDue = ''; }
+        $ckBank = $m === '支票' ? trim((string)($l['check_bank'] ?? '')) : '';
+        if ($ckBank !== '') {   // 開票銀行＝7 碼銀行代號（文字儲存，必須在銀行代號表內）
+            require_once __DIR__ . '/acc_bank_lib.php';
+            if (!preg_match('/^\d{7}$/', $ckBank)) return ['ok' => false, 'message' => "第 {$i} 列（支票）：開票銀行代號須為 7 碼數字"];
+            if (!acc_bank_lookup($db, $ckBank)) return ['ok' => false, 'message' => "第 {$i} 列（支票）：查無開票銀行代號 {$ckBank}"];
+        }
         $out[] = ['line_id' => (int)($l['line_id'] ?? 0), 'method' => $m, 'amount' => $amt, 'acct_id' => $acct ?: null,
                   'check_no' => $ckNo ?: null, 'check_due' => $ckDue ?: null,
-                  'check_bank' => $m === '支票' ? (trim((string)($l['check_bank'] ?? '')) ?: null) : null,
+                  'check_bank' => $ckBank !== '' ? $ckBank : null,
                   'check_acct' => $m === '支票' ? (trim((string)($l['check_acct'] ?? '')) ?: null) : null];
         $total += $amt;
     }
@@ -172,7 +180,11 @@ function acc_rm_header(PDO $db, array $lines): array
     $h = ['method' => count($ms) === 1 ? $ms[0] : '混合', 'bank' => '', 'check_no' => '', 'check_due' => '', 'remit_account' => ''];
     foreach ($lines as $l) {
         if ($l['method'] === '支票') {
-            if ($h['check_no'] === '') { $h['check_no'] = (string)$l['check_no']; $h['bank'] = (string)($l['check_bank'] ?? ''); }
+            if ($h['check_no'] === '') {
+                $h['check_no'] = (string)$l['check_no'];
+                $bk = (string)($l['check_bank'] ?? '');
+                if ($bk !== '') { require_once __DIR__ . '/acc_bank_lib.php'; $b = acc_bank_lookup($db, $bk); $h['bank'] = $b ? $b['name'] : $bk; }
+            }
             if ($h['check_due'] === '' || $l['check_due'] < $h['check_due']) $h['check_due'] = (string)$l['check_due'];
         }
         if ($l['method'] === '匯款' && $h['remit_account'] === '' && isset($accts[$l['acct_id']])) {
@@ -211,7 +223,7 @@ function acc_rm_receipt_save(PDO $db, array $d, string $uid): array
     $pct = ($d['deduct_pct'] ?? '') === '' ? null : round((float)$d['deduct_pct'], 3);
     $ded = round((float)($d['deduct_amt'] ?? 0), 2); $fee = round((float)($d['fee'] ?? 0), 2);
     if ($ded < 0 || $fee < 0) return ['success' => false, 'message' => '扣款與手續費不可為負數'];
-    if ($pct !== null && ($pct < 0 || $pct > 100)) return ['success' => false, 'message' => '扣% 須介於 0~100'];
+    if ($pct !== null && ($pct < 0 || $pct > ACC_RCPT_DEDUCT_MAX)) return ['success' => false, 'message' => '扣%最多 ' . ACC_RCPT_DEDUCT_MAX . '%'];
     if (!$legacy && $due !== null && abs(($due - $ded - $fee) - $lc['total']) > 0.5)
         return ['success' => false, 'message' => '金額不符：應收 ' . number_format($due) . ' － 扣款 ' . number_format($ded) . ' － 匯費 ' . number_format($fee)
                 . ' ＝ ' . number_format($due - $ded - $fee) . '，與各筆收款合計 ' . number_format($lc['total']) . ' 不同'];
