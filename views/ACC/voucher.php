@@ -73,6 +73,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <button class="tab-btn on" data-tab="new"><i class="fa fa-plus-square-o"></i> 1. 開立傳票</button>
       <button class="tab-btn" data-tab="list"><i class="fa fa-search"></i> 2. 傳票查詢</button>
       <?php if ($perms['canEdit']): ?><button id="btnAcctCfg" style="align-self:center;"><i class="fa fa-cog"></i> 科目設定</button><?php endif; ?>
+      <?php if ($perms['canEdit']): ?><button id="btnCoAcct" style="align-self:center;"><i class="fa fa-bank"></i> 本公司入帳帳戶</button><?php endif; ?>
       <span class="a-role" style="align-self:center;">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b></span>
     </div>
 
@@ -157,6 +158,14 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <div id="vSigns" style="display:flex;margin-top:8px;border:1px solid var(--a-line2);"></div>
   </div>
   <div class="m-foot"><button data-close="mkJ">取消</button><button class="go" id="btnJConfirm"><i class="fa fa-check"></i> 確定開立</button></div>
+</div></div>
+<div class="a-mask" id="mkCoAcct"><div class="a-modal" style="width:1100px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-bank"></i>&nbsp;本公司入帳帳戶（收款登錄時匯款要選的帳戶）<span class="m-close" data-close="mkCoAcct">✕</span></div>
+  <div class="m-body">
+    <div class="a-hint" style="margin-bottom:8px;">每個帳戶要有設定編號、名稱、銀行、帳號；「對應科目」是收款傳票借方的銀行存款科目（例 1102600 台新銀行）。可指定一個預設帳戶，收款時自動帶入。<?php if (!$perms['canAdmin']): ?><b>只有會計管理員可以修改。</b><?php endif; ?></div>
+    <table class="a-t" id="coTbl"><thead><tr><th style="width:90px;">設定編號</th><th>名稱</th><th>銀行</th><th>帳號</th><th style="width:110px;">對應科目</th><th>備註</th><th style="width:50px;">預設</th><th style="width:50px;">啟用</th><th style="width:130px;"></th></tr></thead><tbody id="coBody"></tbody></table>
+  </div>
+  <div class="m-foot"><button data-close="mkCoAcct">關閉</button></div>
 </div></div>
 <div class="a-mask" id="mkAcct"><div class="a-modal" style="width:1180px;max-width:96vw;">
   <div class="m-head"><i class="fa fa-cog"></i>&nbsp;預設會計科目<span class="m-close" data-close="mkAcct">✕</span></div>
@@ -452,6 +461,38 @@ function acRow(a){
     +'<td><input type="text" class="al-sum" maxlength="200" value="'+esc(a.summary||'')+'" '+IN+dis+'></td><td><input type="text" class="al-note" maxlength="200" value="'+esc(a.note||'')+'" '+IN+dis+'></td>'
     +'<td><input type="text" class="al-par" maxlength="10" value="'+esc(a.parent_code||'')+'" '+IN+dis+'></td><td style="text-align:center;"><input type="checkbox" class="al-on"'+(on?' checked':'')+dis+'></td>'+delc+'</tr>';
 }
+/* 本公司入帳帳戶 */
+var CO=[];
+function coRow(a){
+  var id=a.acct_id||0, ro=CAN_ADMIN?'':' disabled';
+  var f=function(k,w,ph){ return '<td><input type="text" class="co-'+k+'" value="'+esc(a[k]||'')+'" style="width:'+w+';"'+ro+(ph?' placeholder="'+ph+'"':'')+' data-eg-skip></td>'; };
+  return '<tr data-id="'+id+'">'+f('code','86px')+f('name','100%')+f('bank','100%')+f('account_no','100%')
+    +'<td><input type="text" class="co-gl" list="dlAcct" value="'+esc(a.gl_code||'1102000')+'" style="width:100px;"'+ro+' data-eg-skip></td>'+f('note','100%')
+    +'<td><input type="radio" name="coDef" class="co-def"'+(Number(a.is_default)?' checked':'')+ro+'></td>'
+    +'<td><input type="checkbox" class="co-act"'+((id===0||Number(a.active))?' checked':'')+ro+'></td>'
+    +'<td>'+(CAN_ADMIN?'<button class="btn-mini co-save">儲存</button>'+(id?' <button class="btn-mini co-del">刪除</button>':''):'')+'</td></tr>';
+}
+function coRender(){ $('#coBody').html(CO.map(coRow).join('')+(CAN_ADMIN?coRow({acct_id:0,gl_code:'1102000'}):'')); }
+$('#btnCoAcct').on('click',function(){
+  $('#coBody').html('<tr><td colspan="9" style="padding:14px;color:#8a6d45;">載入中…</td></tr>'); openMask('mkCoAcct');
+  $.getJSON(API,{action:'rcpt_accts',all:1},function(r){ if(!r.ok){ toast(esc(r.error||'載入失敗'),true); return; } CO=r.accts||[]; coRender(); });
+});
+$(document).on('click','.co-save',function(){
+  var $r=$(this).closest('tr'), d={acct_id:Number($r.data('id'))||0, code:$.trim($r.find('.co-code').val()), name:$.trim($r.find('.co-name').val()),
+    bank:$.trim($r.find('.co-bank').val()), account_no:$.trim($r.find('.co-account_no').val()), gl_code:$.trim($r.find('.co-gl').val()),
+    note:$.trim($r.find('.co-note').val()), is_default:$r.find('.co-def').is(':checked')?1:0, active:$r.find('.co-act').is(':checked')?1:0};
+  if(!d.code){ toast('請填設定編號',true); return; } if(!d.name){ toast('請填名稱',true); return; } if(!d.account_no){ toast('請填帳號',true); return; }
+  if(!/^\d{4,10}$/.test(d.gl_code)){ toast('對應科目代號須為 4~10 位數字',true); return; }
+  $.post(API+'?action=rcpt_acct_save',{csrf:CSRF,data:JSON.stringify(d)},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'),true); return; } toast('已儲存'); CO=r.accts||[]; coRender();
+  },'json').fail(function(x){ var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m),true); });
+});
+$(document).on('click','.co-del',function(){
+  if(!confirm('確定刪除這個帳戶？（已被收款單使用的只能改為停用）')) return;
+  $.post(API+'?action=rcpt_acct_del',{csrf:CSRF,acct_id:$(this).closest('tr').data('id')},function(r){
+    if(!r.ok){ toast(esc(r.error||'刪除失敗'),true); return; } toast('已刪除'); CO=r.accts||[]; coRender();
+  },'json').fail(function(x){ var m='刪除失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m),true); });
+});
 $('#btnAcctCfg').on('click',function(){
   $.getJSON(API,{action:'vch_accounts'},function(r){
     var dis=CAN_ADMIN?'':' disabled'; CATS=r.categories||[];

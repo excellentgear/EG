@@ -1019,7 +1019,7 @@ case 'rcpt_list': {
     require_once $document_root . '/EGsystem/src/common/acc_receipt_ext_lib.php';
     acc_rcpt_ext_ensure($db);
     $s = $_POST ?: $_GET;
-    acc_out(acc_receipt_list($db, [
+    $rl = (acc_receipt_list($db, [
         'date_from'     => trim((string)($s['date_from'] ?? '')),
         'date_to'       => trim((string)($s['date_to'] ?? '')),
         'kw'            => acc_u8(trim((string)($s['kw'] ?? ''))),
@@ -1027,6 +1027,9 @@ case 'rcpt_list': {
         'page'          => max(1, (int)($s['page'] ?? 1)),
         'per_page'      => (int)($s['per_page'] ?? 20),
     ]));
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    acc_rm_attach($db, $rl['rows']);
+    acc_out($rl);
 }
 
 case 'rcpt_due_list': {
@@ -1055,6 +1058,15 @@ case 'rcpt_save': {
     if (!is_array($d)) acc_err('資料格式錯誤');
     foreach (['customer_name', 'bank', 'note', 'method'] as $k)
         if (isset($d[$k])) $d[$k] = acc_u8((string)$d[$k]);
+    // 混合收款（多筆收款明細）：走 acc_receipt_multi_lib
+    if (isset($d['lines']) && is_array($d['lines'])) {
+        require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+        foreach ($d['lines'] as &$ln) foreach (['method', 'check_no', 'check_bank', 'check_acct'] as $k) if (isset($ln[$k])) $ln[$k] = acc_u8((string)$ln[$k]);
+        unset($ln);
+        $r = acc_rm_receipt_save($db, $d, (string)$uid);
+        if (!$r['success']) acc_err($r['message']);
+        acc_out($r);
+    }
     // 新版收款延伸欄位（入帳類型必填資料、扣%／匯費）：先檢核再存；DDL 在交易外先跑
     require_once $document_root . '/EGsystem/src/common/acc_receipt_ext_lib.php';
     acc_rcpt_ext_ensure($db);
@@ -1078,6 +1090,8 @@ case 'rcpt_delete': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canAdmin']) acc_err('僅會計管理員可刪除收款單', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($lk = acc_rm_voucher_lock($db, (int)($_POST['receipt_id'] ?? 0))) acc_err($lk);
     $r = acc_receipt_delete($db, (int)($_POST['receipt_id'] ?? 0), (string)$uid);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
@@ -1102,9 +1116,77 @@ case 'rcpt_alloc_save': {
     if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $allocs = json_decode($_POST['allocs'] ?? '[]', true);
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($lk = acc_rm_voucher_lock($db, (int)($_POST['receipt_id'] ?? 0))) acc_err($lk);
     $r = acc_alloc_save($db, (int)($_POST['receipt_id'] ?? 0), is_array($allocs) ? $allocs : [], (string)$uid);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
+}
+
+/* 本公司入帳帳戶（讀：所有人；改：會計管理員） */
+case 'rcpt_accts': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    acc_out(['accts' => acc_rm_accts($db, !empty($_GET['all']) || !empty($_POST['all'])), 'can_admin' => (bool)$perms['canAdmin']]);
+}
+case 'rcpt_acct_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以設定入帳帳戶', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $d = json_decode($_POST['data'] ?? '{}', true); if (!is_array($d)) acc_err('資料格式錯誤');
+    foreach (['code', 'name', 'bank', 'account_no', 'note', 'gl_code'] as $k) if (isset($d[$k])) $d[$k] = acc_u8((string)$d[$k]);
+    $r = acc_rm_acct_save($db, $d); if (!$r['success']) acc_err($r['message']);
+    acc_out($r + ['accts' => acc_rm_accts($db, true)]);
+}
+case 'rcpt_acct_del': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('只有會計管理員可以設定入帳帳戶', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_rm_acct_delete($db, (int)($_POST['acct_id'] ?? 0)); if (!$r['success']) acc_err($r['message']);
+    acc_out($r + ['accts' => acc_rm_accts($db, true)]);
+}
+/* 某收款單的明細＋傳票 */
+case 'rcpt_detail': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    $s = $_POST ?: $_GET; $rid = (int)($s['receipt_id'] ?? 0);
+    acc_out(['lines' => acc_rm_lines_of($db, $rid), 'vouchers' => acc_rm_vouchers($db, $rid), 'accts' => acc_rm_accts($db)]);
+}
+/* 支票兌現入帳確認／取消（會計登錄） */
+case 'rcpt_deposit': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $cancel = !empty($_POST['cancel']);
+    $r = acc_rm_deposit_set($db, (int)($_POST['line_id'] ?? 0), $cancel ? null : trim((string)($_POST['date'] ?? '')), (int)($_POST['acct_id'] ?? 0), (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+/* 收款傳票／支票入帳傳票：預覽、建立、作廢 */
+case 'rcpt_vch_preview': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    $s = $_POST ?: $_GET;
+    $r = (($s['kind'] ?? '') === 'DEPOSIT') ? acc_rm_deposit_build($db, (int)($s['line_id'] ?? 0)) : acc_rm_voucher_build($db, (int)($s['receipt_id'] ?? 0));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+case 'rcpt_vch_save': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_rm_voucher_save($db, (string)($_POST['kind'] ?? ''), (int)($_POST['receipt_id'] ?? 0), (int)($_POST['line_id'] ?? 0),
+        acc_u8((string)($_POST['voucher_no'] ?? '')), trim((string)($_POST['voucher_date'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+case 'rcpt_vch_void': {
+    require_once $document_root . '/EGsystem/src/common/acc_receipt_multi_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    acc_out(acc_rm_voucher_void($db, (int)($_POST['rv_id'] ?? 0)));
 }
 
 /* 客戶下拉（有已開立發票或有收款紀錄的） */

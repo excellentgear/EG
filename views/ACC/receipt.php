@@ -155,6 +155,19 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
 .frm .sub{grid-column:1 / span 4;font-size:12px;color:var(--a-ink2);border-top:1px dashed var(--a-line);padding-top:4px;margin-top:2px;}
 .frm .hide{display:none !important;}
 .rc-hint{grid-column:2 / span 3;font-size:12px;color:var(--a-ink2);}
+.sub-h{margin:12px 0 6px;font-weight:bold;font-size:13.5px;color:var(--a-ink);border-top:1px dashed var(--a-line);padding-top:8px;}
+.rl-tbl td{padding:3px 4px;vertical-align:middle;}
+.rl-tbl input,.rl-tbl select{height:29px;border:1px solid var(--a-line2);border-radius:4px;padding:0 6px;font-size:13px;width:100%;box-sizing:border-box;}
+.rl-tbl input.rl-amt{text-align:right;}
+.rl-tbl .two{display:flex;gap:4px;}
+.rv-sec{margin:0 0 14px;}
+.rv-sec h5{margin:0 0 6px;font-size:14px;color:var(--a-ink);}
+.rv-t{width:100%;border-collapse:collapse;font-size:13px;}
+.rv-t th,.rv-t td{border:1px solid var(--a-line);padding:4px 8px;}
+.rv-t th{background:var(--a-bg2);}
+.rv-t td.r{text-align:right;}
+.rv-f{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;}
+.rv-f input,.rv-f select{height:30px;border:1px solid var(--a-line2);border-radius:4px;padding:0 6px;}
 
 @media print{
   .a-bar,.a-pager,.a-mask,.nav_menu,.left_col,footer{display:none !important;}
@@ -256,7 +269,7 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
     <div class="a-wrap">
       <table class="a-t" id="tbl">
         <thead><tr>
-          <th>收款單號</th><th>入帳日</th><th>客戶</th><th>方式</th>
+          <th>收款單號</th><th>收款日</th><th>客戶</th><th>方式</th>
           <th>收款金額</th><th>手續費</th><th>已沖帳</th><th>暫收款</th><th>狀態</th>
           <th>銀行／票號</th><th>票期</th><th>備註</th><th>操作</th>
         </tr></thead>
@@ -277,7 +290,7 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
 
 <?php if ($perms['canEdit']): ?>
 <!-- 收款單編輯 -->
-<div class="a-mask" id="mkRc"><div class="a-modal narrow">
+<div class="a-mask" id="mkRc"><div class="a-modal" style="width:1060px;max-width:96vw;">
   <div class="m-head"><i class="fa fa-money"></i>&nbsp;<span id="rcTitle">登錄收款</span>
     <span class="m-close" data-close="mkRc">✕</span></div>
   <div class="m-body">
@@ -287,46 +300,49 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
         <input type="text" id="rcCust" list="custList" placeholder="輸入或選擇客戶簡稱">
         <datalist id="custList"></datalist>
       </div>
-      <label>入帳日 <span style="color:#DD5138;">*</span></label>
-      <input type="date" id="rcDate">
-      <label>收款方式 <span style="color:#DD5138;">*</span></label>
-      <select id="rcMethod"><option>匯款</option><option>支票</option><option>現金</option><option>其他</option></select>
+      <label>收款日 <span style="color:#DD5138;">*</span></label>
+      <input type="date" id="rcDate" data-eg-hint="拿到支票／現金／收到匯款的日期，預設今日，可修改">
       <div class="rc-hint" id="rcTerms"></div>
       <label>應收金額</label>
-      <input type="number" id="rcDue" step="0.01" min="0" data-eg-hint="沖帳對象的未收合計；填了之後實收會自動算">
-      <label class="rc-deduct">扣 %</label>
-      <input type="number" id="rcPct" step="0.001" min="0" max="100" class="rc-deduct" data-eg-hint="客戶現金／票據扣款百分比">
-      <label class="rc-deduct">扣款金額</label>
-      <input type="number" id="rcDed" step="0.01" min="0" value="0" class="rc-deduct">
+      <input type="number" id="rcDue" step="0.01" min="0" data-eg-hint="沖帳對象的未收合計；填了之後單筆收款的金額會自動算">
+      <label>扣 %</label>
+      <input type="number" id="rcPct" step="0.001" min="0" max="100" data-eg-hint="客戶現金／票據扣款百分比">
+      <label>扣款金額</label>
+      <input type="number" id="rcDed" step="0.01" min="0" value="0">
       <label>手續費（匯費）</label>
       <input type="number" id="rcFee" step="0.01" min="0" value="0">
-      <label>實收金額 <span style="color:#DD5138;">*</span></label>
-      <input type="number" id="rcAmount" step="0.01" min="0">
-      <span></span><span></span>
-      <div class="sub rc-remit">匯款資料</div>
-      <label class="rc-remit">匯入帳號 <span style="color:#DD5138;">*</span></label>
-      <input type="text" id="rcAcct" class="rc-remit" maxlength="40">
-      <label class="rc-remit rc-bank">銀行</label>
-      <input type="text" id="rcBank" class="rc-remit rc-bank">
-      <div class="sub rc-check">支票資料</div>
-      <label class="rc-check">支票號碼 <span style="color:#DD5138;">*</span></label>
-      <input type="text" id="rcCheckNo" class="rc-check" maxlength="30">
-      <label class="rc-check">票期（到期日） <span style="color:#DD5138;">*</span></label>
-      <input type="date" id="rcCheckDue" class="rc-check">
-      <label class="rc-check">開票銀行</label>
-      <input type="text" id="rcBank2" class="rc-check" maxlength="50">
-      <span class="rc-check"></span>
+      <label>實收金額（合計）</label>
+      <input type="text" id="rcAmount" readonly class="rc-fixed" style="font-weight:bold;">
+      <div class="rc-hint" id="rcDiff"></div>
+    </div>
+    <div class="sub-h">收款明細　<span style="font-weight:normal;font-size:12px;color:#8a6d45;">一張收款單可混合現金／支票／匯款，各自一列；匯款要選本公司入帳帳戶，支票要填票號與票期</span></div>
+    <div style="overflow-x:auto;">
+    <table class="a-t rl-tbl"><thead><tr>
+      <th style="width:92px;">方式</th><th style="width:120px;">金額</th><th style="width:300px;">入帳帳戶／支票號碼</th>
+      <th style="width:140px;">票期（到期日）</th><th>開票銀行／客戶銀行帳號</th><th style="width:44px;"></th>
+    </tr></thead><tbody id="rlBody"></tbody></table></div>
+    <button type="button" class="btn-mini" id="rlAdd" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增一筆收款</button>
+    <div class="frm" style="margin-top:10px;">
       <label>備註</label>
       <input type="text" id="rcNote" class="full" maxlength="200">
     </div>
     <div class="a-hint" style="margin-top:8px;">
-      存檔後可接著做沖帳。實收金額＝應收金額－扣款－手續費；客戶扣款與手續費視為已收，沖帳時可一併沖掉（不會留零頭）。
+      實收＝各筆收款金額合計＝應收金額－扣款－手續費；客戶扣款與手續費視為已收，沖帳時可一併沖掉（不會留零頭）。
+      支票收進來就可以沖帳；<b>兌現入帳</b>是另一個時點，等銀行入帳後在清單的「傳票」裡「確認入帳」，再開入帳傳票。
     </div>
   </div>
   <div class="m-foot">
     <button data-close="mkRc">取消</button>
     <button class="go" id="btnRcSave"><i class="fa fa-check"></i> 存檔</button>
   </div>
+</div></div>
+
+<!-- 收款傳票／支票入帳 -->
+<div class="a-mask" id="mkRv"><div class="a-modal" style="width:1040px;max-width:96vw;">
+  <div class="m-head"><i class="fa fa-file-text-o"></i>&nbsp;<span id="rvTitle">傳票</span>
+    <span class="m-close" data-close="mkRv">✕</span></div>
+  <div class="m-body"><div id="rvBody"></div></div>
+  <div class="m-foot"><button data-close="mkRv">關閉</button></div>
 </div></div>
 
 <!-- 沖帳 -->
@@ -516,7 +532,7 @@ function render(){
       +'<td><b>'+esc(v.receipt_no)+'</b></td>'
       +'<td>'+esc(v.receipt_date)+'</td>'
       +'<td class="l">'+esc(v.customer_name)+'</td>'
-      +'<td>'+esc(v.method||'')+'</td>'
+      +'<td class="l" style="font-size:12px;">'+esc(v.lines_txt||v.method||'')+(Number(v.pending_deposit)>0?' <span class="od">待入帳'+v.pending_deposit+'</span>':'')+'</td>'
       +'<td class="r"><b>'+nf(v.amount)+'</b></td>'
       +'<td class="r">'+(v.fee>0?nf(v.fee):'')+'</td>'
       +'<td class="r">'+nf(v.allocated)+'</td>'
@@ -529,7 +545,8 @@ function render(){
       +'<td>'
         +(CAN_EDIT?'<button class="btn-mini rc-alloc" data-id="'+v.receipt_id+'">沖帳'
           +(v.alloc_cnt?'('+v.alloc_cnt+')':'')+'</button> '
-          +'<button class="btn-mini rc-edit" data-i="'+i+'">修改</button> ':'')
+          +'<button class="btn-mini rc-edit" data-i="'+i+'">修改</button> '
+          +'<button class="btn-mini rc-vch" data-id="'+v.receipt_id+'" data-no="'+esc(v.receipt_no)+'">傳票'+(v.has_rcpt_vch?'✓':'')+'</button> ':'')
         +(CAN_ADMIN?'<button class="btn-mini rc-del" data-id="'+v.receipt_id+'">刪除</button>':'')
       +'</td></tr>';
   });
@@ -563,37 +580,87 @@ $('#btnExport').on('click',function(){
 });
 $('#btnPrint').on('click',function(){ window.print(); });
 
-/* ══ 收款單編輯 ══ */
+/* ══ 收款單編輯（混合收款：多筆收款明細）══ */
 if(CAN_EDIT){
-  var editId = 0;
-  var rcLegacy=false;
+  var editId = 0, rcLegacy=false, ACCTS=[], METHODS=['匯款','支票','現金','信用狀','其他'];
+  function acctOpts(sel){
+    var h='<option value="">選擇本公司帳戶</option>';
+    ACCTS.forEach(function(a){ h+='<option value="'+a.acct_id+'"'+(String(sel)===String(a.acct_id)?' selected':'')+'>'
+      +esc(a.code+' '+a.name+(a.bank?'／'+a.bank:'')+'／'+a.account_no)+'</option>'; });
+    return h;
+  }
+  function defAcct(){ var d=ACCTS.filter(function(a){ return Number(a.is_default); })[0]||(ACCTS.length===1?ACCTS[0]:null); return d?d.acct_id:''; }
+  function methOpts(sel){ return METHODS.map(function(m){ return '<option'+(m===sel?' selected':'')+'>'+esc(m)+'</option>'; }).join(''); }
+  function lineRow(l,i){
+    var m=l.method||'匯款', id=Number(l.line_id)||0;
+    var dep=l.deposit_date?'<div style="font-size:11px;color:#5C7A2E;">已入帳 '+dd(l.deposit_date)+'</div>':'';
+    return '<tr data-i="'+i+'" data-lid="'+id+'">'
+      +'<td><select class="rl-m">'+methOpts(m)+'</select></td>'
+      +'<td><input type="number" class="rl-amt" step="0.01" min="0" value="'+esc(l.amount===0||l.amount?l.amount:'')+'"></td>'
+      +'<td>'+(m==='匯款'?'<select class="rl-acct">'+acctOpts(l.acct_id)+'</select>':'')
+        +(m==='支票'?'<input type="text" class="rl-cno" maxlength="30" placeholder="支票號碼" value="'+esc(l.check_no||'')+'">':'')+dep+'</td>'
+      +'<td>'+(m==='支票'?'<input type="date" class="rl-due" value="'+esc(l.check_due||'')+'">':'')+'</td>'
+      +'<td>'+(m==='支票'?'<div class="two"><input type="text" class="rl-cbank" maxlength="50" placeholder="開票銀行" value="'+esc(l.check_bank||'')+'">'
+        +'<input type="text" class="rl-cacct" maxlength="40" placeholder="客戶銀行帳號" value="'+esc(l.check_acct||'')+'"></div>':'')+'</td>'
+      +'<td><button type="button" class="btn-mini rl-del" title="移除這筆">✕</button></td></tr>';
+  }
+  function readLines(){
+    var out=[];
+    $('#rlBody tr').each(function(){
+      var $r=$(this);
+      out.push({line_id:Number($r.data('lid'))||0, method:$r.find('.rl-m').val(), amount:$r.find('.rl-amt').val(),
+        acct_id:$r.find('.rl-acct').val()||'', check_no:$.trim($r.find('.rl-cno').val()||''), check_due:$r.find('.rl-due').val()||'',
+        check_bank:$.trim($r.find('.rl-cbank').val()||''), check_acct:$.trim($r.find('.rl-cacct').val()||''),
+        deposit_date:$r.data('dep')||'', _touched:$r.find('.rl-amt').data('touched')?1:0});
+    });
+    return out;
+  }
+  function renderLines(arr){
+    $('#rlBody').html(arr.map(lineRow).join(''));
+    $('#rlBody tr').each(function(i){ var l=arr[i]; if(l.deposit_date) $(this).data('dep',l.deposit_date); if(l._touched) $(this).find('.rl-amt').data('touched',1); });
+    bindRules($('#mkRc')); rcUpdTotal();
+  }
+  function rcSum(){ var s=0; $('#rlBody .rl-amt').each(function(){ s+=parseFloat(this.value)||0; }); return Math.round(s*100)/100; }
+  function rcNeed(){ var due=parseFloat($('#rcDue').val()); if(isNaN(due)) return null;
+    return Math.round((due-(parseFloat($('#rcDed').val())||0)-(parseFloat($('#rcFee').val())||0))*100)/100; }
+  function rcUpdTotal(){
+    var s=rcSum(), n=rcNeed();
+    $('#rcAmount').val(nf(s));
+    $('#rcDiff').html(n===null?'':(Math.abs(n-s)<0.005?'<span style="color:#5C7A2E;">✓ 與「應收－扣款－匯費」一致</span>'
+      :'<span style="color:#DD5138;">應收－扣款－匯費 ＝ '+nf(n)+'，目前各筆合計 '+nf(s)+'（尚差 '+nf(n-s)+'）</span>'));
+  }
+  /* 應收／扣款／匯費一變：只有一筆收款且金額沒手改過時，自動帶入應收－扣款－匯費 */
+  function rcAutoFill(){
+    var n=rcNeed(); if(n!==null){ var $a=$('#rlBody .rl-amt'); if($a.length===1 && !$a.eq(0).data('touched')) $a.eq(0).val(n); }
+    rcUpdTotal();
+  }
   function openRc(v, pre){
     editId = v ? Number(v.receipt_id) : 0;
-    $('#rcTitle').text(v ? ('修改收款單 '+v.receipt_no) : '登錄收款');
-    $('#rcCust').val(v?v.customer_name:'');
-    $('#rcDate').val(v?v.receipt_date:new Date().toISOString().slice(0,10));
     pre = pre || {};
-    var legacy = v && !Number(v.settle_extra);   // 舊收款單：沒有應收／扣款欄位，不強迫改成新規則
-    $('#rcMethod').val(v?(v.method||'匯款'):'匯款');
+    rcLegacy = !!(v && !Number(v.settle_extra));   // 舊收款單：不強迫補應收／扣款
+    $('#rcTitle').text(v ? ('修改收款單 '+v.receipt_no) : '登錄收款');
+    $('#rcCust').val(pre.customer||(v?v.customer_name:''));
+    $('#rcDate').val(v?v.receipt_date:new Date().toISOString().slice(0,10));
     $('#rcDue').val(v?(v.due_amount||''):(pre.due||''));
     $('#rcPct').val(v?(v.deduct_pct||''):'');
     $('#rcDed').val(v?(v.deduct_amt||0):0);
     $('#rcFee').val(v?v.fee:0);
-    $('#rcAmount').val(v?v.amount:'');
-    $('#rcAcct').val(v?(v.remit_account||''):'');
-    $('#rcBank').val(v?(v.bank||''):''); $('#rcBank2').val(v?(v.bank||''):'');
-    $('#rcCheckNo').val(v?(v.check_no||''):'');
-    $('#rcCheckDue').val(v?(v.check_due||''):'');
     $('#rcNote').val(v?(v.note||''):(pre.note||''));
-    if(pre.customer) $('#rcCust').val(pre.customer);
-    if(pre.due) rcCalc();
     // 由勾選的發票帶入的客戶、應收金額：只顯示文字，不可更改
     $('#rcCust').prop('readonly',!!pre.customer).toggleClass('rc-fixed',!!pre.customer);
     $('#rcDue').prop('readonly',!!pre.due).toggleClass('rc-fixed',!!pre.due);
-    rcLegacy=legacy; rcShow(); rcTerms();
-    bindRules($('#mkRc'));
-    openMask('mkRc');
-    setTimeout(function(){ (pre.customer?$('#rcDate'):$('#rcCust')).focus(); },80);
+    var show=function(lines){
+      renderLines(lines); rcAutoFill(); rcTerms();
+      openMask('mkRc');
+      setTimeout(function(){ (pre.customer?$('#rcDate'):$('#rcCust')).focus(); },80);
+    };
+    if(v){
+      $.post(API+'?action=rcpt_detail',{receipt_id:editId},function(r){
+        if(r.accts) ACCTS=r.accts;
+        show((r.lines||[]).map(function(l){ return {line_id:l.line_id,method:l.method,amount:l.amount,acct_id:l.acct_id||'',check_no:l.check_no,
+          check_due:l.check_due,check_bank:l.check_bank,check_acct:l.check_acct,deposit_date:l.deposit_date,_touched:1}; }));
+      },'json').fail(function(){ toast('載入收款明細失敗', true); });
+    } else show([{method:'匯款',amount:pre.due||'',acct_id:defAcct()}]);
   }
   $('#btnNew').on('click',function(){ openRc(null); });
   $('#btnDueRecv').on('click',function(){
@@ -601,64 +668,61 @@ if(CAN_EDIT){
     var amt=0, nos=[]; k.forEach(function(i){ amt+=dueRows[i].open; nos.push(dueRows[i].invoice_no); });
     openRc(null,{customer:dueRows[k[0]].customer_name, due:Math.round(amt*100)/100, note:'發票 '+nos.join('、').substr(0,150)});
   });
-
-  /* 入帳類型：不同類型顯示不同必填資料；扣%與匯費自動算實收 */
-  function rcShow(){
-    var m=$('#rcMethod').val();
-    $('.rc-remit').toggleClass('hide', m!=='匯款');
-    $('.rc-check').toggleClass('hide', m!=='支票');
-    $('.rc-deduct').toggleClass('hide', !(m==='支票'||m==='現金'));
-    if(m!=='支票'&&m!=='現金'){ $('#rcPct').val(''); $('#rcDed').val(0); }
-  }
-  function rcCalc(){
-    var due=parseFloat($('#rcDue').val());
-    if(isNaN(due)) return;
-    var ded=parseFloat($('#rcDed').val())||0;
-    var fee=parseFloat($('#rcFee').val())||0;
-    $('#rcAmount').val(Math.round((due-ded-fee)*100)/100);
-  }
+  $('#rlAdd').on('click',function(){
+    var arr=readLines(), n=rcNeed(), left=(n===null)?'':Math.round((n-rcSum())*100)/100;
+    arr.push({method:'支票',amount:(left!==''&&left>0)?left:'',acct_id:defAcct(),_touched:1});
+    renderLines(arr);
+  });
+  $(document).on('click','#rlBody .rl-del',function(){
+    var arr=readLines(); arr.splice($(this).closest('tr').index(),1);
+    if(!arr.length) arr.push({method:'匯款',amount:'',acct_id:defAcct()});
+    renderLines(arr);
+  });
+  $(document).on('change','#rlBody .rl-m',function(){ renderLines(readLines()); });
+  $(document).on('input','#rlBody .rl-amt',function(){ $(this).data('touched',1); rcUpdTotal(); });
   function rcTerms(){
     var c=$.trim($('#rcCust').val()); if(!c){ $('#rcTerms').text(''); return; }
     $.post(API+'?action=rcpt_opts',{customer:c},function(r){
       if(!r.ok||!r.terms){ $('#rcTerms').text(''); return; }
-      $('#rcTerms').html('收帳條件：'+esc(r.terms.terms_text)+(Number(r.terms.allow_deduct)?'　<b>此客戶接受扣%'+(Number(r.terms.deduct_pct)>0?'（'+Number(r.terms.deduct_pct)+'%）':'')+'</b>':'　（主檔未勾選接受扣%）')
-        +(r.terms.payment_methods?'　常用收款方式：'+esc(r.terms.payment_methods):''));
+      if(r.methods) METHODS=r.methods;
+      var t=r.terms, p=Number(t.deduct_pct)||0;
+      $('#rcTerms').html('收帳條件：'+esc(t.terms_text)+(Number(t.allow_deduct)?'　<b>此客戶接受扣%'+(p>0?'（'+p+'%）':'')+'</b>':'　（主檔未勾選接受扣%）')
+        +(t.payment_methods?'　常用收款方式：'+esc(t.payment_methods):''));
+      // 新收款單且客戶接受扣%：預帶主檔的折扣百分比
+      if(!editId && Number(t.allow_deduct) && p>0 && $('#rcPct').val()===''){ $('#rcPct').val(p); rcPctToDed(); }
     },'json');
   }
-  $('#rcMethod').on('change',function(){ rcShow(); rcCalc(); });
   /* 扣%一變（或應收一變）就重算扣款金額；直接改扣款金額則以金額為準（扣%留著當參考） */
   function rcPctToDed(){
     var due=parseFloat($('#rcDue').val()), pct=parseFloat($('#rcPct').val());
     if(!isNaN(due) && !isNaN(pct)) $('#rcDed').val(Math.round(due*pct)/100);
-    rcCalc();
+    rcAutoFill();
   }
   $('#rcPct,#rcDue').on('input',rcPctToDed);
-  $('#rcDed,#rcFee').on('input',rcCalc);
+  $('#rcDed,#rcFee').on('input',rcAutoFill);
   $('#rcCust').on('change',rcTerms);
-  $.getJSON(API,{action:'rcpt_opts'},function(r){
-    if(r.ok&&r.methods) $('#rcMethod').html(r.methods.map(function(m){ return '<option>'+esc(m)+'</option>'; }).join(''));
-  });
+  $.getJSON(API,{action:'rcpt_opts'},function(r){ if(r.ok&&r.methods) METHODS=r.methods; });
+  $.getJSON(API,{action:'rcpt_accts'},function(r){ if(r.ok) ACCTS=r.accts||[]; });
   $(document).on('click','.rc-edit',function(){ openRc(rows[parseInt($(this).data('i'),10)]); });
 
   $('#btnRcSave').on('click',function(){
-    var m=$('#rcMethod').val();
-    var d={receipt_id:editId, customer_name:$.trim($('#rcCust').val()),
-           receipt_date:$('#rcDate').val(), method:m,
-           amount:parseFloat($('#rcAmount').val())||0, fee:parseFloat($('#rcFee').val())||0,
-           bank:$.trim(m==='支票'?$('#rcBank2').val():$('#rcBank').val()),
-           check_no:m==='支票'?$.trim($('#rcCheckNo').val()):'',
-           check_due:m==='支票'?$('#rcCheckDue').val():'',
-           remit_account:m==='匯款'?$.trim($('#rcAcct').val()):'',
+    var lines=readLines();
+    var d={receipt_id:editId, customer_name:$.trim($('#rcCust').val()), receipt_date:$('#rcDate').val(),
+           lines:lines, fee:parseFloat($('#rcFee').val())||0,
            due_amount:$('#rcDue').val(), deduct_pct:$('#rcPct').val(), deduct_amt:parseFloat($('#rcDed').val())||0,
            note:$.trim($('#rcNote').val())};
-    if(!rcLegacy && m==='匯款' && !d.remit_account){ toast('匯款需填「匯入帳號」', true); $('#rcAcct').focus(); return; }
-    if(!rcLegacy && m==='支票' && !d.check_no){ toast('支票需填「支票號碼」', true); $('#rcCheckNo').focus(); return; }
-    if(!rcLegacy && m==='支票' && !d.check_due){ toast('支票需填「票期」', true); $('#rcCheckDue').focus(); return; }
-    if(!rcLegacy && d.due_amount!=='' && Math.abs((parseFloat(d.due_amount)-d.deduct_amt-d.fee)-d.amount)>0.5){
-      toast('金額不符：應收 － 扣款 － 匯費 必須等於實收', true); $('#rcAmount').focus(); return; }
     if(!d.customer_name){ toast('請填客戶', true); $('#rcCust').focus(); return; }
-    if(!d.receipt_date){ toast('請填入帳日', true); return; }
-    if(!(d.amount>0)){ toast('收款金額必須大於 0', true); $('#rcAmount').focus(); return; }
+    if(!d.receipt_date){ toast('請填收款日', true); return; }
+    for(var i=0;i<lines.length;i++){
+      var l=lines[i], n=i+1, a=parseFloat(l.amount)||0;
+      if(!(a>0)){ toast('第 '+n+' 筆收款：金額必須大於 0', true); $('#rlBody tr').eq(i).find('.rl-amt').focus(); return; }
+      if(l.method==='匯款' && !l.acct_id){ toast('第 '+n+' 筆（匯款）：請選擇本公司入帳帳戶（尚未設定請先到「傳票管理→科目設定」新增）', true); return; }
+      if(l.method==='支票' && !l.check_no){ toast('第 '+n+' 筆（支票）：請填支票號碼', true); $('#rlBody tr').eq(i).find('.rl-cno').focus(); return; }
+      if(l.method==='支票' && !l.check_due){ toast('第 '+n+' 筆（支票）：請填票期（到期日）', true); $('#rlBody tr').eq(i).find('.rl-due').focus(); return; }
+    }
+    var total=rcSum();
+    if(!rcLegacy && d.due_amount!=='' && Math.abs((parseFloat(d.due_amount)-d.deduct_amt-d.fee)-total)>0.5){
+      toast('金額不符：應收 － 扣款 － 匯費 必須等於各筆收款合計', true); return; }
     var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 存檔中…');
     $.post(API+'?action=rcpt_save',{csrf:CSRF, data:JSON.stringify(d)},function(r){
       $b.prop('disabled',false).html('<i class="fa fa-check"></i> 存檔');
@@ -673,6 +737,98 @@ if(CAN_EDIT){
       toast(esc(m), true);
     });
   });
+
+  /* ══ 收款傳票／支票兌現入帳 ══ */
+  var rvRid=0;
+  function vTable(lines){
+    var d=0,c=0,h='<table class="rv-t"><thead><tr><th style="width:150px;">會計科目</th><th>摘要</th><th style="width:110px;">借方</th><th style="width:110px;">貸方</th></tr></thead><tbody>';
+    (lines||[]).forEach(function(l){
+      if(l.side==='D') d+=Number(l.amount); else c+=Number(l.amount);
+      h+='<tr><td>'+esc(l.code+' '+l.name)+'</td><td class="l" style="'+(l.side==='C'?'padding-left:22px;':'')+'">'+esc(l.memo||'')+'</td>'
+        +'<td class="r">'+(l.side==='D'?Number(l.amount).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}):'')+'</td>'
+        +'<td class="r">'+(l.side==='C'?Number(l.amount).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}):'')+'</td></tr>';
+    });
+    d=Math.round(d*100)/100; c=Math.round(c*100)/100;
+    return h+'<tr><td colspan="2" class="r"><b>合計</b>'+(Math.abs(d-c)<0.01?' <span style="color:#5C7A2E;">✓ 平衡</span>':' <span style="color:#DD5138;">不平衡</span>')+'</td><td class="r"><b>'+nf(d)+'</b></td><td class="r"><b>'+nf(c)+'</b></td></tr></tbody></table>';
+  }
+  function openRv(rid,title){ rvRid=rid; $('#rvTitle').text(title); openMask('mkRv'); loadRv(); }
+  function loadRv(){
+    $('#rvBody').html('<div style="padding:14px;color:#8a6d45;">載入中…</div>');
+    $.post(API+'?action=rcpt_detail',{receipt_id:rvRid},function(r){
+      if(!r.ok){ $('#rvBody').html('<div class="warn">'+esc(r.error||'載入失敗')+'</div>'); return; }
+      ACCTS=r.accts||ACCTS;
+      var vs=r.vouchers||[], today=new Date().toISOString().slice(0,10), h='';
+      var live=function(kind,lid){ return vs.filter(function(v){ return v.kind===kind && Number(v.line_id)===lid && v.status==='ok'; })[0]; };
+      var chk=(r.lines||[]).filter(function(l){ return l.method==='支票'; });
+      if(chk.length){
+        h+='<div class="rv-sec"><h5>支票兌現入帳</h5><table class="rv-t"><thead><tr><th>支票號碼</th><th>票期</th><th>金額</th><th>入帳狀況</th><th>入帳傳票</th></tr></thead><tbody>';
+        chk.forEach(function(l){
+          var lid=Number(l.line_id), dv=live('DEPOSIT',lid), st, tv;
+          if(!lid){ st='<span style="color:#8a6d45;">舊收款單未拆明細，請先按「修改」存檔一次</span>'; tv=''; }
+          else if(!l.deposit_date){
+            st='<div class="rv-f" style="margin:0;"><input type="date" class="dp-date" data-l="'+lid+'" value="'+today+'" title="銀行實際入帳日">'
+              +'<select class="dp-acct" data-l="'+lid+'">'+acctOpts(defAcct())+'</select>'
+              +'<button class="btn-mini dp-ok" data-l="'+lid+'">確認入帳</button></div>'; tv='<span style="color:#b09a86;">確認入帳後才能開</span>';
+          } else {
+            var ac=(ACCTS.filter(function(a){ return Number(a.acct_id)===Number(l.deposit_acct_id); })[0]||{});
+            st='<b style="color:#5C7A2E;">已入帳 '+dd(l.deposit_date)+'</b>　'+esc(ac.name||'')+(dv?'':'　<button class="btn-mini dp-no" data-l="'+lid+'">取消入帳</button>');
+            tv=dv?('<b>'+esc(dv.voucher_no)+'</b>　<button class="btn-mini rv-void" data-id="'+dv.rv_id+'">作廢</button>')
+                 :'<button class="btn-mini rv-form" data-kind="DEPOSIT" data-l="'+lid+'">開入帳傳票</button>';
+          }
+          h+='<tr><td>'+esc(l.check_no||'')+'</td><td>'+dd(l.check_due)+'</td><td class="r">'+nf(l.amount)+'</td><td class="l">'+st+'</td><td class="l">'+tv+'</td></tr>'
+            +'<tr class="vf-row" data-l="'+lid+'" style="display:none;"><td colspan="5"><div class="vf-box"></div></td></tr>';
+        });
+        h+='</tbody></table></div>';
+      }
+      var rv=live('RCPT',0);
+      h+='<div class="rv-sec"><h5>收款傳票（借：現金／應收票據／銀行存款；貸：應收帳款，逐出貨單／退貨單號）</h5>';
+      if(rv) h+=vTable(rv.lines)+'<div class="rv-f"><b>傳票 '+esc(rv.voucher_no)+'</b>　'+dd(rv.voucher_date)+'　<button class="btn-mini rv-void" data-id="'+rv.rv_id+'">作廢傳票</button>'
+        +'<span style="color:#8a6d45;font-size:12px;">作廢後才可修改收款單／沖帳</span></div>';
+      else h+='<div class="rv-f"><button class="btn-mini rv-form" data-kind="RCPT" data-l="0">預覽並開立收款傳票</button>'
+        +'<span style="color:#8a6d45;font-size:12px;">先完成沖帳再開；沒沖到的餘額會貸「暫收款」</span></div><div class="vf-box" data-l="0"></div>';
+      h+='</div>';
+      $('#rvBody').html(h);
+    },'json').fail(function(){ $('#rvBody').html('<div class="warn">載入失敗</div>'); });
+  }
+  $(document).on('click','.rv-form',function(){
+    var kind=$(this).data('kind'), lid=Number($(this).data('l'));
+    var $box=(kind==='RCPT')?$('.vf-box[data-l="0"]'):$('.vf-row[data-l="'+lid+'"]').show().find('.vf-box');
+    $box.html('<span style="color:#8a6d45;">產生分錄中…</span>');
+    $.post(API+'?action=rcpt_vch_preview',{kind:kind,receipt_id:rvRid,line_id:lid},function(r){
+      if(!r.ok){ $box.html('<div class="warn">'+esc(r.error||'無法產生')+'</div>'); return; }
+      $box.html(vTable(r.lines)+'<div class="rv-f"><label>傳票日期</label><input type="date" class="vf-date" value="'+esc(r.receipt_date)+'">'
+        +'<label>ERP 傳票號碼</label><input type="text" class="vf-no" maxlength="14" placeholder="V-1151126001，或只輸入流水號" data-eg-skip>'
+        +'<button class="btn-mini vf-save" data-kind="'+kind+'" data-l="'+lid+'"'+(r.balanced?'':' disabled')+'>建立傳票</button></div>');
+    },'json').fail(function(){ $box.html('<div class="warn">產生失敗</div>'); });
+  });
+  $(document).on('click','.vf-save',function(){
+    var $b=$(this), $f=$b.closest('.rv-f');
+    $b.prop('disabled',true);
+    $.post(API+'?action=rcpt_vch_save',{csrf:CSRF,kind:$b.data('kind'),receipt_id:rvRid,line_id:$b.data('l'),voucher_date:$f.find('.vf-date').val(),voucher_no:$f.find('.vf-no').val()},function(r){
+      if(!r.ok){ $b.prop('disabled',false); toast(esc(r.error||'建立失敗'), true); return; }
+      toast(esc(r.message)); loadRv(); load();
+    },'json').fail(function(x){ $b.prop('disabled',false); var m='建立失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+  });
+  $(document).on('click','.rv-void',function(){
+    if(!confirm('確定作廢這張傳票？作廢後可重新開立。')) return;
+    $.post(API+'?action=rcpt_vch_void',{csrf:CSRF,rv_id:$(this).data('id')},function(r){
+      if(!r.ok){ toast(esc(r.error||'作廢失敗'), true); return; } toast(esc(r.message)); loadRv(); load();
+    },'json');
+  });
+  $(document).on('click','.dp-ok',function(){
+    var l=$(this).data('l'), d=$('.dp-date[data-l="'+l+'"]').val(), a=$('.dp-acct[data-l="'+l+'"]').val();
+    if(!a){ toast('請選擇兌現存入的本公司帳戶', true); return; }
+    $.post(API+'?action=rcpt_deposit',{csrf:CSRF,line_id:l,date:d,acct_id:a},function(r){
+      if(!r.ok){ toast(esc(r.error||'失敗'), true); return; } toast(esc(r.message)); loadRv(); load();
+    },'json');
+  });
+  $(document).on('click','.dp-no',function(){
+    if(!confirm('取消這張支票的入帳確認？')) return;
+    $.post(API+'?action=rcpt_deposit',{csrf:CSRF,line_id:$(this).data('l'),cancel:1},function(r){
+      if(!r.ok){ toast(esc(r.error||'失敗'), true); return; } toast(esc(r.message)); loadRv(); load();
+    },'json');
+  });
+  $(document).on('click','.rc-vch',function(){ openRv($(this).data('id'),'傳票／入帳　'+$(this).data('no')); });
 
   /* ══ 沖帳 ══ */
   function openAlloc(rid){
