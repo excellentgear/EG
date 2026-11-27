@@ -394,7 +394,8 @@ function bRender(){
     var st=r.status, t=stTxt(st), ok=!!st&&st.sheet_status!=='none';
     var diff=(ok&&r.net!=null)?(st.net-r.net):0;
     h+='<tr data-i="'+i+'"'+(r.sel?' class="sel"':'')+'><td><input type="checkbox" class="bck"'+(r.sel?' checked':'')+'></td>'
-      +'<td class="l"><b>'+(r.party_id?'<a href="'+esc(r.link||'#')+'" target="_blank" title="另開分頁核對">'+esc(r.party_id)+'</a>':esc(r.customer_name||''))+'</b>'
+      +'<td class="l"><b'+(r.miss?' style="color:#DD5138;"':'')+'>'+(r.party_id?'<a href="'+esc(r.link||'#')+'" target="_blank" title="另開分頁核對"'+(r.miss?' style="color:#DD5138;"':'')+'>'+esc(r.party_id)+'</a>':esc(r.customer_name||''))+'</b>'
+      +(r.miss?' <a href="customer_invoice_data.php" target="_blank" rel="noopener" title="另開分頁補客戶發票資料" style="text-decoration:none;"><button type="button" style="font-size:11px;padding:1px 6px;border:1px solid #DD5138;color:#DD5138;background:#fff;border-radius:4px;cursor:pointer;">'+({no_tax:'缺統編',bad_tax:'統編錯誤',no_full:'缺發票全名'}[r.miss]||'發票資料不完整')+'</button></a>':'')
       +'<div style="font-size:11px;color:#8a6d45;">'+esc(r.customer_id||'')+' '+esc(r.file_name)+'</div></td>'
       +'<td>'+esc(r.bm||'')+'</td>'
       +'<td class="r">'+nf(r.net)+'</td><td class="r">'+nf(r.tax)+'</td><td class="r">'+nf(r.total)+'</td>'
@@ -502,8 +503,8 @@ function stepRun(l,act,label,make,okTxt){
     var d=make(r); if(d===false){ next(); return; }
     setMsg(r,'處理中…'); bRender();
     function go(){
-      bPost(act,d,function(x){ r.status=x.status; n++; setMsg(r,okTxt(x)); next(); },
-        function(m){ setMsg(r,m,true); if(!firstErr) firstErr=(r.party_id||r.customer_name||'')+'：'+m; next(); });
+      bPost(act,d,function(x){ r.status=x.status; r.miss=null; n++; setMsg(r,okTxt(x)); next(); },
+        function(m){ setMsg(r,m,true); var mm=/發票資料不完整（(no_tax|bad_tax|no_full)）/.exec(m); r.miss=mm?mm[1]:null; if(!firstErr) firstErr=(r.party_id||r.customer_name||'')+'：'+m; next(); });
     }
     // 還沒建立對帳底稿就要鎖帳：先自動帶到對帳作業（依 ERP 標示已對到）再鎖
     if(act==='erp_batch_lock' && r.status && r.status.sheet_status==='none'){
