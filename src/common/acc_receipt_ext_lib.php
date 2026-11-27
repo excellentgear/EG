@@ -136,10 +136,13 @@ function acc_rcpt_due_list(PDO $db, array $f): array
             'due_date' => $due,
             'overdue_days' => ($due && $due < $today) ? (int)((strtotime($today) - strtotime($due)) / 86400) : 0,
             'terms_text' => acc_rcpt_terms_text($t), 'allow_deduct' => (int)$t['allow_deduct'],
+            'terms_kind' => ($t['net_days'] === null || $t['net_days'] === '') ? '' : acc_rcpt_terms_kind($t),
+            'deduct_pct' => ($t['deduct_pct'] ?? '') === '' ? null : (float)$t['deduct_pct'],
         ];
     }
     if (($f['only_overdue'] ?? '') === '1') $out = array_values(array_filter($out, fn($x) => $x['overdue_days'] > 0));
-    usort($out, fn($a, $b) => [$a['due_date'] ?? '9999', $a['customer_name']] <=> [$b['due_date'] ?? '9999', $b['customer_name']]);
+    // 逾期置頂（逾期越久越上面），其餘依應入帳日期
+    usort($out, fn($a, $b) => [-$a['overdue_days'], $a['due_date'] ?? '9999', $a['customer_name']] <=> [-$b['overdue_days'], $b['due_date'] ?? '9999', $b['customer_name']]);
     return $out;
 }
 
@@ -150,7 +153,16 @@ function acc_rcpt_terms_text(array $t): string
     $n = (int)$t['net_days'];
     if ($u === 'next') return '次月結（' . $n . ' 天）';
     if ($u === 'month' || $u === 'months') return '月結 ' . $n . ' 天';
-    return '發票日後 ' . $n . ' 天';
+    return '依天數 ' . $n . ' 天';
+}
+
+/** 收帳條件種類：month／next／days（前端依此上色） */
+function acc_rcpt_terms_kind(array $t): string
+{
+    $u = (string)($t['net_unit'] ?? '');
+    if ($u === 'next') return 'next';
+    if ($u === 'month' || $u === 'months') return 'month';
+    return 'days';
 }
 
 /**
