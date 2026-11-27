@@ -228,7 +228,7 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
             $first = true; $lastNo = null;
             foreach ($chunk as $l) {
                 $qty = $l['qty'];
-                $amt = round($l['amt']);
+                $amt = round((float)$l['amt'], 4);   // 小計不捨入
                 $price = ($l['merged'] > 1 || $mode !== '') ? ($qty != 0 ? round($l['amt'] / $qty, 4) : 0) : ($qty != 0 ? round($l['amt'] / $qty, 4) : 0);
                 if (!empty($l['ret'])) { $qty = abs($qty); $price = -abs($price); $amt = -abs($amt); }   // 退貨：數量為正，單價與金額為負
                 $note = '';

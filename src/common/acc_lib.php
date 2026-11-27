@@ -2973,7 +2973,7 @@ function acc_inv_recalc(PDO $db, int $iid): array
                       VALUES (?,?,?,?,NULL,NULL,?,1,?,?)")
            ->execute([$iid, 'DISC', -$iid, '', $txt, -$disc, -$disc]);
     }
-    $net = $gross - $disc;
+    $net = round($gross - $disc);   // 未稅總額四捨五入（明細小計不捨入）
     $tax = round($net * (float)$inv['tax_rate']);
     $db->prepare("UPDATE acc_invoice SET sales_amount=?, tax_amount=?, total_amount=?, discount_amt=? WHERE invoice_id=?")
        ->execute([$net, $tax, $net + $tax, $disc, $iid]);
