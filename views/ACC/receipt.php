@@ -159,6 +159,7 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
 .tk{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;line-height:16px;font-weight:bold;}
 .tk-month{background:#F7E0BD;color:#6B4A1E;}
 .tk-next{background:#F0A24B;color:#4A2A0A;}
+.tk-none{background:#DD5138;color:#fff;}
 .tk-days{background:#8C5A2B;color:#fff;}
 .tk-ded{background:#FBE3E0;color:#9A2F1F;border:1px solid #E9B7AE;margin-left:4px;}
 .frm .sub{grid-column:1 / span 4;font-size:12px;color:var(--a-ink2);border-top:1px dashed var(--a-line);padding-top:4px;margin-top:2px;}
@@ -470,7 +471,7 @@ function termsHtml(v){
   if(v.terms_kind==='month') h='<span class="tk tk-month">月結</span> '+d+' 天';
   else if(v.terms_kind==='next') h='<span class="tk tk-next">次月結</span> '+d+' 天';
   else if(v.terms_kind==='days') h='<span class="tk tk-days">依天數</span> '+d+' 天';
-  else h=esc(v.terms_text);
+  else h='<span class="tk tk-none">'+esc(v.terms_text)+'</span>';
   if(v.allow_deduct){ var p=Number(v.deduct_pct)||0; h+='<span class="tk tk-ded">扣 '+(p>0?p:'?')+'%</span>'; }
   return h;
 }
