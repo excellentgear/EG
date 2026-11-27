@@ -388,7 +388,8 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
     </div>
   </div>
   <div class="m-foot">
-    <button data-close="mkEinv">稍後再說</button>
+    <button data-close="mkEinv">取消</button>
+    <button id="btnEinvOk" title="不下載檔案，只把開立日期寫入發票">確定（不下載）</button>
     <button class="go" id="btnEinvDl"><i class="fa fa-download"></i> 下載 xlsx 並標記已轉出</button>
   </div>
 </div></div>
@@ -845,14 +846,14 @@ $('#btnEinvDl').on('click',function(){
     },1200);
   },'json').fail(function(x){ var m='開立日期儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
 });
-// 按「稍後再說」／關閉：不下載、不標記已轉出，但仍把預覽的開立日期記回這些發票（之後可直接填發票號碼）
-$(document).on('click','[data-close="mkEinv"]',function(){
+// 按「確定(不下載)」：不下載、不標記已轉出，只把預覽的開立日期寫回這些發票（之後可直接填發票號碼）；取消／關閉＝不寫入
+$('#btnEinvOk').on('click',function(){
   if(!einvIds.length || !$('#mkEinv').hasClass('show')) return;
-  if(!einvDateCheck(true)) return;
+  if(!einvDateCheck(false)) return;
   var d=$('#einvDate').val(), ids=einvIds.slice();
   $.post(API+'?action=inv_set_date',{csrf:CSRF,ids:ids.join(','),inv_date:d},function(r){
     if(!r.ok){ toast(esc(r.error||'開立日期儲存失敗'), true); return; }
-    toast('已記錄開立日期 '+esc(d)+'（尚未轉出），可直接填發票號碼');
+    closeMask('mkEinv'); toast('已記錄開立日期 '+esc(d)+'（未下載），可直接填發票號碼');
     invRows=[]; $('.tab-btn[data-tab=inv]').click();
   },'json');
 });
