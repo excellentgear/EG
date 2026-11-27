@@ -204,6 +204,12 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
         $vHtml = $value !== '' ? nl2br(safe_html($value)) : '<span style="color:#bbb;">（未填寫）</span>';
         echo '<div class="'.$cls.'"><div class="cv-label">'.safe_html($label).'</div><div class="cv-value">'.$vHtml.'</div></div>';
     }
+    $cvAud = _cust_sec_audit($pdo3, $cid3);
+    function cv_aud($sec) {
+        global $cvAud;
+        $a = $cvAud[$sec] ?? null;
+        echo '<div class="cv-sub" style="margin:-4px 0 8px 2px;">' . ($a ? '最後修改：' . safe_html($a['operator']) . '　' . safe_html($a['at']) : '最後修改：（無異動紀錄）') . '</div>';
+    }
     $cvGradeMap = ['S'=>'S 級（最高）','A'=>'A 級（優）','B'=>'B 級（良）','C'=>'C 級（普通）','D'=>'D 級（觀察）'];
     $cvSettleMap = ['FIXED'=>'固定日','EOM'=>'月底','VARIABLE'=>'不固定'];
     ?><!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
@@ -302,10 +308,14 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
                 cv_field('是否需要對帳單', $cvReconLabel);
             ?>
         </div>
+        <?php cv_aud('recon'); ?>
         <div class="cv-sec">報價 / 收款方式</div>
+        <?php cv_aud('quote'); ?>
         <div class="cv-row">
             <?php cv_field('報價方式', $cv['quote_method']); cv_field('收款方式', !empty($cv['payment_methods']) ? str_replace(',', '、', $cv['payment_methods']) : $cv['payment_method']); ?>
         </div>
+        <div class="cv-sec">發票收件</div>
+        <?php cv_aud('invoice'); ?>
         <div class="cv-row">
             <?php cv_field('發票收件人', $cv['invoice_recipient'] ?? ''); cv_field('發票收件部門', $cv['invoice_dept'] ?? ''); ?>
         </div>
@@ -314,6 +324,7 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
             <?php cv_field('已確認付款條件', !empty($cv['confirmed_payment']) ? '是' : '否'); ?>
         </div>
         <div class="cv-sec">銀行帳戶</div>
+        <?php cv_aud('bank'); ?>
         <div class="cv-row">
             <?php cv_field('銀行名稱', $cv['bank_name']); cv_field('分行', $cv['bank_branch']); cv_field('帳號', $cv['bank_account']); ?>
         </div>
@@ -1606,6 +1617,31 @@ function mdm_part_extra_counts(PDO $pdo, array $ids): array {
     return $out;
 }
 
+// 客戶各區塊「最後由誰、何時修改」：由 audit_log 的欄位異動紀錄反查（只有開始記錄之後的異動查得到）
+function _cust_sec_fields() {
+    return [
+        'recon' => ['need_recon_stmt','recon_provide_by'],
+        'quote' => ['quote_method','payment_method','payment_methods','allow_deduct'],
+        'invoice' => ['invoice_recipient','invoice_dept','invoice_email','customer_email','billing_contact'],
+        'bank' => ['bank_name','bank_branch','bank_account'],
+    ];
+}
+function _cust_sec_audit($pdo, $cid) {
+    $out = []; $map = _cust_sec_fields();
+    try {
+        $st = $pdo->prepare("SELECT operator, created_at, changes FROM audit_log WHERE target_type='customer' AND target_id=? AND action_type='update' AND changes IS NOT NULL ORDER BY created_at DESC, 1 DESC LIMIT 300");
+        $st->execute([(string)$cid]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $arr = json_decode((string)$r['changes'], true); if (!is_array($arr)) continue;
+            foreach ($arr as $c) {
+                $f = (string)($c['field'] ?? '');
+                foreach ($map as $sec => $fs) if (!isset($out[$sec]) && in_array($f, $fs, true)) $out[$sec] = ['operator'=>$r['operator'], 'at'=>substr((string)$r['created_at'],0,16)];
+            }
+            if (count($out) === count($map)) break;
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
 function _get_operator($pdo, $uid) {
     try { $s=$pdo->prepare("SELECT user_cname FROM user WHERE id=?"); $s->execute([$uid]); $n=$s->fetchColumn(); return $n?:('uid:'.$uid); } catch(Exception $e){ return 'uid:'.$uid; }
 }
@@ -7892,6 +7928,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // ── 取得操作歷史紀錄 ─────────────────────────────────────────────────────
+    if ($_POST['action'] === 'cust_sec_audit') {
+        echo json_encode(['success'=>true,'data'=>_cust_sec_audit($pdo, trim($_POST['customer_id'] ?? ''))]);
+        exit;
+    }
     if ($_POST['action'] === 'get_audit_log') {
         try {
             $pg   = max(1, intval($_POST['page'] ?? 1));
@@ -9202,6 +9242,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .modal-header .close:hover { opacity:1; }
 .modal-content { border:none; border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.18); }
 .modal-footer { border-top:1px solid var(--border); }
+.sec-aud { margin-left:12px; font-size:11px; font-weight:400; color:#8a7b6a; text-transform:none; letter-spacing:0; }
 .form-section-title { font-size:12px; font-weight:700; text-transform:uppercase; color:var(--accent); letter-spacing:.8px; margin:16px 0 8px; padding-bottom:4px; border-bottom:1px dashed var(--border); }
 .required-star { color:var(--danger); margin-left:2px; }
 /* 料號／圖面代號 重複即時提示 */
@@ -11108,7 +11149,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div>
 
 <?php if ($mdReconView): ?>
-<div class="form-section-title"><i class="fa fa-file-text-o"></i> 對帳單設定<?= $mdReconEdit ? '' : '（唯讀）' ?></div>
+<div class="form-section-title"><i class="fa fa-file-text-o"></i> 對帳單設定<?= $mdReconEdit ? '' : '（唯讀）' ?><span class="sec-aud" data-sec="recon"></span></div>
 <div class="row">
     <div class="col-md-4">
         <div class="form-group">
@@ -11171,7 +11212,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 <?php endif; ?>
 
 <?php if ($mdQuoteMView || $mdPaytermView || $mdSettleView): ?>
-<div class="form-section-title"><i class="fa fa-money"></i> 報價 / 收款方式</div>
+<div class="form-section-title"><i class="fa fa-money"></i> 報價 / 收款方式<span class="sec-aud" data-sec="quote"></span></div>
 <div class="row">
     <?php if ($mdSettleView): ?>
     <div class="col-md-4">
@@ -11255,7 +11296,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div>
 <?php endif; ?>
 
-<div class="form-section-title"><i class="fa fa-file-text"></i> 發票收件</div>
+<div class="form-section-title"><i class="fa fa-file-text"></i> 發票收件<span class="sec-aud" data-sec="invoice"></span></div>
 <div class="row">
     <div class="col-md-12">
         <div class="form-group">
@@ -11294,7 +11335,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div>
 
 <?php if ($mdBankView): ?>
-<div class="form-section-title"><i class="fa fa-university"></i> 銀行帳戶<?= $mdBankEdit ? '' : '（唯讀）' ?></div>
+<div class="form-section-title"><i class="fa fa-university"></i> 銀行帳戶<?= $mdBankEdit ? '' : '（唯讀）' ?><span class="sec-aud" data-sec="bank"></span></div>
 <div class="row">
     <div class="col-md-4">
         <div class="form-group">
@@ -20394,6 +20435,18 @@ function _mdmTodayStr() {
     return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
 }
 
+/* 客戶各區塊「最後修改：誰、何時」（來源 audit_log，新增客戶時清空） */
+function loadCustSecAudit(cid) {
+    document.querySelectorAll('.sec-aud').forEach(function(e){ e.textContent = ''; });
+    if (!cid) return;
+    api({ action:'cust_sec_audit', customer_id:cid }).done(function(r) {
+        var d = (r && r.data) || {};
+        document.querySelectorAll('.sec-aud').forEach(function(e){
+            var a = d[e.dataset.sec];
+            e.textContent = a ? ('最後修改：' + a.operator + '　' + a.at) : '最後修改：（無異動紀錄）';
+        });
+    });
+}
 function openCustomerModal(customer_id, readonly) {
     readonly = !!readonly;
     if (customer_id) {
@@ -20401,6 +20454,7 @@ function openCustomerModal(customer_id, readonly) {
         api({ action:'get_customer', customer_id:customer_id }).done(function(r) {
             if (!r.success) { showToast(r.message,'error'); return; }
             var d = r.data;
+            loadCustSecAudit(d.customer_id);
             document.getElementById('custModal-title').textContent = readonly ? ('檢視客戶基本資料－'+(d.customer||d.customer_id)) : '編輯客戶';
             document.getElementById('cf-is_new').value = '0';
             var cidEl = document.getElementById('cf-customer_id');
@@ -20498,6 +20552,7 @@ function openCustomerModal(customer_id, readonly) {
         _setCustModalReadonly(false);
         document.getElementById('custModal-title').textContent = '新增客戶';
         document.getElementById('customerForm').reset();
+        loadCustSecAudit('');
         document.getElementById('cf-is_new').value = '1';
         var cidEl = document.getElementById('cf-customer_id');
         cidEl.readOnly = false; cidEl.style.background = '';
