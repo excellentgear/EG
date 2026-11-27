@@ -373,12 +373,15 @@ function autoLines(){
   var IG=null;
   if(side==='ar'){
     var gm={}, go=[], mf=$('#jRound').val(), ff=function(n){ return mf==='round'?Math.round(n):(mf==='floor'?Math.floor(n+1e-9):n); };
-    Object.keys(SEL).forEach(function(i){ var it=items[i], k=$.trim(it.invoice_no||''), v=Number(it.amount)||0;
-      if(!gm[k]){ gm[k]={inv:k,ship:0,ret:0}; go.push(k); } if(v>=0) gm[k].ship+=v; else gm[k].ret+=-v; });
-    if(go.filter(function(k){ return k!==''; }).length>1){
+    Object.keys(SEL).forEach(function(i){ var it=items[i], iid=Number(it.invoice_id)||0, k=iid>0?('I'+iid):$.trim(it.invoice_no||''), v=Number(it.amount)||0, ok2=iid>0&&Number(it.inv_total)>0;
+      if(!gm[k]){ gm[k]={inv:$.trim(it.invoice_no||''),ship:0,ret:0,inv_tot:ok2?Math.round(Number(it.inv_total)):0,inv_tax:ok2?Math.round(Number(it.inv_tax)):0}; go.push(k); } if(v>=0) gm[k].ship+=v; else gm[k].ret+=-v; });
+    var hasIT=go.some(function(k){ return gm[k].inv_tot>0; });
+    if(go.filter(function(k){ return k!==''; }).length>1 || hasIT){
       var ok=true, sg=null, sd=0, sn=0, gl=[];
       go.forEach(function(k){ var g=gm[k]; g.ship=ff(Math.round(g.ship*100)/100); g.ret=ff(Math.round(g.ret*100)/100);
-        var n=Math.round((g.ship-g.ret)*100)/100; g.disc=(DISCPCT>0&&n>0)?Math.round(n*DISCPCT/100):0; sd+=g.disc; sn+=n-g.disc;
+        var n=Math.round((g.ship-g.ret)*100)/100; g.disc=(DISCPCT>0&&n>0)?Math.round(n*DISCPCT/100):0; sd+=g.disc;
+        if(g.inv_tot>0){ sn+=g.inv_tot-g.inv_tax; gl.push(g); return; }
+        sn+=n-g.disc;
         var s=(n-g.disc)<0; if(sg!==null&&sg!==s) ok=false; sg=s; gl.push(g); });
       if(ok){ IG=gl; disc=Math.round(sd*100)/100; net=Math.round(sn*100)/100; }
     }
@@ -389,7 +392,15 @@ function autoLines(){
   if(side==='ar'){
     // 收入與退回分開列示、銷項稅額分兩行，應收帳款以含稅淨額入帳
     if(IG){
-      IG.forEach(function(g){ var gn=Math.round((g.ship-g.ret-g.disc)*100)/100, gt=Math.round(Math.abs(gn)*TAXR), gm=g.inv?('發票 '+g.inv):'';
+      IG.forEach(function(g){
+        if(g.inv_tot>0){ var gm0=g.inv?('發票 '+g.inv):'';
+          L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:'D',amount:g.inv_tot,memo:gm0});
+          L.push({code:A('ar_ret').code,name:A('ar_ret').name,side:'D',amount:g.ret,memo:gm0});
+          L.push({code:'4103000',name:'銷貨折讓',side:'D',amount:g.disc,memo:g.disc>0?(String(Math.round(DISCPCT*1000)/1000)+'%折扣'):''});
+          L.push({code:A('ar_tax').code,name:A('ar_tax').name,side:'C',amount:g.inv_tax,memo:gm0});
+          L.push({code:A('ar_rev').code,name:A('ar_rev').name,side:'C',amount:Math.round((g.inv_tot+g.ret+g.disc-g.inv_tax)*100)/100,memo:gm0});
+          return; }
+        var gn=Math.round((g.ship-g.ret-g.disc)*100)/100, gt=Math.round(Math.abs(gn)*TAXR), gm=g.inv?('發票 '+g.inv):'';
         L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:gn<0?'C':'D',amount:Math.round((Math.abs(gn)+gt)*100)/100,memo:gm});
         L.push({code:A('ar_ret').code,name:A('ar_ret').name,side:'D',amount:g.ret,memo:gm});
         L.push({code:'4103000',name:'銷貨折讓',side:'D',amount:g.disc,memo:g.disc>0?(String(Math.round(DISCPCT*1000)/1000)+'%折扣'):''});

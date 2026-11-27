@@ -2676,7 +2676,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth, bool $
  */
 function acc_invoiced_src_map(PDO $db): array
 {
-    $st = $db->query("SELECT ii.src_type, ii.src_id, ii.invoice_id, i.status, i.invoice_no, i.doc_type
+    $st = $db->query("SELECT ii.src_type, ii.src_id, ii.invoice_id, i.status, i.invoice_no, i.doc_type, i.total_amount, i.tax_amount
                       FROM acc_invoice_item ii
                       JOIN acc_invoice i ON i.invoice_id = ii.invoice_id
                       WHERE i.status <> 'void'");
@@ -2687,6 +2687,8 @@ function acc_invoiced_src_map(PDO $db): array
             'status'     => $r['status'],
             'invoice_no' => $r['invoice_no'],
             'doc_type'   => $r['doc_type'],
+            'total'      => (float)$r['total_amount'],
+            'tax'        => (float)$r['tax_amount'],
         ];
     }
     return $m;

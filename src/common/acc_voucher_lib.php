@@ -158,6 +158,9 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
             'locked' => isset($vmap[$k]),
             'invoice_no' => $imap[$k]['invoice_no'] ?? $vinv,
             'invoiced' => isset($imap[$k]),
+            'invoice_id' => isset($imap[$k]) && ($imap[$k]['doc_type'] ?? 'INVOICE') === 'INVOICE' ? (int)$imap[$k]['invoice_id'] : 0,
+            'inv_total' => isset($imap[$k]) ? $imap[$k]['total'] : 0,
+            'inv_tax' => isset($imap[$k]) ? $imap[$k]['tax'] : 0,
         ];
     }
     $dp = ($side === 'ar') ? acc_disc_pct_of(acc_customer_of_name($db, $partyId)) : 0.0;
@@ -219,17 +222,22 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
         // 明細涉及多張發票：每張發票各列一筆應收帳款（備註發票號碼），收入／退回／稅額仍合計
         $gs = [];
         foreach ($pick as $it) {
-            $gk = trim((string)($it['invoice_no'] ?? ''));
-            if (!isset($gs[$gk])) $gs[$gk] = ['inv' => $gk, 'ship' => 0.0, 'ret' => 0.0];
+            $iid = (int)($it['invoice_id'] ?? 0);
+            $gk = $iid > 0 ? 'I' . $iid : trim((string)($it['invoice_no'] ?? ''));
+            if (!isset($gs[$gk])) $gs[$gk] = ['inv' => trim((string)($it['invoice_no'] ?? '')), 'ship' => 0.0, 'ret' => 0.0,
+                'inv_tot' => ($iid > 0 && (float)$it['inv_total'] > 0) ? (float)round((float)$it['inv_total']) : 0.0,
+                'inv_tax' => ($iid > 0 && (float)$it['inv_total'] > 0) ? (float)round((float)$it['inv_tax']) : 0.0];
             if ($it['amount'] >= 0) $gs[$gk]['ship'] += $it['amount']; else $gs[$gk]['ret'] += -$it['amount'];
         }
         $realInv = array_filter(array_keys($gs), fn($k) => $k !== '');
-        if (count($realInv) > 1) {
+        $hasInvTot = false; foreach ($gs as $g) if ($g['inv_tot'] > 0) $hasInvTot = true;
+        if (count($realInv) > 1 || $hasInvTot) {
             $gl = []; $okSign = true; $sg = null; $sumDisc = 0.0; $sumNet = 0.0;
             foreach ($gs as $g) {
                 $g['ship'] = $rf(round($g['ship'], 2)); $g['ret'] = $rf(round($g['ret'], 2));
                 $n = round($g['ship'] - $g['ret'], 2);
                 $g['disc'] = $discPct > 0 ? acc_disc_amount($n, $discPct) : 0.0;
+                if ($g['inv_tot'] > 0) { $sumDisc += $g['disc']; $sumNet += $g['inv_tot'] - $g['inv_tax']; $gl[] = $g; continue; }
                 $sumDisc += $g['disc']; $sumNet += $n - $g['disc'];
                 $s = $n - $g['disc'] < 0;
                 if ($sg !== null && $sg !== $s) $okSign = false;
@@ -775,6 +783,19 @@ function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = n
         if (!empty($parts['groups'])) {
             // 多張發票：每張發票各自一組（應收帳款、退回、折讓、銷項稅額、銷貨收入）
             foreach ($parts['groups'] as $g) {
+                if (($g['inv_tot'] ?? 0) > 0) {
+                    // 已開發票：應收＝發票含稅總額、稅額＝發票稅額，銷貨收入由借貸平衡反推
+                    $gm = $g['inv'] !== '' ? '發票 ' . $g['inv'] : '';
+                    $it = (float)$g['inv_tot']; $ix = (float)$g['inv_tax'];
+                    $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => 'D', 'amount' => $it, 'auto' => 1, 'memo' => $gm];
+                    $L[] = ['code' => $cfg['ar_ret']['code'], 'name' => $cfg['ar_ret']['name'], 'side' => 'D', 'amount' => (float)$g['ret'], 'auto' => 1, 'memo' => $gm];
+                    $L[] = ['code' => '4103000', 'name' => '銷貨折讓', 'side' => 'D', 'amount' => (float)$g['disc'], 'auto' => 1,
+                            'memo' => $g['disc'] > 0 ? acc_disc_pct_txt($parts['disc_pct'] ?? 0) . '%折扣' : ''];
+                    $L[] = ['code' => $cfg['ar_tax']['code'], 'name' => $cfg['ar_tax']['name'], 'side' => 'C', 'amount' => $ix, 'auto' => 1, 'memo' => $gm];
+                    $L[] = ['code' => $cfg['ar_rev']['code'], 'name' => $cfg['ar_rev']['name'], 'side' => 'C',
+                            'amount' => round($it + (float)$g['ret'] + (float)$g['disc'] - $ix, 2), 'auto' => 1, 'memo' => $gm];
+                    continue;
+                }
                 $gn = round($g['ship'] - $g['ret'] - $g['disc'], 2);
                 $gt = (float)round(abs($gn) * $rate);
                 $gm = $g['inv'] !== '' ? '發票 ' . $g['inv'] : '';
