@@ -141,6 +141,14 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     .bb-step .t{font-size:12px;color:#8a6d45;}
     .bb-step .r{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
     .bb-step button{height:30px;}
+    #bbWrap{overflow:auto;max-height:46vh;border:1px solid #e3d4b8;}
+    #tblB{border-collapse:separate;border-spacing:0;margin:0;}
+    #tblB thead th{position:sticky;top:0;z-index:3;background:#F7E0BD;white-space:nowrap;}
+    #tblB tbody td{background:#fff;}
+    #tblB th:nth-child(1),#tblB td:nth-child(1){position:sticky;left:0;z-index:2;min-width:34px;width:34px;}
+    #tblB th:nth-child(2),#tblB td:nth-child(2){position:sticky;left:34px;z-index:2;min-width:210px;max-width:210px;box-shadow:2px 0 0 #e3d4b8;}
+    #tblB thead th:nth-child(1),#tblB thead th:nth-child(2){z-index:4;}
+    #tblB tbody tr.sel td{background:#FFF3D9;}
     .bb-step input[type=date]{width:136px;}
     </style>
     <div class="bb-steps">
@@ -161,8 +169,8 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       ①會先依 ERP 更正單價、補上網頁漏掉的出貨明細，再把與 ERP 一致的明細標成「已對到」暫存；點客戶名稱可另開分頁核對（核對完回來按「重新整理狀態」）。
       ②只鎖已對到的明細，沒對到的會移出底稿。③發票日期可各別填。④傳票只需填 ERP 流水號（1~3 碼，欄位下方即時顯示完整號碼，年月日取自該列傳票日期），填完離開欄位會依號碼由舊到新排序。發票號碼可選填（2 英文＋8 數字），有填就直接標為已開立。上方日期改了就全部套用同一天。
       金額欄「ERP 檔」是檔內明細合計；「已對到」是網頁對帳底稿中已勾選對到的明細，兩邊不同代表還有差異要核對。</div>
-    <div style="margin-bottom:6px;"><input type="text" id="bbKw" placeholder="篩選：客戶編號／客戶名稱／檔名（可打一部分）" style="width:320px;" autocomplete="off"> <span id="bbCnt" style="color:#8a6d45;font-size:12px;"></span></div>
-    <div style="overflow:auto;"><table class="a-t" id="tblB">
+    <div style="margin-bottom:6px;"><input type="text" id="bbKw" placeholder="篩選：客戶編號／客戶名稱／檔名（可打一部分）" style="width:320px;" autocomplete="off"> <span id="bbCnt" style="color:#8a6d45;font-size:12px;"></span> <span id="bbSelCnt" style="margin-left:10px;font-weight:bold;color:#5b3a1e;"></span></div>
+    <div id="bbWrap"><table class="a-t" id="tblB">
       <thead><tr><th style="width:28px;"><input type="checkbox" id="bbAll"></th><th>客戶／檔案</th><th>帳款月</th>
         <th>ERP 未稅</th><th>ERP 稅金</th><th>ERP 含稅</th>
         <th>已對到 未稅</th><th>稅金</th><th>含稅</th><th>未對到</th>
@@ -385,7 +393,7 @@ function bRender(){
     if(!r.ok){ h+='<tr><td></td><td class="l" colspan="16" style="color:#DD5138;">'+esc(r.file_name)+'：'+esc(r.error||'讀取失敗')+'</td><td></td></tr>'; return; }
     var st=r.status, t=stTxt(st), ok=!!st&&st.sheet_status!=='none';
     var diff=(ok&&r.net!=null)?(st.net-r.net):0;
-    h+='<tr data-i="'+i+'"><td><input type="checkbox" class="bck"'+(r.sel?' checked':'')+'></td>'
+    h+='<tr data-i="'+i+'"'+(r.sel?' class="sel"':'')+'><td><input type="checkbox" class="bck"'+(r.sel?' checked':'')+'></td>'
       +'<td class="l"><b>'+(r.party_id?'<a href="'+esc(r.link||'#')+'" target="_blank" title="另開分頁核對">'+esc(r.party_id)+'</a>':esc(r.customer_name||''))+'</b>'
       +'<div style="font-size:11px;color:#8a6d45;">'+esc(r.customer_id||'')+' '+esc(r.file_name)+'</div></td>'
       +'<td>'+esc(r.bm||'')+'</td>'
@@ -394,12 +402,13 @@ function bRender(){
       +'<td class="r'+(ok&&st.unchecked_cnt?' chg':'')+'">'+(ok?st.unchecked_cnt:'')+'</td>'
       +'<td>'+t.sheet+'</td><td>'+t.inv+'</td><td>'+t.vch+'</td>'
       +'<td><input type="date" class="bdi" value="'+esc(r.inv_date||'')+'" style="width:132px;"></td>'
-      +'<td><input type="text" class="bin" value="'+esc(r.inv_no||'')+'" style="width:110px;text-transform:uppercase;" maxlength="10" autocomplete="off" placeholder="AB12345678"></td>'
+      +'<td><input type="text" class="bin" value="'+esc(r.inv_no||'')+'" style="width:110px;text-transform:uppercase;" maxlength="10" autocomplete="off" data-eg-hint="例：AB12345678（2 英文＋8 數字）"></td>'
       +'<td><input type="date" class="bdv" value="'+esc(r.vch_date||'')+'" style="width:132px;"></td>'
-      +'<td><input type="text" class="bvn" value="'+esc(r.vch_no||'')+'" style="width:84px;" maxlength="12" autocomplete="off" placeholder="流水號">'
+      +'<td><input type="text" class="bvn" value="'+esc(r.vch_no||'')+'" style="width:84px;" maxlength="12" autocomplete="off" data-eg-hint="只填流水號 1~3 碼">'
       +'<div class="bvf" style="font-size:11px;color:#8a6d45;">'+esc(vFull(r))+'</div></td>'
       +'<td class="l" style="font-size:12px;color:'+((r.bad||(r.warn&&!r.msg))?'#DD5138':'#5b3a1e')+';">'+(r.warn?'<b>⚠ 對應不到：</b>':'')+esc(r.msg||r.warn||'')+'</td></tr>';
   });
+  updSel();
   $('#bbCnt').text(kw?('顯示 '+shown+' / '+BR.length+' 筆'):'');
   $('#bbBody').html(h||'<tr><td colspan="18" style="padding:20px;color:#8a6d45;">沒有資料</td></tr>');
 }
@@ -412,6 +421,11 @@ $(document).on('change','#bbBody .bvn',function(){ sortByVch(); bRender(); });  
 $('#bbKw').on('input',bRender);
 $('#bbVchAll').on('change',function(){ var v=this.value; if(!v) return; BR.forEach(function(r){ r.vch_date=v; }); bRender(); });   // 改上方傳票日期＝全部同一天
 $('#bbInvAll').on('change',function(){ var v=this.value; if(!v) return; BR.forEach(function(r){ r.inv_date=v; }); bRender(); });
+function updSel(){ var ok=BR.filter(function(r){ return r.ok; }); $('#bbSelCnt').text('已勾選 '+ok.filter(function(r){ return r.sel; }).length+' / 全部 '+ok.length+' 家'); }
+function autoSel(el,filled){ var $tr=$(el).closest('tr'), r=BR[$tr.data('i')]; if(filled&&!r.sel){ r.sel=true; $tr.addClass('sel').find('.bck').prop('checked',true); updSel(); } }
+$(document).on('input','#bbBody .bvn',function(){ autoSel(this,!!String(this.value).trim()); });
+$(document).on('input','#bbBody .bin',function(){ autoSel(this,!!String(this.value).trim()); });
+$(document).on('change','#bbBody .bck',function(){ $(this).closest('tr').toggleClass('sel',this.checked); updSel(); });
 $('#bbAll').on('change',function(){ var on=this.checked; BR.forEach(function(r){ if(r.ok) r.sel=on; }); bRender(); });
 $('#bbInvApply').on('click',function(){ var v=$('#bbInvAll').val(); if(!v) return; BR.forEach(function(r){ r.inv_date=v; }); bRender(); });
 $('#bbVchApply').on('click',function(){ var v=$('#bbVchAll').val(); if(!v) return; BR.forEach(function(r){ r.vch_date=v; }); bRender(); });
@@ -483,11 +497,20 @@ function picked(){
 }
 function stepRun(l,act,label,make,okTxt){
   if(!confirm('對勾選的 '+l.length+' 個客戶執行「'+label+'」？')) return;
-  var n=0; seq(l,function(r,next){
+  var n=0, firstErr='';
+  seq(l,function(r,next){
     var d=make(r); if(d===false){ next(); return; }
     setMsg(r,'處理中…'); bRender();
-    bPost(act,d,function(x){ r.status=x.status; n++; setMsg(r,okTxt(x)); next(); },function(m){ setMsg(r,m,true); next(); });
-  },function(){ toast(label+'：成功 '+n+' 筆（失敗或略過的請看「結果」欄）',n<l.length); });
+    function go(){
+      bPost(act,d,function(x){ r.status=x.status; n++; setMsg(r,okTxt(x)); next(); },
+        function(m){ setMsg(r,m,true); if(!firstErr) firstErr=(r.party_id||r.customer_name||'')+'：'+m; next(); });
+    }
+    // 還沒建立對帳底稿就要鎖帳：先自動帶到對帳作業（依 ERP 標示已對到）再鎖
+    if(act==='erp_batch_lock' && r.status && r.status.sheet_status==='none'){
+      bPost('erp_batch_prepare',{token:r.token},function(x){ r.status=x.status; r.link=x.link||r.link; go(); },
+        function(m){ setMsg(r,'帶到對帳作業失敗：'+m,true); if(!firstErr) firstErr=(r.party_id||'')+'：'+m; next(); });
+    } else go();
+  },function(){ toast(label+'：成功 '+n+' 筆'+(firstErr?'；'+esc(firstErr):'（失敗或略過的請看「結果」欄）'),n<l.length); });
 }
 $('#bbLock').on('click',function(){
   var l=picked(); if(!l) return;
