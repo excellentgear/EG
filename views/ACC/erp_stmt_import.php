@@ -41,6 +41,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 .st-price{background:var(--a-acc);color:#fff;}
 .st-qty{background:var(--a-bad);color:#fff;}
 .st-erp_only{background:#8A5A2B;color:#fff;}
+.st-adj{background:#F7E0BD;color:#5A3A12;}
 .st-site_only{background:#C9B69F;color:#fff;}
 .st-locked{background:#5b3a1e;color:#fff;}
 .chg{color:var(--a-bad);font-weight:bold;}
@@ -195,8 +196,8 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 $(document).ready(function () { $('#sidebar-menu').css('visibility', 'visible'); });
 (function ($) {
 'use strict';
-var API='../../src/store/Acc_API.php', CSRF='', TOKEN='', ENT=[], SEL={};
-var ST={same:'一致',price:'單價不同',qty:'數量不同',erp_only:'網頁查無',site_only:'ERP沒有',locked:'已鎖定'};
+var API='../../src/store/Acc_API.php', CSRF='', TOKEN='', ENT=[], SEL={}, KEEP={};
+var ST={same:'一致',price:'單價不同',qty:'數量不同',erp_only:'網頁查無',site_only:'ERP沒有',locked:'已鎖定',adj:'人工加項'};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function nf(n){ return Math.round(Number(n)||0).toLocaleString('en-US'); }
 function np(n){ return n==null?'':String(parseFloat(Number(n).toFixed(4))); }
@@ -218,7 +219,7 @@ $('#btnUpload').on('click',function(){
   .done(function(r){
     $b.prop('disabled',false).html('<i class="fa fa-search"></i> 上傳並比對');
     if(!r.ok){ toast(esc(r.error||'比對失敗'), true); return; }
-    TOKEN=r.token; ENT=r.entries||[]; SEL={};
+    TOKEN=r.token; ENT=r.entries||[]; SEL={}; KEEP={};
     var s=r.summary||{};
     $('#sumStat').html('<div><b>'+esc(r.customer_id)+' '+esc(r.customer_name)+'</b> <span class="l">'+esc(r.range)+'</span></div><div class="sep"></div>'
       +'<div><span class="n">'+nf(r.line_cnt)+'</span> <span class="l">ERP 明細</span></div>'
@@ -228,6 +229,7 @@ $('#btnUpload').on('click',function(){
       +'<div><span class="n bad">'+nf(s.erp_only)+'</span> <span class="l">網頁查無</span></div>'
       +'<div><span class="n">'+nf(s.site_only)+'</span> <span class="l">ERP沒有</span></div>'
       +'<div><span class="n">'+nf(s.locked)+'</span> <span class="l">已鎖定</span></div>'
+      +'<div><span class="n">'+nf(s.adj)+'</span> <span class="l">人工加項（折扣）</span></div>'
       +'<div><span class="n">'+nf((r.entries||[]).filter(function(e){return e.kind==='return';}).length)+'</span> <span class="l">退貨列（僅核對）</span></div>'
       +'<div class="sel">已選 <b id="selN">0</b> 筆</div>');
     var w='';
@@ -264,6 +266,10 @@ function render(){
     var qchg=(e.erp_qty!=null && e.site_qty!=null && Math.abs(e.erp_qty)!==Math.abs(e.site_qty));
     var pchg=(e.erp_price!=null && e.site_price!=null && Math.abs(e.erp_price-e.site_price)>0.00005);
     var note=e.lock?esc(e.lock):(st==='erp_only'?'網頁沒有這張出貨單／料號，請補登':(st==='site_only'?'ERP 對帳單沒有這筆':(st==='qty'?'數量不同，請確認':'')));
+    if(e.kind==='adj'){
+      note='<label style="cursor:pointer;font-weight:600;"><input type="checkbox" class="adjEx"'+(KEEP[e.erp_row]?'':' checked')+' data-row="'+e.erp_row+'"> 排除（不計入核對合計）</label>'
+        +'<br><span style="font-weight:400;">人工加項：給客戶對帳用，網頁出貨單沒有這筆；折扣會在開立發票時依客戶設定自動建立，勾排除才不會因此差額鎖不了帳</span>';
+    }
     if(e.kind==='return'){
       note='退貨單：網頁每日自動同步，此處僅核對不更新'+(st==='erp_only'?'（網頁查無這筆退貨，請確認同步是否漏掉）':(st==='site_only'?'（網頁有、ERP 對帳單沒有）':(st==='same'?'':'（請回退貨單確認）')));
     }
@@ -307,7 +313,7 @@ $('#btnToRecon').on('click',function(){
   autoSyncPrice(function(n,sk,cr){
   if(n<0){ $b.prop('disabled',false); if(w) w.close(); return; }
   if(n>0||sk.length||cr) toast('已先依 ERP 同步：更正 '+n+' 筆單價'+(cr?'、自動新增 '+cr+' 筆出貨明細':'')+(sk.length?'；略過 '+sk.length+' 筆：'+sk.slice(0,3).map(esc).join('；'):'')+'（出貨單備註已註記）', false);
-  $.post(API+'?action=erp_stmt_recon_link',{token:TOKEN},function(r){
+  $.post(API+'?action=erp_stmt_recon_link',{token:TOKEN,keep_adj:JSON.stringify(Object.keys(KEEP).map(Number))},function(r){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'無法帶入'), true); if(w) w.close(); return; }
     // 注意：此時已先開了空白分頁（成為前景分頁），本頁的 confirm() 會被瀏覽器直接抑制並回 false，所以只用提示，不再詢問
@@ -319,6 +325,9 @@ $('#btnToRecon').on('click',function(){
     if(w) w.location=url; else window.open(url,'_blank');
   },'json').fail(function(x){ $b.prop('disabled',false); if(w) w.close(); var m='無法帶入'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
   });
+});
+$(document).on('change','.adjEx',function(){
+  var r=$(this).data('row'); if(this.checked) delete KEEP[r]; else KEEP[r]=1;
 });
 $(document).on('change','.ck',function(){
   var i=$(this).closest('tr').data('i');

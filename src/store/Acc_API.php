@@ -689,7 +689,8 @@ case 'erp_stmt_recon_link': {
     require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
     $stash = acc_erp_stash_get((string)($_POST['token'] ?? ''), $uid);
     if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
-    $r = acc_erp_stmt_recon_target($db, $stash);
+    $keep = json_decode((string)($_POST['keep_adj'] ?? '[]'), true);
+    $r = acc_erp_stmt_recon_target($db, $stash, is_array($keep) ? array_map('intval', $keep) : []);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

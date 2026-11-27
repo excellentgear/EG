@@ -126,8 +126,14 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
     }
     // 退貨單：ERP 對帳單裡數量／金額為負、或單號是 IR 開頭的明細。網頁退貨單每天由 ERP 同步，
     // 所以只「比對」不更新（entry.kind='return'，沒有 is_id，更新動作碰不到）。
+    // 每一「列」各自判定（不可整張單號一起判）：同一張出貨單可夾一列「3%折扣」這類人工加項（金額為負），
+    // 它不是退貨，更不能把同單號的出貨明細一起拖成退貨。折扣／折讓列＝'adj'（ERP 對帳單人工加上，網頁沒有這種出貨明細）。
+    $kindOf = function (array $l): string {
+        if (preg_match('/折扣|折讓/u', (string)$l['spec']) && !preg_match('/^IR/i', (string)$l['no'])) return 'adj';
+        return ($l['qty'] < 0 || $l['amount'] < 0 || preg_match('/^IR/i', (string)$l['no'])) ? 'return' : 'ship';
+    };
     $retNos = [];
-    foreach ($lines as $l) if ($l['qty'] < 0 || $l['amount'] < 0 || preg_match('/^IR/i', (string)$l['no'])) $retNos[$l['no']] = 1;
+    foreach ($lines as $l) if ($kindOf($l) === 'return') $retNos[$l['no']] = 1;
     $retNos = array_keys($retNos);
     $siteRet = [];
     for ($o = 0; $o < count($retNos); $o += 500) {
@@ -148,9 +154,19 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
     $vMap = function_exists('acc_voucher_src_map') ? acc_voucher_src_map($db) : [];
 
     $group = [];
-    foreach ($lines as $l) $group[$l['no']][] = $l;
+    $entries = []; $sum = ['same' => 0, 'price' => 0, 'qty' => 0, 'erp_only' => 0, 'site_only' => 0, 'locked' => 0, 'adj' => 0];
+    $adjLines = [];
+    foreach ($lines as $l) {
+        $k = $kindOf($l);
+        if ($k === 'adj') $adjLines[] = $l; else $group[$l['no'] . '|' . $k][] = $l;
+    }
+    foreach ($adjLines as $l) {
+        $entries[] = ['no' => $l['no'], 'status' => 'adj', 'erp_row' => $l['row'], 'erp_date' => $l['date'], 'erp_spec' => $l['spec'],
+            'erp_qty' => $l['qty'], 'erp_price' => $l['price'], 'erp_amount' => $l['amount'], 'kind' => 'adj', 'ir_id' => null,
+            'is_id' => null, 'site_part' => '', 'site_client' => '', 'site_date' => '', 'site_qty' => null, 'site_price' => null, 'lock' => ''];
+        $sum['adj']++;
+    }
 
-    $entries = []; $sum = ['same' => 0, 'price' => 0, 'qty' => 0, 'erp_only' => 0, 'site_only' => 0, 'locked' => 0];
     $startsWith = function (string $spec, string $part): bool {
         return $part !== '' && stripos($spec, $part) === 0;
     };
@@ -164,8 +180,9 @@ function acc_erp_stmt_match(PDO $db, array $lines): array
         return '';
     };
 
-    foreach ($group as $no => $erpLines) {
-        $isRet = in_array($no, $retNos, true);
+    foreach ($group as $gk => $erpLines) {
+        [$no, $gKind] = explode('|', $gk, 2);
+        $isRet = ($gKind === 'return');
         $srows = $isRet ? ($siteRet[$no] ?? []) : ($site[$no] ?? []);
         $usedS = []; $usedE = [];
         // 每一條 ERP 明細可對應的網頁列（依料號開頭）
@@ -282,10 +299,24 @@ function acc_erp_stmt_apply(PDO $db, array $stash, array $isIds, string $userNam
 }
 
 /**
+ * 帶到對帳作業的「對方紙本合計」：ERP 檔的本期應收合計，扣掉「人工加項」（如 3%折扣）。
+ * 這些列網頁沒有對應的出貨明細（折扣在開發票時才依客戶設定自動建立），不扣掉的話
+ * 對帳作業永遠差這一筆而無法確認鎖帳。$keepAdj＝使用者取消排除、要保留在合計內的 ERP 列號。
+ */
+function acc_erp_stmt_their_total(array $stash, array $keepAdj = []): ?float
+{
+    if (($stash['their_total'] ?? null) === null) return null;
+    $t = (float)$stash['their_total'];
+    foreach ($stash['entries'] as $e)
+        if (($e['kind'] ?? '') === 'adj' && !in_array((int)$e['erp_row'], $keepAdj, true)) $t -= (float)$e['erp_amount'];
+    return round($t, 2);
+}
+
+/**
  * 把匯入的 ERP 對帳單帶到「對帳作業」：由對應到的出貨明細推出 客戶＋帳款月份（取筆數最多者，
  * 帳款月份走與對帳作業完全相同的 acc_bm_for／billing_month_override），對方紙本合計＝ERP 檔的本期應收合計。
  */
-function acc_erp_stmt_recon_target(PDO $db, array $stash): array
+function acc_erp_stmt_recon_target(PDO $db, array $stash, array $keepAdj = []): array
 {
     $ids = [];
     foreach ($stash['entries'] as $e) if (empty($e['kind']) || $e['kind'] !== 'return') if (!empty($e['is_id'])) $ids[(int)$e['is_id']] = 1;
@@ -320,7 +351,7 @@ function acc_erp_stmt_recon_target(PDO $db, array $stash): array
     }
     $party = (string)array_key_first($names); $bm = (string)array_key_first($cnt);
     return ['success' => true, 'token' => (string)($stash['token'] ?? ''), 'side' => 'ar', 'party_id' => $party, 'bm' => $bm,
-            'their_total' => $stash['their_total'] ?? null, 'date_from' => $dMin, 'date_to' => $dMax,
+            'their_total' => acc_erp_stmt_their_total($stash, $keepAdj), 'date_from' => $dMin, 'date_to' => $dMax,
             'multi_month' => count($cnt) > 1, 'multi_party' => count($names) > 1];
 }
 
