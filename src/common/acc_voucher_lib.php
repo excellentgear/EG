@@ -764,14 +764,20 @@ function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = n
         $tax = (float)round(abs($netAmt) * $rate);
         $L = [];
         if (!empty($parts['groups'])) {
-            // 多張發票：每張一筆應收帳款，稅額為各張稅額合計
-            $tax = 0.0;
+            // 多張發票：每張發票各自一組（應收帳款、退回、折讓、銷項稅額、銷貨收入）
             foreach ($parts['groups'] as $g) {
                 $gn = round($g['ship'] - $g['ret'] - $g['disc'], 2);
-                $gt = (float)round(abs($gn) * $rate); $tax += $gt;
+                $gt = (float)round(abs($gn) * $rate);
+                $gm = $g['inv'] !== '' ? '發票 ' . $g['inv'] : '';
                 $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $gn < 0 ? 'C' : 'D',
-                        'amount' => round(abs($gn) + $gt, 2), 'auto' => 1, 'memo' => $g['inv'] !== '' ? '發票 ' . $g['inv'] : ''];
+                        'amount' => round(abs($gn) + $gt, 2), 'auto' => 1, 'memo' => $gm];
+                $L[] = ['code' => $cfg['ar_ret']['code'], 'name' => $cfg['ar_ret']['name'], 'side' => 'D', 'amount' => (float)$g['ret'], 'auto' => 1, 'memo' => $gm];
+                $L[] = ['code' => '4103000', 'name' => '銷貨折讓', 'side' => 'D', 'amount' => (float)$g['disc'], 'auto' => 1,
+                        'memo' => $g['disc'] > 0 ? acc_disc_pct_txt($parts['disc_pct'] ?? 0) . '%折扣' : ''];
+                $L[] = ['code' => $cfg['ar_tax']['code'], 'name' => $cfg['ar_tax']['name'], 'side' => $gn < 0 ? 'D' : 'C', 'amount' => $gt, 'auto' => 1, 'memo' => $gm];
+                $L[] = ['code' => $cfg['ar_rev']['code'], 'name' => $cfg['ar_rev']['name'], 'side' => 'C', 'amount' => (float)$g['ship'], 'auto' => 1, 'memo' => $gm];
             }
+            return array_values(array_filter($L, fn($l) => $l['amount'] > 0.004));
         } else
         $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $neg ? 'C' : 'D', 'amount' => round(abs($netAmt) + $tax, 2), 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_ret']['code'],  'name' => $cfg['ar_ret']['name'],  'side' => 'D', 'amount' => $ret,  'auto' => 1, 'memo' => ''];
