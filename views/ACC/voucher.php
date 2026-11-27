@@ -115,8 +115,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
         <select id="lSide"><option value="">應收＋應付</option><option value="ar">客戶（應收）</option><option value="ap">廠商（應付）</option></select>
         <select id="lStatus"><option value="">全部狀態</option><option value="open">有效</option><option value="void">已作廢</option></select>
         <label><input type="checkbox" id="lNoNo"> 只看尚未填傳票號碼</label>
-        <input type="text" id="lKw" placeholder="傳票號碼／對象／單號／料號／發票號碼" style="width:260px;">
-        <button id="btnLLoad" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
+        <input type="text" id="lKw" placeholder="傳票號碼／客戶(含編號)／單號／料號／發票號碼" style="width:260px;">
       </div>
       <div class="a-pager"><span id="lInfo" style="margin-right:auto;color:#8a6d45;"></span>
         每頁 <select id="lPer"><option>5</option><option>10</option><option selected>20</option><option>50</option></select> 筆 <span id="lPg"></span></div>
@@ -138,9 +137,8 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
   <div class="m-body">
     <div id="jHead" class="info" style="margin-bottom:8px;"></div>
     <div style="font-weight:700;color:#5b3a1e;margin-bottom:6px;"><i class="fa fa-book"></i> 會計分錄　<span style="font-weight:400;font-size:12.5px;color:#8a6d45;">依勾選明細自動帶出（科目可直接點選修改）；匯費、手續費等請在下方加入科目，借貸方向依科目代號首碼自動判定（1／5／6＝借方，2／3／4＝貸方）</span></div>
-    <div style="margin-bottom:6px;font-size:13px;color:#5b3a1e;">小數處理（未稅金額）：
-      <select id="jRound" style="width:auto;"><option value="none">不處理（保留小數）</option><option value="round">四捨五入至整數</option><option value="floor">無條件捨去至整數</option></select>
-      <span style="color:#8a6d45;font-size:12.5px;">稅額以處理後的未稅金額計算</span></div>
+    <input type="hidden" id="jRound" value="round">
+    <div style="margin-bottom:6px;font-size:12.5px;color:#8a6d45;">金額一律逐列四捨五入至整數，稅額以四捨五入後的未稅金額計算</div>
     <div id="jExp" class="info" style="display:none;margin-bottom:6px;"></div>
     <table class="a-t" id="tblJ"><thead><tr><th style="width:110px;">會計科目</th><th>科目名稱</th><th style="width:210px;">摘要</th><th style="width:130px;">借方金額</th><th style="width:130px;">貸方金額</th><th style="width:60px;"></th></tr></thead>
       <tbody id="jBody"></tbody>
@@ -668,7 +666,7 @@ $('#btnVCreate').on('click',function(){
   if(noE){ toast('傳票號碼：'+esc(noE), true); $('#vNo').focus(); return; }
   JX=[]; AOVR={}; $('#jErr').text('');
   $('#jTitle').text('確認傳票 '+noV);
-  $('#jRound').val('none'); EXPSEL={}; renderExp();
+  $('#jRound').val('round'); EXPSEL={}; renderExp();
   $('#jHead').html('<b>'+esc($('#vParty option:selected').text().split('　')[0])+'</b>　帳款月份 '+esc($('#vBm').val())+'　傳票日期 '+dd(d)+'　共 '+k.length+' 筆憑證、未稅合計 '+nf2(selNet()));
   journalRender(); openMask('mkJ');
 });
@@ -704,10 +702,13 @@ $(document).on('click','.att-open',function(e){
   });
 });
 /* ── 查詢 ── */
+var lSeq=0;
 function loadList(){
+  var mySeq=++lSeq;
   $('#lBody').html('<tr><td colspan="10" style="padding:18px;color:#8a6d45;">查詢中…</td></tr>');
   $.post(API+'?action=vch_list',{bm_from:$('#lFrom').val(),bm_to:$('#lTo').val(),side:$('#lSide').val(),status:$('#lStatus').val(),
     no_number:$('#lNoNo').is(':checked')?'1':'',kw:$('#lKw').val(),page:lPage,per_page:$('#lPer').val()},function(r){
+    if(mySeq!==lSeq) return;   // 打字很快時只採用最後一次查詢
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
     var h='';
     if(!r.rows.length) h='<tr><td colspan="10" style="padding:18px;color:#8a6d45;">沒有符合的傳票</td></tr>';
@@ -726,9 +727,11 @@ function loadList(){
     $('#lPg').html(pg);
   },'json').fail(function(x){ failMsg(x,'查詢失敗'); });
 }
-$('#btnLLoad').on('click',function(){ lPage=1; loadList(); });
-$('#lPer,#lSide,#lStatus,#lNoNo').on('change',function(){ lPage=1; loadList(); });
-$('#lKw').on('keydown',function(e){ if(e.which===13){ lPage=1; loadList(); } });
+var lTimer=null;
+function loadListLive(){ lPage=1; loadList(); }
+$('#lPer,#lSide,#lStatus,#lNoNo,#lFrom,#lTo').on('change',loadListLive);
+$('#lKw').on('input',function(){ clearTimeout(lTimer); lTimer=setTimeout(loadListLive,350); })
+  .on('keydown',function(e){ if(e.which===13){ clearTimeout(lTimer); loadListLive(); } });
 $(document).on('click','#lPg button',function(){ lPage=+$(this).data('p'); loadList(); });
 $(document).on('click','.v-open',function(){
   var id=$(this).data('id');
