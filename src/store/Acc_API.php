@@ -739,7 +739,7 @@ case 'erp_batch_upload': {
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $fs = $_FILES['files'] ?? null;
     if (!$fs || !is_array($fs['name'])) acc_err('請選擇要上傳的 ERP 對帳單檔案');
-    if (count($fs['name']) > 60) acc_err('一次最多 60 個檔案');
+    if (count($fs['name']) > 20) acc_err('單次請求最多 20 個檔案（PHP max_file_uploads）');
     $rate = acc_tax_rate($db);
     $rows = [];
     foreach ($fs['name'] as $i => $nm) {
@@ -762,6 +762,18 @@ case 'erp_batch_upload': {
                     'customer_name' => $parsed['customer_name'], 'range' => $parsed['range'], 'line_cnt' => count($parsed['lines']),
                     'net' => $sumAmt, 'tax' => $tax, 'total' => $sumAmt + $tax, 'declared_total' => $parsed['total_declared'],
                     'summary' => $m['summary']];
+            // 已經鎖帳＋發票＋傳票都辦完的客戶不必再列（只要還有一項沒辦就列出，可繼續批次處理）
+            $tg = acc_erp_stmt_recon_target($db, ['entries' => $m['entries'], 'token' => $token,
+                'their_total' => ($parsed['total_declared'] !== null) ? (float)$parsed['total_declared'] : $sumAmt]);
+            if (!empty($tg['success'])) {
+                $stx = acc_erp_batch_status($db, $tg['party_id'], $tg['bm']);
+                if ($stx['sheet_status'] === 'confirmed' && $stx['invoices'] && $stx['vouchers']) {
+                    @unlink(acc_erp_stash_dir() . DIRECTORY_SEPARATOR . $token . '.json');
+                    $row = ['file_name' => $fname, 'ok' => true, 'done' => true, 'customer_name' => $tg['party_id'], 'bm' => $tg['bm']];
+                } else {
+                    $row += ['party_id' => $tg['party_id'], 'bm' => $tg['bm'], 'status' => $stx, 'link' => acc_erp_batch_link($tg)];
+                }
+            }
         } catch (Throwable $e) { $row['error'] = $e->getMessage(); }
         $rows[] = $row;
     }

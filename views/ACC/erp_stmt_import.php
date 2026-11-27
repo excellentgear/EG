@@ -70,9 +70,9 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       <label>ERP 客戶對帳單檔</label>
       <input type="file" id="stmtFile" accept=".xls,.xlsx" style="font-size:13px;">
       <button id="btnUpload" class="btn-warm"<?= $perms['canEdit'] ? '' : ' disabled' ?>><i class="fa fa-search"></i> 上傳並比對</button>
-      <span style="margin-left:14px;border-left:1px solid #d8c9ad;padding-left:14px;">
-        <label>批次（多個客戶）</label>
-        <input type="file" id="batchFiles" accept=".xls,.xlsx" multiple style="font-size:13px;max-width:230px;">
+      <span style="margin-left:14px;border-left:1px solid #d8c9ad;padding-left:14px;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <label style="margin:0;">批次（多客戶）</label>
+        <input type="file" id="batchFiles" accept=".xls,.xlsx" multiple style="font-size:13px;max-width:220px;">
         <button id="btnBatchUp" class="btn-warm"<?= $perms['canEdit'] ? '' : ' disabled' ?>><i class="fa fa-th-list"></i> 批次上傳並比對</button>
         <button id="btnBatchOpen" style="display:none;"><i class="fa fa-window-restore"></i> 開啟批次視窗</button>
       </span>
@@ -135,17 +135,28 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 <div class="a-mask" id="mkBatch"><div class="a-modal" style="width:1380px;">
   <div class="m-head"><i class="fa fa-th-list"></i>&nbsp;批次處理 ERP 對帳單<span class="m-close" data-close="mkBatch">✕</span></div>
   <div class="m-body" style="max-height:72vh;">
-    <div class="a-bar" style="background:#fff7e8;margin-bottom:8px;flex-wrap:wrap;">
-      <button id="bbPrep" class="btn-warm"><i class="fa fa-balance-scale"></i> ① 全部帶到對帳作業</button>
-      <button id="bbRefresh"><i class="fa fa-refresh"></i> 重新整理狀態</button>
-      <span style="border-left:1px solid #d8c9ad;height:22px;"></span>
-      <button id="bbLock" class="btn-warm"><i class="fa fa-lock"></i> ② 批次鎖帳（勾選）</button>
-      <button id="bbInv" class="btn-warm"><i class="fa fa-file-text-o"></i> ③ 批次開發票（勾選）</button>
-      <button id="bbVch" class="btn-warm"><i class="fa fa-book"></i> ④ 批次轉傳票（勾選）</button>
-      <span style="border-left:1px solid #d8c9ad;height:22px;"></span>
-      <label>發票日期</label><input type="date" id="bbInvAll" style="width:140px;"><button id="bbInvApply">套用全部</button>
-      <label>傳票日期</label><input type="date" id="bbVchAll" style="width:140px;"><button id="bbVchApply">套用全部</button>
+    <style>
+    .bb-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;}
+    .bb-step{border:1px solid #e3d4b8;border-radius:6px;background:#fff7e8;padding:8px 10px;display:flex;flex-direction:column;gap:6px;}
+    .bb-step .t{font-size:12px;color:#8a6d45;}
+    .bb-step .r{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+    .bb-step button{height:30px;}
+    .bb-step input[type=date]{width:136px;}
+    </style>
+    <div class="bb-steps">
+      <div class="bb-step"><div class="t">① 全部客戶</div>
+        <div class="r"><button id="bbPrep" class="btn-warm"><i class="fa fa-balance-scale"></i> 帶到對帳作業</button>
+        <button id="bbRefresh"><i class="fa fa-refresh"></i> 重新整理狀態</button></div></div>
+      <div class="bb-step"><div class="t">② 勾選的客戶</div>
+        <div class="r"><button id="bbLock" class="btn-warm"><i class="fa fa-lock"></i> 批次鎖帳</button></div></div>
+      <div class="bb-step"><div class="t">③ 勾選的客戶・發票日期</div>
+        <div class="r"><input type="date" id="bbInvAll"><button id="bbInvApply">套用全部</button>
+        <button id="bbInv" class="btn-warm"><i class="fa fa-file-text-o"></i> 批次開發票</button></div></div>
+      <div class="bb-step"><div class="t">④ 勾選的客戶・傳票日期</div>
+        <div class="r"><input type="date" id="bbVchAll"><button id="bbVchApply">套用全部</button>
+        <button id="bbVch" class="btn-warm"><i class="fa fa-book"></i> 批次轉傳票</button></div></div>
     </div>
+
     <div style="color:#8a6d45;font-size:12.5px;margin-bottom:6px;">
       ①會先依 ERP 更正單價、補上網頁漏掉的出貨明細，再把與 ERP 一致的明細標成「已對到」暫存；點客戶名稱可另開分頁核對（核對完回來按「重新整理狀態」）。
       ②只鎖已對到的明細，沒對到的會移出底稿。③發票日期可各別填。④傳票需填 ERP 傳票號碼（只填 1~3 碼＝流水號，年月日取自傳票日期）。
@@ -375,20 +386,30 @@ $('#bbInvApply').on('click',function(){ var v=$('#bbInvAll').val(); if(!v) retur
 $('#bbVchApply').on('click',function(){ var v=$('#bbVchAll').val(); if(!v) return; BR.forEach(function(r){ r.vch_date=v; }); bRender(); });
 $('#btnBatchOpen').on('click',function(){ openMask('mkBatch'); });
 $('#btnBatchUp').on('click',function(){
-  var fl=$('#batchFiles')[0].files;
+  var fl=Array.prototype.slice.call($('#batchFiles')[0].files);
   if(!fl.length){ toast('請先選擇多個 ERP 對帳單檔案', true); return; }
-  var fd=new FormData(); fd.append('csrf',CSRF);
-  for(var i=0;i<fl.length;i++) fd.append('files[]',fl[i]);
-  var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 比對中…');
-  $.ajax({url:API+'?action=erp_batch_upload',method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
-  .done(function(r){
-    $b.prop('disabled',false).html('<i class="fa fa-th-list"></i> 批次上傳並比對');
-    if(!r.ok){ toast(esc(r.error||'上傳失敗'), true); return; }
-    BR=r.rows||[]; BR.forEach(function(x){ x.inv_date=TODAY; x.vch_date=TODAY; x.vch_no=''; });
-    $('#bbInvAll,#bbVchAll').val(TODAY);
-    bRender(); $('#btnBatchOpen').show(); openMask('mkBatch');
-  }).fail(function(x){ $b.prop('disabled',false).html('<i class="fa fa-th-list"></i> 批次上傳並比對');
-    var m='上傳失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+  var $b=$(this).prop('disabled',true), all=[], done=0, errs=[], pos=0, CH=15;   // PHP 單次請求最多收 20 個檔案，所以分批送
+  function reset(){ $b.prop('disabled',false).html('<i class="fa fa-th-list"></i> 批次上傳並比對'); }
+  (function nx(){
+    if(pos>=fl.length){
+      reset();
+      BR=all.filter(function(x){ if(x.done){ done++; return false; } return true; });
+      BR.forEach(function(x){ x.inv_date=TODAY; x.vch_date=TODAY; x.vch_no=''; });
+      $('#bbInvAll,#bbVchAll').val(TODAY);
+      bRender(); $('#btnBatchOpen').show(); openMask('mkBatch');
+      toast('共 '+fl.length+' 個檔案，列出 '+BR.length+' 個'+(done?('；'+done+' 個客戶已鎖帳且發票、傳票都辦完，未列出'):''), false);
+      return;
+    }
+    var part=fl.slice(pos,pos+CH); pos+=CH;
+    var fd=new FormData(); fd.append('csrf',CSRF);
+    part.forEach(function(f){ fd.append('files[]',f); });
+    $b.html('<i class="fa fa-spinner fa-spin"></i> 比對中 '+Math.min(pos,fl.length)+'/'+fl.length+'…');
+    $.ajax({url:API+'?action=erp_batch_upload',method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
+    .done(function(r){
+      if(!r.ok){ reset(); toast(esc(r.error||'上傳失敗'), true); return; }
+      all=all.concat(r.rows||[]); nx();
+    }).fail(function(x){ reset(); var m='上傳失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
+  })();
 });
 function seq(list,fn,done){ var k=0; (function nx(){ if(k>=list.length){ if(done) done(); return; } var r=list[k++]; fn(r,function(){ bRender(); nx(); }); })(); }
 function setMsg(r,m,bad){ r.msg=m; r.bad=!!bad; }

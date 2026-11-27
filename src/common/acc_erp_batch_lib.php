@@ -72,6 +72,15 @@ function acc_erp_batch_status(PDO $db, string $party, string $bm): array
     return $out;
 }
 
+/** 開啟對帳作業核對的網址 */
+function acc_erp_batch_link(array $t): string
+{
+    return 'reconcile.php?side=ar&party_id=' . rawurlencode((string)$t['party_id']) . '&bm=' . rawurlencode((string)$t['bm'])
+         . ($t['their_total'] === null ? '' : '&their=' . rawurlencode((string)$t['their_total']))
+         . '&erp=' . rawurlencode((string)$t['token'])
+         . ($t['date_from'] && $t['date_to'] ? '&rg_from=' . rawurlencode($t['date_from']) . '&rg_to=' . rawurlencode($t['date_to']) : '');
+}
+
 /** 單一客戶：同步單價／補漏 → 推出客戶與帳款月份 → 建立（或更新）對帳底稿，已與 ERP 一致的明細標成「已對到」後暫存 */
 function acc_erp_batch_prepare(PDO $db, array $stash, ?array $user, string $userName): array
 {
@@ -118,10 +127,7 @@ function acc_erp_batch_prepare(PDO $db, array $stash, ?array $user, string $user
     return ['success' => true, 'party_id' => $party, 'bm' => $bm, 'already' => false, 'multi_party' => $t['multi_party'],
             'multi_month' => $t['multi_month'], 'synced' => (int)($sy['updated'] ?? 0), 'created' => (int)($sy['created'] ?? 0),
             'skipped' => $sy['skipped'] ?? [], 'status' => acc_erp_batch_status($db, $party, $bm),
-            'link' => 'reconcile.php?side=ar&party_id=' . rawurlencode($party) . '&bm=' . rawurlencode($bm)
-                    . ($t['their_total'] === null ? '' : '&their=' . rawurlencode((string)$t['their_total']))
-                    . '&erp=' . rawurlencode((string)$t['token'])
-                    . ($t['date_from'] && $t['date_to'] ? '&rg_from=' . rawurlencode($t['date_from']) . '&rg_to=' . rawurlencode($t['date_to']) : '')];
+            'link' => acc_erp_batch_link($t)];
 }
 
 /** 批次鎖帳：沿用 acc_sheet_confirm（只鎖已勾選的明細） */
