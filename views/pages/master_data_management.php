@@ -5702,6 +5702,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 客戶／廠商代碼修改：尚未被任何單據使用才可改（有編輯權限者即可）────────────
+    //   「使用」＝主檔附屬資料(聯絡人/別名/業務/付款條件等)以外的任何表已有引用該代碼的資料。
+    //   引用欄位直接掃 information_schema（欄名：客戶 customer_id/client_id/client_name_id，廠商 maker_id_no）。
+    if ($_POST['action'] === 'party_id_status' || $_POST['action'] === 'party_id_change') {
+        try {
+            $ent = trim($_POST['entity'] ?? '');
+            if (!in_array($ent, ['customer','maker'], true)) throw new Exception('未知的類型');
+            $tbl = $ent === 'customer' ? 'customer_list' : 'maker_list';
+            $pkc = $ent === 'customer' ? 'customer_id'   : 'maker_id_no';
+            $colNames = $ent === 'customer' ? ['customer_id','client_id','client_name_id'] : ['maker_id_no'];
+            $canEditEnt = $ent === 'customer' ? $canCustEdit : $canMakerEdit;
+            $oldId = strtoupper(trim($_POST['old_id'] ?? ''));
+            if ($oldId === '') throw new Exception('缺少代碼');
+            $ex = $pdo->prepare("SELECT COUNT(*) FROM `$tbl` WHERE `$pkc`=?"); $ex->execute([$oldId]);
+            if (!(int)$ex->fetchColumn()) throw new Exception('找不到此代碼');
+            $ph = implode(',', array_fill(0, count($colNames), '?'));
+            $cq = $pdo->prepare("SELECT c.table_name AS t, c.column_name AS col FROM information_schema.columns c
+                JOIN information_schema.tables tb ON tb.table_schema=c.table_schema AND tb.table_name=c.table_name AND tb.table_type='BASE TABLE'
+                WHERE c.table_schema=DATABASE() AND LOWER(c.column_name) IN ($ph)");
+            $cq->execute($colNames);
+            $selfSkip = [$tbl];
+            $attached = '/^(customer_|maker_|party_|acc_customer_alias$|d_setting_alias$|d_setting_vendor_map$)/i';
+            $used = []; $all = [];
+            foreach ($cq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $r = array_change_key_case($r, CASE_LOWER);
+                if (in_array($r['t'], $selfSkip, true)) continue;
+                try { $q = $pdo->prepare("SELECT COUNT(*) FROM `{$r['t']}` WHERE `{$r['col']}`=?"); $q->execute([$oldId]); $n = (int)$q->fetchColumn(); }
+                catch (Throwable $qe) { continue; }
+                if ($n <= 0) continue;
+                $all[] = [$r['t'], $r['col']];
+                if (!preg_match($attached, $r['t'])) $used[] = $r['t'] . '(' . $n . ')';
+            }
+            if ($_POST['action'] === 'party_id_status') {
+                echo json_encode(['success'=>true, 'can_edit'=>(bool)$canEditEnt, 'free'=>empty($used), 'used'=>$used]);
+                exit;
+            }
+            // ── 實際改代碼 ──
+            if (!$canEditEnt) throw new Exception('無修改權限');
+            $newId = strtoupper(trim($_POST['new_id'] ?? ''));
+            if ($newId === '') throw new Exception('新代碼不可為空');
+            if (mb_strlen($newId) > 11) throw new Exception('代碼最多 11 碼');
+            if (preg_match('/\s/', $newId)) throw new Exception('代碼不可含空白');
+            if ($newId === $oldId) throw new Exception('新舊代碼相同');
+            if ($used) throw new Exception('此代碼已被單據使用，無法修改：' . implode('、', $used));
+            $dup = $pdo->prepare("SELECT COUNT(*) FROM `$tbl` WHERE `$pkc`=?"); $dup->execute([$newId]);
+            if ((int)$dup->fetchColumn()) throw new Exception("代碼「{$newId}」已存在");
+            $pdo->exec("SET FOREIGN_KEY_CHECKS=0");
+            try {
+                $pdo->beginTransaction();
+                foreach ($all as [$t, $col]) {
+                    $pdo->prepare("UPDATE `$t` SET `$col`=? WHERE `$col`=?")->execute([$newId, $oldId]);
+                }
+                foreach (['party_name_alias','party_address'] as $pt) {
+                    try { $pdo->prepare("UPDATE `$pt` SET party_id=? WHERE party_type=? AND party_id=?")->execute([$newId, $ent, $oldId]); } catch (Throwable $pe) {}
+                }
+                $pdo->prepare("UPDATE `$tbl` SET `$pkc`=? WHERE `$pkc`=?")->execute([$newId, $oldId]);
+                $pdo->commit();
+            } catch (Throwable $e2) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                $pdo->exec("SET FOREIGN_KEY_CHECKS=1");
+                throw $e2;
+            }
+            $pdo->exec("SET FOREIGN_KEY_CHECKS=1");
+            _log_audit($pdo,'update',$ent==='customer'?'customer':'vendor',$newId,null,[['field'=>'代碼','old'=>$oldId,'new'=>$newId]],$uid,_get_operator($pdo,$uid));
+            echo json_encode(['success'=>true,'message'=>'代碼已由 '.$oldId.' 改為 '.$newId]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
+        }
+        exit;
+    }
+
     // ── 客戶移轉綁定：取得客戶詳細資訊＋各資料表綁定數量 ─────────────────────
     if ($_POST['action'] === 'get_customer_transfer_info') {
         try {
@@ -13659,6 +13731,34 @@ var _pendingSaves = {};
 function api(data) {
     return $.ajax({ url: SELF_URL, method:'POST', data: data, dataType:'json' });
 }
+// 客戶／廠商代碼：尚未被任何單據使用時開放修改（有編輯權限者）。已使用則維持唯讀。
+function partyIdUnlockIfFree(entity, el, viewOnly) {
+    el.dataset.orig = el.value; el.dataset.free = '0';
+    var hint = el.parentNode.querySelector('.id-hint');
+    if (hint && hint.dataset.base === undefined) hint.dataset.base = hint.textContent;
+    if (hint) hint.textContent = hint.dataset.base || '';
+    if (viewOnly) return;
+    var oid = el.value;
+    api({ action:'party_id_status', entity:entity, old_id:oid }).done(function(r) {
+        if (el.dataset.orig !== oid || !r || !r.success) return;
+        if (r.can_edit && r.free) {
+            el.readOnly = false; el.style.background = ''; el.dataset.free = '1';
+            if (hint) hint.textContent = '尚未被任何單據使用，可修改代碼';
+        } else if (hint && r.used && r.used.length) {
+            hint.textContent = '已被單據使用，代碼不可修改';
+        }
+    });
+}
+// 儲存前若代碼被改：先改代碼（後端再驗一次是否未被使用），成功後才繼續存檔
+function partyIdChangeThen(entity, el, onOk, onFail) {
+    var nid = el.value.toUpperCase().trim(), oid = el.dataset.orig || '';
+    var isNewEl = document.getElementById(entity === 'customer' ? 'cf-is_new' : 'mf-is_new');
+    if ((isNewEl && isNewEl.value === '1') || el.readOnly || el.dataset.free !== '1' || !oid || nid === oid) { onOk(); return; }
+    api({ action:'party_id_change', entity:entity, old_id:oid, new_id:nid }).done(function(r) {
+        if (!r.success) { showToast(r.message,'error'); onFail(); return; }
+        el.dataset.orig = nid; onOk();
+    }).fail(function(){ showToast('網路錯誤','error'); onFail(); });
+}
 // Debounced submit: prevents double-click sending multiple requests
 function apiOnce(key, data, onDone, onFail) {
     if (_pendingSaves[key]) return;
@@ -20480,6 +20580,7 @@ function openCustomerModal(customer_id, readonly) {
             document.getElementById('cf-is_new').value = '0';
             var cidEl = document.getElementById('cf-customer_id');
             cidEl.value = d.customer_id; cidEl.readOnly = true; cidEl.style.background = '#f5f5f5';
+            partyIdUnlockIfFree('customer', cidEl, readonly);
             // Basic fields
             ['customer','customer_full','customer_full_en','customer_tel','customer_fax','customer_fax2','customer_zip','customer_address','tax_id',
              'quote_method','payment_method','net_days','bank_name','bank_branch','bank_account',
@@ -20708,6 +20809,7 @@ function submitCustomerForm() {
     var btn = document.querySelector('#customerModal .btn-success');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 儲存中…'; }
     var restore = function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa fa-save"></i> 儲存'; } };
+    partyIdChangeThen('customer', document.getElementById('cf-customer_id'), function(){
     apiOnce('save_customer', data,
         function(r) {
             restore();
@@ -20716,6 +20818,7 @@ function submitCustomerForm() {
         },
         function(){ restore(); showToast('網路錯誤','error'); }
     );
+    }, restore);
 }
 
 // ── 客戶刪除 modal 狀態 ───────────────────────────────────
@@ -21383,6 +21486,7 @@ function openMakerModal(maker_id_no) {
             document.getElementById('mf-is_new').value = '0';
             var midEl = document.getElementById('mf-maker_id_no');
             midEl.value = d.maker_id_no; midEl.readOnly = true; midEl.style.background = '#f5f5f5';
+            partyIdUnlockIfFree('maker', midEl, false);
             var fields = ['maker_id','maker_id_all','m_tel','m_tel2','m_fax','m_fax2','factory_zip','billing_zip','invoice_address','factory_address','billing_address','postal_code','tax_id','contact_person','contact_title','email','m_email','m_category','m_process_items','limit_dia','limit_len','m_note'];
             fields.forEach(function(f){ var el=document.getElementById('mf-'+f); if(el) el.value=(d[f]!==null&&d[f]!==undefined)?d[f]:''; });
             document.getElementById('mf-status').value          = d.status||'';
@@ -21879,6 +21983,7 @@ function submitMakerForm() {
     var btn = document.querySelector('#makerModal .btn-success');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 儲存中…'; }
     var restore = function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa fa-save"></i> 儲存'; } };
+    partyIdChangeThen('maker', document.getElementById('mf-maker_id_no'), function(){
     apiOnce('save_maker', data,
         function(r) {
             restore();
@@ -21893,6 +21998,7 @@ function submitMakerForm() {
         },
         function(){ restore(); showToast('網路錯誤','error'); }
     );
+    }, restore);
 }
 
 // ── 廠內廠商對應製程（大類／小類）──
