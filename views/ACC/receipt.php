@@ -153,7 +153,8 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
 .a-tabs button.on{background:var(--a-acc);color:#fff;font-weight:bold;border-color:var(--a-acc-d);}
 .od{color:#DD5138;font-weight:bold;}
 table.a-t tr.row-od td{background:#FBE3E0;}
-table.a-t td.over-tot{background:#FFF3C4;}
+table.a-t td.amt-hit{background:#FFF3C4;}
+.star{float:left;color:#DD5138;font-weight:bold;margin-right:14px;}
 table.a-t tr.row-sel td{background:#DDEFD0;}
 #dueBody.has-sel .dck:not(:checked){visibility:hidden;}
 .tk{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;line-height:16px;font-weight:bold;}
@@ -213,8 +214,7 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
         <input type="text" id="dueKw" placeholder="客戶名稱／客戶ID／發票號碼" style="width:200px;">
         <label><input type="checkbox" id="dueOver"> 只看已逾期</label>
         <label><input type="checkbox" id="dueGt"> 只看未收餘額＞含稅金額</label>
-        <span style="white-space:nowrap;">含稅金額 <input type="number" id="dueTotMin" placeholder="最小" style="width:90px;"> ~ <input type="number" id="dueTotMax" placeholder="最大" style="width:90px;"></span>
-        <span style="white-space:nowrap;">未收餘額 <input type="number" id="dueOpenMin" placeholder="最小" style="width:90px;"> ~ <input type="number" id="dueOpenMax" placeholder="最大" style="width:90px;"></span>
+        <input type="text" id="dueAmt" placeholder="金額（含稅／未收）：1000 或 1000~5000" style="width:250px;" data-eg-hint="填一個數字＝金額含該數字；填 最小~最大＝區間。同時比對含稅金額與未收餘額">
         <button id="btnDueLoad" class="btn-warm"><i class="fa fa-refresh"></i> 重新載入</button>
         <?php if ($perms['canEdit']): ?>
         <button id="btnDueRecv" disabled><i class="fa fa-money"></i> 登錄收款（勾選的發票）</button>
@@ -481,14 +481,15 @@ function termsHtml(v){
 function renderDue(){
   var kw=$.trim($('#dueKw').val()).toLowerCase().split(/\s+/).filter(Boolean), od=$('#dueOver').is(':checked'), gt=$('#dueGt').is(':checked');
   var list=[];
-  function nv(id){ var s=$.trim($(id).val()).replace(/,/g,''); return s===''||isNaN(Number(s))?null:Number(s); }
-  var rng={tmin:nv('#dueTotMin'),tmax:nv('#dueTotMax'),omin:nv('#dueOpenMin'),omax:nv('#dueOpenMax')};
+  var aq=$.trim($('#dueAmt').val()).replace(/,/g,''), am=aq.match(/^(\d*\.?\d*)\s*[~\-－～]\s*(\d*\.?\d*)$/), amin=null, amax=null, atxt='';
+  if(am){ amin=am[1]===''?null:Number(am[1]); amax=am[2]===''?null:Number(am[2]); if(amin===null&&amax===null) am=null; } else atxt=aq;
+  function amtHit(x){ x=Number(x)||0; if(am) return (amin===null||x>=amin)&&(amax===null||x<=amax); return atxt!=='' && String(Math.round(x*100)/100).indexOf(atxt)>=0; }
+  var amtOn=!!(am||atxt!=='');
   dueRows.forEach(function(v,i){
     if(od&& !(v.overdue_days>0)) return;
     if(gt && !(Number(v.open)>Number(v.total_amount)+0.005)) return;
     var tot=Number(v.total_amount)||0, opn=Number(v.open)||0;
-    if(rng.tmin!==null && tot<rng.tmin) return; if(rng.tmax!==null && tot>rng.tmax) return;
-    if(rng.omin!==null && opn<rng.omin) return; if(rng.omax!==null && opn>rng.omax) return;
+    if(amtOn && !amtHit(tot) && !amtHit(opn)) return;
     if(kw.length){
       var hay=[v.customer_name,v.customer_id,v.invoice_no,v.voucher_no,v.billing_month].join(' ').toLowerCase();
       for(var k=0;k<kw.length;k++) if(hay.indexOf(kw[k])<0) return;
@@ -507,14 +508,14 @@ function renderDue(){
   var h='';
   if(!list.length) h='<tr><td colspan="12" style="padding:22px;color:#8a6d45;">'+(dueRows.length?'沒有符合篩選的發票':'沒有未收款的已開立發票')+'</td></tr>';
   list.forEach(function(i){
-    var v=dueRows[i], over=Number(v.open)>Number(v.total_amount)+0.005;
+    var v=dueRows[i], tot=Number(v.total_amount)||0, opn=Number(v.open)||0, over=opn>tot+0.005;
     h+='<tr data-i="'+i+'"'+(v.overdue_days>0?' class="row-od"':'')+'><td><input type="checkbox" class="dck"'+(dueSel[i]?' checked':'')+'></td><td class="l">'+esc(v.customer_name)+'</td>'
      +'<td><b>'+esc(v.invoice_no||'')+'</b></td><td>'+dd(v.invoice_date)+'</td><td>'+esc(v.billing_month||'')+'</td>'
      +'<td>'+(v.request_date?dd(v.request_date):'<span style="color:#b09a86;">未開傳票</span>')+'</td>'
      +'<td>'+esc(v.voucher_no||'')+'</td><td class="l" style="font-size:12px;">'+termsHtml(v)+'</td>'
      +'<td>'+(v.due_date?'<b>'+dd(v.due_date)+'</b>':'<span style="color:#b09a86;">未設定</span>')+'</td>'
      +'<td>'+(v.overdue_days>0?'<span class="od">逾期 '+v.overdue_days+' 天</span>':'')+'</td>'
-     +'<td class="r">'+nf(v.total_amount)+'</td><td class="r'+(over?' over-tot':'')+'"'+(over?' title="未收餘額大於含稅金額"':'')+'><b>'+nf(v.open)+'</b></td></tr>';
+     +'<td class="r'+(amtOn&&amtHit(tot)?' amt-hit':'')+'">'+nf(v.total_amount)+'</td><td class="r'+(amtOn&&amtHit(opn)?' amt-hit':'')+'">'+(over?'<span class="star" title="未收餘額大於含稅金額">★</span>':'')+'<b>'+nf(v.open)+'</b></td></tr>';
   });
   $('#dueBody').html(h); updDue();
 }
@@ -534,7 +535,7 @@ $(document).on('change','.dck',function(){
 $('#btnDueLoad').on('click',loadDue);
 $('#dueKw').on('input',renderDue).on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); renderDue(); } });
 $('#dueOver,#dueGt').on('change',renderDue);
-$('#dueTotMin,#dueTotMax,#dueOpenMin,#dueOpenMax').on('input',renderDue);
+$('#dueAmt').on('input',renderDue);
 
 /* 預設近三個月 */
 (function(){
