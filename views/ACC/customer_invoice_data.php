@@ -450,9 +450,7 @@ function render(){
   var h='';
   rows.forEach(function(r,i){
     h+='<tr data-i="'+i+'" data-cid="'+esc(r.customer_id)+'">'
-      +'<td>'+(CAN_OPEN_MASTER
-          ? '<a href="../pages/master_data_management.php?edit_customer='+encodeURIComponent(r.customer_id)+'" target="_blank" rel="noopener" title="另開主檔管理並開啟此客戶編輯視窗">'+esc(r.customer_id)+'</a>'
-          : esc(r.customer_id))+'</td>'
+      +'<td><a class="cid-link" href="../pages/master_data_management.php?edit_customer='+encodeURIComponent(r.customer_id)+'" target="_blank" rel="noopener" title="另開主檔管理並開啟此客戶編輯視窗（需主檔客戶編輯權限）" style="color:#0b5ed7;text-decoration:underline;">'+esc(r.customer_id)+'</a></td>'
       +'<td class="l">'+esc(r.customer)+'</td>'
       +'<td class="l">'+cell(r,'customer_full',true)+'</td>'
       +'<td>'+cell(r,'tax_id')+'</td>'
@@ -503,6 +501,9 @@ $(document).on('click','#tbl thead th.sortable',function(){
 /* ══ 就地編輯（改完離開欄位或按 Enter 即存） ══ */
 $(document).on('keydown','#tbody .cell-in',function(e){
   if(e.key==='Enter'){ e.preventDefault(); this.blur(); }
+});
+$(document).on('click','#tbody .cid-link',function(e){
+  if(!CAN_OPEN_MASTER){ e.preventDefault(); toast('您沒有主檔管理的客戶編輯權限', true); }
 });
 $(document).on('input','#tbody .cell-in[data-col=tax_id]',function(){
   var v=this.value.replace(/\D/g,'');
