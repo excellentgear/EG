@@ -567,6 +567,8 @@ function acc_vch_no_normalize(string $no, string $date): string
 {
     $no = strtoupper(trim($no));
     if (preg_match('/^\d{10}$/', $no)) return 'V-' . $no;
+    // 只輸入 1~3 碼＝流水號：民國年與 MMDD 取自傳票日期
+    if (preg_match('/^\d{1,3}$/', $no) && preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m)) return 'V-' . sprintf('%03d', (int)$m[1] - 1911) . $m[2] . $m[3] . sprintf('%03d', (int)$no);
     if (preg_match('/^\d{7}$/', $no) && preg_match('/^(\d{4})-\d{2}-\d{2}$/', $date, $m)) return 'V-' . sprintf('%03d', (int)$m[1] - 1911) . $no;
     return $no;
 }

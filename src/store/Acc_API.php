@@ -686,7 +686,8 @@ case 'erp_stmt_upload': {
 
 case 'erp_stmt_recon_link': {
     require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
-    $stash = $_SESSION['acc_erp_stmt'][(string)($_POST['token'] ?? '')] ?? null;
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    $stash = acc_erp_stash_get((string)($_POST['token'] ?? ''), $uid);
     if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
     $r = acc_erp_stmt_recon_target($db, $stash);
     if (!$r['success']) acc_err($r['message']);
@@ -698,7 +699,8 @@ case 'erp_stmt_sync': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
-    $stash = $_SESSION['acc_erp_stmt'][(string)($_POST['token'] ?? '')] ?? null;
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    $stash = acc_erp_stash_get((string)($_POST['token'] ?? ''), $uid);
     if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
     $r = acc_erp_stmt_sync($db, $stash, (string)($_SESSION['userName'] ?? $uid));
     if (empty($r['success'])) acc_err($r['message'] ?? '同步失敗');
@@ -707,7 +709,8 @@ case 'erp_stmt_sync': {
 
 case 'erp_stmt_keys': {
     require_once $document_root . '/EGsystem/src/common/acc_erp_stmt_lib.php';
-    $stash = $_SESSION['acc_erp_stmt'][(string)($_POST['token'] ?? '')] ?? null;
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    $stash = acc_erp_stash_get((string)($_POST['token'] ?? ''), $uid);
     if (!$stash) acc_err('ERP 對帳單比對結果已逾時（只保留最近 3 份），請回匯入頁重新上傳');
     acc_out(['keys' => acc_erp_stmt_checked_keys($db, $stash)]);
 }
@@ -718,12 +721,94 @@ case 'erp_stmt_apply': {
     if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $token = (string)($_POST['token'] ?? '');
-    $stash = $_SESSION['acc_erp_stmt'][$token] ?? null;
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    $stash = acc_erp_stash_get($token, $uid);
     if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
     $ids = json_decode($_POST['is_ids'] ?? '[]', true);
     if (!is_array($ids) || !$ids) acc_err('沒有勾選要更新的明細');
     $r = acc_erp_stmt_apply($db, $stash, $ids, (string)($_SESSION['userName'] ?? $uid));
     if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* ══ ERP 對帳單「批次」：多檔上傳 → 帶到對帳 → 鎖帳 → 開發票 → 轉傳票（只串接既有函式，見 acc_erp_batch_lib.php） ══ */
+case 'erp_batch_upload': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $fs = $_FILES['files'] ?? null;
+    if (!$fs || !is_array($fs['name'])) acc_err('請選擇要上傳的 ERP 對帳單檔案');
+    if (count($fs['name']) > 60) acc_err('一次最多 60 個檔案');
+    $rate = acc_tax_rate($db);
+    $rows = [];
+    foreach ($fs['name'] as $i => $nm) {
+        $fname = acc_u8((string)$nm);
+        $row = ['file_name' => $fname, 'ok' => false];
+        try {
+            if ($fs['error'][$i] !== UPLOAD_ERR_OK) throw new Exception('上傳失敗');
+            if (!in_array(strtolower(pathinfo((string)$nm, PATHINFO_EXTENSION)), ['xls', 'xlsx'], true)) throw new Exception('只接受 .xls／.xlsx');
+            if ($fs['size'][$i] > 10 * 1024 * 1024) throw new Exception('檔案過大（上限 10MB）');
+            $parsed = acc_erp_stmt_parse($fs['tmp_name'][$i]);
+            if (!$parsed['lines']) throw new Exception('找不到對帳明細');
+            $m = acc_erp_stmt_match($db, $parsed['lines']);
+            $sumAmt = 0.0; foreach ($parsed['lines'] as $l) $sumAmt += $l['amount'];
+            $token = bin2hex(random_bytes(10));
+            acc_erp_stash_put($token, ['token' => $token, 'file_name' => $fname, 'entries' => $m['entries'],
+                'their_total' => ($parsed['total_declared'] !== null) ? (float)$parsed['total_declared'] : $sumAmt,
+                'customer_id' => (string)$parsed['customer_id']], $uid);
+            $tax = round($sumAmt * $rate);
+            $row = ['file_name' => $fname, 'ok' => true, 'token' => $token, 'customer_id' => $parsed['customer_id'],
+                    'customer_name' => $parsed['customer_name'], 'range' => $parsed['range'], 'line_cnt' => count($parsed['lines']),
+                    'net' => $sumAmt, 'tax' => $tax, 'total' => $sumAmt + $tax, 'declared_total' => $parsed['total_declared'],
+                    'summary' => $m['summary']];
+        } catch (Throwable $e) { $row['error'] = $e->getMessage(); }
+        $rows[] = $row;
+    }
+    acc_out(['rows' => $rows, 'tax_rate' => $rate]);
+}
+
+case 'erp_batch_prepare': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit'] || empty($perms['canReconAr'])) acc_err('無會計登錄／應收對帳權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $stash = acc_erp_stash_get((string)($_POST['token'] ?? ''), $uid);
+    if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
+    $r = acc_erp_batch_prepare($db, $stash, $u, (string)($_SESSION['userName'] ?? $uid));
+    if (empty($r['success'])) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'erp_batch_status': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    $pairs = json_decode((string)($_POST['pairs'] ?? '[]'), true);
+    if (!is_array($pairs)) acc_err('資料格式錯誤');
+    $out = [];
+    foreach ($pairs as $p) {
+        $party = acc_u8(trim((string)($p['party_id'] ?? ''))); $bm = trim((string)($p['bm'] ?? ''));
+        if ($party === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) continue;
+        $out[] = ['party_id' => $party, 'bm' => $bm, 'status' => acc_erp_batch_status($db, $party, $bm)];
+    }
+    acc_out(['rows' => $out]);
+}
+
+case 'erp_batch_lock': case 'erp_batch_invoice': case 'erp_batch_voucher': {
+    require_once $document_root . '/EGsystem/src/common/acc_erp_batch_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $party = acc_u8(trim((string)($_POST['party_id'] ?? ''))); $bm = trim((string)($_POST['bm'] ?? ''));
+    if ($party === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少客戶或帳款月份');
+    if ($action === 'erp_batch_lock') {
+        acc_recon_guard($perms, 'IS');
+        $r = acc_erp_batch_lock($db, $party, $bm, $u);
+    } else {
+        if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+        if ($action === 'erp_batch_invoice') $r = acc_erp_batch_invoice($db, $party, $bm, trim((string)($_POST['date'] ?? '')), (string)$uid);
+        else $r = acc_erp_batch_voucher($db, $party, $bm, trim((string)($_POST['date'] ?? '')), acc_u8((string)($_POST['voucher_no'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
+    }
+    if (empty($r['success'])) acc_err($r['message'] ?? '失敗');
+    $r['status'] = acc_erp_batch_status($db, $party, $bm);
     acc_out($r);
 }
 
