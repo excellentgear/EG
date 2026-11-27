@@ -289,6 +289,12 @@ function acc_ensure_schema(PDO $db): void
             if (!$q->fetch()) $db->exec("ALTER TABLE acc_recon_sheet ADD COLUMN $col $def");
         }
 
+        foreach (['discount_pct' => "DECIMAL(6,3) DEFAULT NULL COMMENT '客戶折扣%（開立當下快照）'",
+                  'discount_amt' => "DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '折扣金額（正數，已含在未稅金額的扣除中）'"] as $col => $def) {
+            $q = $db->prepare("SHOW COLUMNS FROM acc_invoice LIKE ?"); $q->execute([$col]);
+            if (!$q->fetch()) $db->exec("ALTER TABLE acc_invoice ADD COLUMN $col $def");
+        }
+
         $done = true;
     } catch (Throwable $e) {
         error_log('acc_ensure_schema 失敗: ' . $e->getMessage());
@@ -796,12 +802,13 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
                 $touched[$iid] = 1; $invFix++;
             }
             foreach (array_keys($touched) as $iid) {
-                $tq = $db->prepare("SELECT COALESCE(SUM(amount),0), COUNT(*) FROM acc_invoice_item WHERE invoice_id=?");
+                $tq = $db->prepare("SELECT COUNT(*) FROM acc_invoice_item WHERE invoice_id=? AND src_type<>'DISC'");
                 $tq->execute([$iid]);
-                [$net, $cnt] = array_map('floatval', $tq->fetch(PDO::FETCH_NUM));
-                if ($cnt <= 0) { $db->prepare("DELETE FROM acc_invoice WHERE invoice_id=? AND status='draft'")->execute([$iid]); continue; }
-                $tax = round($net * acc_tax_rate($db));
-                $db->prepare("UPDATE acc_invoice SET sales_amount=?, tax_amount=?, total_amount=? WHERE invoice_id=? AND status='draft'")->execute([$net, $tax, $net + $tax, $iid]);
+                if ((int)$tq->fetchColumn() <= 0) {
+                    $db->prepare("DELETE FROM acc_invoice_item WHERE invoice_id=?")->execute([$iid]);
+                    $db->prepare("DELETE FROM acc_invoice WHERE invoice_id=? AND status='draft'")->execute([$iid]); continue;
+                }
+                acc_inv_recalc($db, $iid);
             }
         }
         $db->prepare("UPDATE acc_recon_sheet SET status='confirmed', confirmed_by=?, confirmed_by_name=?,
@@ -937,6 +944,54 @@ function acc_sheet_progress(PDO $db, array &$rows): void
     unset($r);
 }
 
+/** 帳款月份區間內「有帳但還沒有任何對帳底稿」的對象，組成與底稿列同形的虛擬列；沒指定月份區間回 null */
+function acc_sheet_unstarted(PDO $db, array $f): ?array
+{
+    $a = (string)($f['bm_from'] ?? ''); $b = (string)($f['bm_to'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}$/', $a) && !preg_match('/^\d{4}-\d{2}$/', $b)) return null;
+    if (!preg_match('/^\d{4}-\d{2}$/', $a)) $a = $b;
+    if (!preg_match('/^\d{4}-\d{2}$/', $b)) $b = $a;
+    if ($a > $b) { $t = $a; $a = $b; $b = $t; }
+    $months = [];
+    for ($d = new DateTime($a . '-01'); $d->format('Y-m') <= $b && count($months) < 13; $d->modify('+1 month')) $months[] = $d->format('Y-m');
+    if (count($months) > 12) return null;
+
+    $stF = (string)($f['status'] ?? '');
+    if ($stF !== '' && $stF !== 'all' && $stF !== 'none') return [];
+    $sides = (!empty($f['side']) && $f['side'] !== 'all') ? [$f['side']] : ['ar', 'ap'];
+    $kw = trim((string)($f['kw'] ?? ''));
+    $out = [];
+    foreach ($sides as $side) {
+        $side = $side === 'ap' ? 'ap' : 'ar';
+        foreach ($months as $bm) {
+            $have = [];
+            $st = $db->prepare("SELECT party_id FROM acc_recon_sheet WHERE side=? AND billing_month=?");
+            $st->execute([$side, $bm]);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $p) $have[(string)$p] = true;
+            if ($side === 'ap') {
+                $src = acc_ap_summary($db, ['ym_from' => $bm, 'ym_to' => $bm, 'per_page' => 0])['rows'];
+            } else {
+                $src = acc_ar_summary($db, ['bm_from' => $bm, 'bm_to' => $bm, 'per_page' => 0])['rows'];
+            }
+            foreach ($src as $r) {
+                $pid  = $side === 'ap' ? (string)$r['maker_id_no'] : (string)$r['customer'];
+                $name = $side === 'ap' ? (string)$r['maker_name']  : (string)$r['customer'];
+                if (isset($have[$pid])) continue;
+                if ($kw !== '' && stripos($name, $kw) === false && stripos($pid, $kw) === false) continue;
+                $net = $side === 'ap' ? (float)$r['amount'] : (float)$r['net_amt'];
+                $tot = $side === 'ap' ? (float)$r['total_amount'] : (float)$r['total_amt'];
+                if (abs($net) < 0.5) continue;      // 金額為 0 的不算「要對的帳」
+                $cnt = $side === 'ap' ? (int)$r['cnt'] : (int)$r['ship_cnt'] + (int)$r['ret_cnt'];
+                $out[] = ['sheet_id' => 0, 'side' => $side, 'party_id' => $pid, 'party_name' => $name,
+                          'billing_month' => $bm, 'status' => 'none', 'our_total' => $net, 'total_amount' => $tot,
+                          'their_total' => null, 'diff' => null, 'line_cnt' => $cnt, 'checked_cnt' => 0, 'adj_cnt' => 0,
+                          'saved_at' => null, 'confirmed_at' => null, 'saved_by_name' => null, 'confirmed_by_name' => null];
+            }
+        }
+    }
+    return $out;
+}
+
 function acc_sheet_list(PDO $db, array $f): array
 {
     acc_ensure_schema($db);
@@ -969,7 +1024,9 @@ function acc_sheet_list(PDO $db, array $f): array
         $r['our_total']    = (float)$r['our_total'];
         $r['their_total']  = $r['their_total'] === null ? null : (float)$r['their_total'];
         $r['total_amount'] = (float)$r['total_amount'];
-        $r['diff']         = ($r['their_total'] === null) ? null : round($r['their_total'] - $r['our_total'], 2);
+        // 應付：對方紙本填的是含稅金額，差額以含稅合計比對；應收維持未稅
+        $base              = ($r['side'] === 'ap') ? $r['total_amount'] : $r['our_total'];
+        $r['diff']         = ($r['their_total'] === null) ? null : round($r['their_total'] - $base, 2);
         $r['line_cnt']     = (int)$r['line_cnt'];
         $r['checked_cnt']  = (int)$r['checked_cnt'];
         $r['adj_cnt']      = (int)$r['adj_cnt'];
@@ -990,7 +1047,16 @@ function acc_sheet_list(PDO $db, array $f): array
         }));
     }
 
-    $summary = ['count' => count($rows), 'draft' => 0, 'confirmed' => 0, 'reopened' => 0, 'diff_cnt' => 0];
+    /* 「還沒對完」＝尚未確認鎖帳的底稿 ＋ 該帳款月份有帳、卻連底稿都還沒建的對象（status='none'）。
+       沒有底稿的對象只能由來源資料推出來，所以一定要指定帳款月份區間（最多 12 個月）才列得出。 */
+    $noneMsg = '';
+    if (!empty($f['only_open'])) {
+        $v = acc_sheet_unstarted($db, $f);
+        if ($v === null) $noneMsg = '要列出「尚未開始對帳」的對象，請先選帳款月份（最多 12 個月）。';
+        else $rows = array_merge($rows, $v);
+    }
+
+    $summary = ['count' => count($rows), 'draft' => 0, 'confirmed' => 0, 'reopened' => 0, 'none' => 0, 'diff_cnt' => 0, 'none_msg' => $noneMsg];
     foreach ($rows as $r) {
         if (isset($summary[$r['status']])) $summary[$r['status']]++;
         if ($r['diff'] !== null && abs($r['diff']) > 0.01) $summary['diff_cnt']++;
@@ -1006,7 +1072,7 @@ function acc_sheet_list(PDO $db, array $f): array
         $dir     = (($f['dir'] ?? 'desc') === 'asc') ? 1 : -1;
         $numeric = ['our_total', 'their_total', 'total_amount', 'tax_amount',
                     'diff', 'abs_diff', 'line_cnt', 'checked_cnt', 'adj_cnt'];
-        $stOrder = ['reopened' => 0, 'draft' => 1, 'confirmed' => 2];
+        $stOrder = ['none' => -1, 'reopened' => 0, 'draft' => 1, 'confirmed' => 2];
         usort($rows, function ($a, $b) use ($sort, $dir, $numeric, $stOrder) {
             if ($sort === 'abs_diff') {
                 // 差額為 null（對方紙本還沒填）一律排到最後，不論升冪降冪
@@ -1841,7 +1907,8 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
                                     customer_address, customer_tel, customer_fax,
                                     billing_contact, settlement_mode, settlement_day,
                                     payment_method, net_days, need_recon_stmt, recon_provide_by,
-                                    recon_channels, billing_note, einv_max_pages, einv_merge_part
+                                    recon_channels, billing_note, einv_max_pages, einv_merge_part,
+                                    allow_deduct, deduct_pct
                              FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
             $c['alias_of'] = null;
             $byId[trim((string)$c['customer_id'])] = $c;
@@ -2795,6 +2862,96 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
     return ['groups' => $out, 'summary' => $summary, 'tax_rate' => $rate, 'billing_month' => $bm];
 }
 
+/* ══ 客戶折扣（主檔「接受扣%」＋折扣百分比）══════════════════════════════ */
+
+/** 折扣百分比允許範圍（管理員可改，system_settings）：預設 0.1~30 */
+function acc_disc_range(PDO $db): array
+{
+    $out = ['min' => 0.1, 'max' => 30.0];
+    try {
+        $st = $db->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('acc_disc_pct_min','acc_disc_pct_max')");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['setting_value']);
+            if (!is_numeric($v)) continue;
+            if ($r['setting_key'] === 'acc_disc_pct_min') $out['min'] = (float)$v; else $out['max'] = (float)$v;
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+function acc_disc_range_save(PDO $db, $min, $max, string $uid, string $uname): array
+{
+    $min = trim((string)$min); $max = trim((string)$max);
+    if (!is_numeric($min) || !is_numeric($max)) return ['success' => false, 'message' => '請輸入數字'];
+    if (!preg_match('/^\d{1,3}(\.\d{1,3})?$/', $min) || !preg_match('/^\d{1,3}(\.\d{1,3})?$/', $max)) return ['success' => false, 'message' => '最多 3 位小數'];
+    if ((float)$min <= 0 || (float)$max > 100 || (float)$min >= (float)$max) return ['success' => false, 'message' => '須 0 < 下限 < 上限 ≤ 100'];
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by) VALUES (?,?,?,?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)");
+    $st->execute(['acc_disc_pct_min', (string)(float)$min, (int)$uid, $uname]);
+    $st->execute(['acc_disc_pct_max', (string)(float)$max, (int)$uid, $uname]);
+    return ['success' => true, 'message' => '已儲存', 'range' => acc_disc_range($db)];
+}
+
+/** 驗證折扣百分比；回 [正規化數值|null, 錯誤訊息|null]（最多 3 位小數、須在管理員設定的範圍內） */
+function acc_disc_pct_check(PDO $db, $v): array
+{
+    $v = trim((string)$v);
+    $r = acc_disc_range($db);
+    if ($v === '' || !preg_match('/^\d{1,3}(\.\d{1,3})?$/', $v)) return [null, '折扣百分比請輸入數字（最多 3 位小數）'];
+    $f = round((float)$v, 3);
+    if ($f < $r['min'] - 1e-9 || $f > $r['max'] + 1e-9) return [null, '折扣百分比須介於 ' . rtrim(rtrim(number_format($r['min'], 3, '.', ''), '0'), '.') . ' ~ ' . rtrim(rtrim(number_format($r['max'], 3, '.', ''), '0'), '.')];
+    return [$f, null];
+}
+
+/** 折扣百分比顯示：2.500 → 2.5、3.000 → 3 */
+function acc_disc_pct_txt($p): string
+{
+    return rtrim(rtrim(number_format((float)$p, 3, '.', ''), '0'), '.');
+}
+
+/** 客戶主檔列的折扣百分比；沒勾接受扣%或沒設定回 0 */
+function acc_disc_pct_of(?array $cust): float
+{
+    if (!$cust || empty($cust['allow_deduct'])) return 0.0;
+    $p = (float)($cust['deduct_pct'] ?? 0);
+    return $p > 0 ? round($p, 3) : 0.0;
+}
+
+/** 折扣金額＝折扣前未稅 × 百分比（四捨五入到整數） */
+function acc_disc_amount(float $gross, float $pct): float
+{
+    return ($gross > 0 && $pct > 0) ? (float)round($gross * $pct / 100) : 0.0;
+}
+
+/**
+ * 依發票明細重算金額：折扣前未稅（不含折扣列）→ 折扣列（src_type='DISC'、src_id＝-invoice_id）→ 未稅／稅額／含稅。
+ * 只對草稿發票做；沒有折扣百分比的發票等同單純加總。
+ */
+function acc_inv_recalc(PDO $db, int $iid): array
+{
+    $q = $db->prepare("SELECT discount_pct, tax_rate FROM acc_invoice WHERE invoice_id=?");
+    $q->execute([$iid]);
+    $inv = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$inv) return ['net' => 0.0, 'tax' => 0.0, 'disc' => 0.0];
+    $g = $db->prepare("SELECT COALESCE(SUM(amount),0) FROM acc_invoice_item WHERE invoice_id=? AND src_type<>'DISC'");
+    $g->execute([$iid]);
+    $gross = (float)$g->fetchColumn();
+    $pct = (float)($inv['discount_pct'] ?? 0);
+    $disc = acc_disc_amount($gross, $pct);
+    $db->prepare("DELETE FROM acc_invoice_item WHERE invoice_id=? AND src_type='DISC'")->execute([$iid]);
+    if ($disc > 0) {
+        $txt = acc_disc_pct_txt($pct) . '%折扣';
+        $db->prepare("INSERT INTO acc_invoice_item (invoice_id, src_type, src_id, src_no, src_date, product_id, spec, qty, unit_price, amount)
+                      VALUES (?,?,?,?,NULL,NULL,?,1,?,?)")
+           ->execute([$iid, 'DISC', -$iid, '', $txt, -$disc, -$disc]);
+    }
+    $net = $gross - $disc;
+    $tax = round($net * (float)$inv['tax_rate']);
+    $db->prepare("UPDATE acc_invoice SET sales_amount=?, tax_amount=?, total_amount=?, discount_amt=? WHERE invoice_id=?")
+       ->execute([$net, $tax, $net + $tax, $disc, $iid]);
+    return ['net' => $net, 'tax' => $tax, 'disc' => $disc];
+}
+
 /**
  * 建立發票（狀態 draft）。預設一客戶一帳款月份一張；
  * 若 $splitBySrc 為 true 則每張來源出貨單各開一張（使用者可自選）。
@@ -2868,9 +3025,13 @@ function acc_create_invoices(PDO $db, array $sel, string $userId, bool $splitByS
                                        $it['src_date'], $it['product_id'], $it['spec'],
                                        $it['qty'], $it['unit_price'], $it['amount']]);
                 }
+                // 客戶接受扣%且主檔有設定折扣百分比：自動加一筆「?%折扣」（數量1、金額為負），未稅改為折扣後金額
+                $dpct = acc_disc_pct_of(acc_customer_of_name($db, $name));
+                if ($dpct > 0) $db->prepare("UPDATE acc_invoice SET discount_pct=? WHERE invoice_id=?")->execute([$dpct, $invId]);
+                $rc = acc_inv_recalc($db, $invId);
                 $made[] = ['invoice_id' => $invId, 'customer' => $name, 'billing_month' => $bm,
-                           'net' => $net, 'tax' => $tax, 'total' => $net + $tax,
-                           'item_cnt' => count($items)];
+                           'net' => $rc['net'], 'tax' => $rc['tax'], 'total' => $rc['net'] + $rc['tax'],
+                           'item_cnt' => count($items), 'discount_pct' => $dpct, 'discount_amt' => $rc['disc']];
             }
         }
         $db->commit();
@@ -2972,7 +3133,7 @@ function acc_invoice_list(PDO $db, array $f): array
 /** 發票明細 */
 function acc_invoice_items(PDO $db, int $invoiceId): array
 {
-    $st = $db->prepare("SELECT * FROM acc_invoice_item WHERE invoice_id = ? ORDER BY src_date, item_id");
+    $st = $db->prepare("SELECT * FROM acc_invoice_item WHERE invoice_id = ? ORDER BY (src_type='DISC'), src_date, item_id");
     $st->execute([$invoiceId]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }

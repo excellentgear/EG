@@ -59,7 +59,10 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
       <h2 style="margin:6px 0;"><i class="fa fa-book" style="color:#F0A24B;"></i> 傳票管理
         <small style="color:#8a6d45;">選定請款的出貨／退貨（廠商＝移轉憑單）開傳票，填入 ERP 傳票號碼後鎖定</small></h2>
-      <button class="page-help-btn" id="btnHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
+      <a class="page-help-btn" href="invoice_export.php" target="_blank" rel="noopener" style="margin-left:auto;margin-right:8px;line-height:28px;text-decoration:none;"><i class="fa fa-file-text-o"></i> 開發票</a>
+      <a class="page-help-btn" href="receipt.php" target="_blank" rel="noopener" style="margin-left:0;margin-right:8px;line-height:28px;text-decoration:none;"><i class="fa fa-money"></i> 收款沖帳</a>
+      <a class="page-help-btn" href="payment.php" target="_blank" rel="noopener" style="margin-left:0;margin-right:8px;line-height:28px;text-decoration:none;"><i class="fa fa-credit-card"></i> 付款沖帳</a>
+      <button class="page-help-btn" id="btnHelp" style="margin-left:0;"><i class="fa fa-question-circle"></i> 使用說明</button>
     </div>
     <div class="clearfix"></div>
 <?php if (!$perms['canView']): ?>
@@ -188,7 +191,7 @@ $(document).ready(function () { $('#sidebar-menu').css('visibility', 'visible');
 (function ($) {
 'use strict';
 var API='../../src/store/Acc_API.php', CSRF='', CAN_EDIT=<?= $perms['canEdit']?'true':'false' ?>, CAN_ADMIN=<?= $perms['canAdmin']?'true':'false' ?>;
-var items=[], SEL={}, lPage=1, PARTY_NAME='';
+var items=[], SEL={}, lPage=1, PARTY_NAME='', DISCPCT=0;   // DISCPCT：此客戶的折扣%（主檔「接受扣%」）
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function nf(n){ return Math.round(Number(n)||0).toLocaleString('en-US'); }
 function np(n){ return String(parseFloat(Number(n||0).toFixed(4))); }
@@ -258,7 +261,7 @@ function loadItems(){
   var pid=$('#vParty').val(); if(!pid){ toast('請先選擇客戶／廠商', true); return; }
   $.post(API+'?action=vch_candidates',{side:$('#vSide').val(),party_id:pid,bm:$('#vBm').val()},function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
-    items=r.items||[]; SEL={}; $('#vBox').show();
+    items=r.items||[]; DISCPCT=Number(r.disc_pct)||0; SEL={}; $('#vBox').show();
     PARTY_NAME=r.party_name||''; $('#vColPid').text($('#vSide').val()==='ap'?'廠商':'料號');
     var lk=items.filter(function(i){return i.locked;}).length;
     $('#vInfo').html('<div class="info"><b>'+esc(r.party_name)+'</b>　共 '+items.length+' 筆明細'+(lk?'，其中 '+lk+' 筆已有傳票（灰底，不可重複開立）':'')+'。</div>');
@@ -356,12 +359,17 @@ function selParts(){
 }
 function selNet(){ var p=selParts(); return Math.round((p.ship-p.ret)*100)/100; }
 function autoLines(){
-  var P=selParts(), net=selNet(), side=$('#vSide').val(), abs=Math.abs(net), tax=Math.round(abs*TAXR), neg=net<0, L=[];
+  var P=selParts(), net=selNet(), side=$('#vSide').val(), L=[];
+  // 客戶折扣：（出貨－退貨）淨額 × 折扣%，借銷貨折讓 4103000（與後端 acc_vch_auto_lines 同一規則）
+  var disc=(side==='ar' && DISCPCT>0 && net>0)?Math.round(net*DISCPCT/100):0;
+  if(disc>0) net=Math.round((net-disc)*100)/100;
+  var abs=Math.abs(net), tax=Math.round(abs*TAXR), neg=net<0;
   var A=function(k){ return ACFG[k]||{code:'',name:''}; };
   if(side==='ar'){
     // 收入與退回分開列示、銷項稅額分兩行，應收帳款以含稅淨額入帳
     L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:neg?'C':'D',amount:Math.round((abs+tax)*100)/100});
     L.push({code:A('ar_ret').code,name:A('ar_ret').name,side:'D',amount:P.ret});
+    L.push({code:'4103000',name:'銷貨折讓',side:'D',amount:disc,memo:disc>0?(String(Math.round(DISCPCT*1000)/1000)+'%折扣'):''});
     L.push({code:A('ar_tax').code,name:A('ar_tax').name,side:neg?'D':'C',amount:tax});
     L.push({code:A('ar_rev').code,name:A('ar_rev').name,side:'C',amount:P.ship});
   } else {
@@ -639,22 +647,29 @@ $(document).on('click','.v-open',function(){
   var id=$(this).data('id');
   $.post(API+'?action=vch_get',{voucher_id:id},function(r){
     if(!r.ok){ toast(esc(r.error||'讀取失敗'), true); return; }
-    var v=r.voucher, void_=(v.status==='void'), ed=CAN_EDIT&&!void_;
+    var v=r.voucher, void_=(v.status==='void'), settled=(+v.settled===1), ed=CAN_EDIT&&!void_&&!settled;
     $('#mvTitle').text('傳票 '+(v.voucher_no||'(未填號碼)')+'　'+v.party_name+'　'+v.billing_month);
     var h='<div class="a-bar"><label>傳票號碼</label><input type="text" id="evNo" class="vno-in" maxlength="40" value="'+esc(v.voucher_no||'')+'"'+(ed?'':' disabled')+'>'
       +'<label>傳票日期</label><input type="date" id="evDate" value="'+esc(v.voucher_date)+'"'+(ed?'':' disabled')+'>'
       +'<label>備註</label><input type="text" id="evNote" maxlength="200" style="width:240px;" value="'+esc(v.note||'')+'"'+(ed?'':' disabled')+'></div>'
       +(void_?'<div class="warn">此傳票已作廢：'+esc(v.void_reason||'')+'</div>':'')
+      +((settled&&!void_)?'<div class="warn">此傳票已沖帳（'+esc(v.settled_reason||'')+'），不可修改。</div>':'')
       +'<table class="a-t"><thead><tr><th>類型</th><th>單號</th><th>日期</th><th>料號</th><th>品名規格</th><th>數量</th><th>單價</th><th>金額</th><th>發票</th></tr></thead><tbody>';
     r.items.forEach(function(it){ h+='<tr'+(it.src_type==='IR'?' style="background:#FADADD;"':'')+'><td>'+srcLbl(it.src_type)+'</td><td>'+esc(it.src_no)+'</td><td>'+dd(it.src_date)+'</td><td class="l">'+esc(it.product_id)+'</td>'
       +'<td class="l">'+esc((it.spec||'').substr(0,26))+'</td><td class="r">'+nf(it.qty)+'</td><td class="r">'+np(it.unit_price)+'</td><td class="r">'+nf(it.amount)+'</td><td>'+esc(it.invoice_no||'')+'</td></tr>'; });
     h+='</tbody></table><div style="text-align:right;margin-top:6px;">合計 <b>'+nf(v.total_amount)+'</b></div>';
     var jd=0,jc=0, jh='<div style="font-weight:700;margin:12px 0 4px;"><i class="fa fa-book"></i> 會計分錄</div><table class="a-t" style="max-width:780px;"><thead><tr><th>會計科目</th><th>科目名稱</th><th>借方金額</th><th>貸方金額</th></tr></thead><tbody>';
+    if(ed){
+      jh='<div style="font-weight:700;margin:12px 0 4px;"><i class="fa fa-book"></i> 會計分錄（未沖帳，可修改）</div><table class="a-t" style="max-width:860px;"><thead><tr><th>科目代號</th><th>借貸</th><th>金額</th><th>備註</th><th></th></tr></thead><tbody id="evLines">';
+      (r.lines||[]).forEach(function(l){ jh+=evLineRow(l); });
+      jh+='</tbody></table><div class="a-bar" style="margin-top:6px;"><button id="btnEvLineAdd"><i class="fa fa-plus"></i> 加一列</button><span id="evBal" style="font-size:12.5px;"></span></div>';
+    } else {
     (r.lines||[]).forEach(function(l){ var D=(l.side==='D'), a=Number(l.amount)||0; if(D) jd+=a; else jc+=a;
       jh+='<tr><td>'+esc(l.code)+'</td><td class="l" style="'+(D?'':'padding-left:26px;')+'">'+esc(l.name)+(l.memo?'　<span style="color:#8a6d45;font-size:12px;">'+esc(l.memo)+'</span>':'')+'</td><td class="r">'+(D?nf2(a):'')+'</td><td class="r">'+(D?'':nf2(a))+'</td></tr>'; });
     jh+='<tr><td colspan="2" style="text-align:right;font-weight:700;">合計</td><td class="r"><b>'+nf2(jd)+'</b></td><td class="r"><b>'+nf2(jc)+'</b></td></tr></tbody></table>';
+    }
     h+=jh+'<div style="display:flex;max-width:780px;margin-top:8px;border:1px solid var(--a-line2);">'+signBoxes(r.signs||{}, v.maker_name||v.created_by, CAN_ADMIN&&!void_, ed, id)+'</div>';
-    $('#mvBody').html(h);
+    $('#mvBody').html(h); if(ed) evBalance();
     var f='<button data-close="mkV">關閉</button>';
     if(ed) f+='<button class="go" id="btnVSave" data-id="'+id+'"><i class="fa fa-check"></i> 儲存</button>';
     if(CAN_ADMIN&&!void_) f+='<button id="btnVVoid" data-id="'+id+'" style="color:#DD5138;">作廢傳票</button>';
@@ -668,9 +683,43 @@ $(document).on('click','.v-sign',function(){
     $('.v-open[data-id='+id+']').first().trigger('click');
   },'json').fail(function(x){ failMsg(x,'簽章失敗'); });
 });
+function evLineRow(l){
+  l=l||{}; var auto=(+l.is_auto===1);
+  return '<tr data-auto="'+(auto?1:0)+'"><td><input type="text" class="ev-code" list="dlAcct" maxlength="10" style="width:100px;" value="'+esc(l.code||'')+'">'+(l.name?'<div class="ev-nm" style="font-size:11.5px;color:#8a6d45;">'+esc(l.name)+'</div>':'')+'</td>'
+    +'<td><select class="ev-side"><option value="D"'+(l.side==='C'?'':' selected')+'>借</option><option value="C"'+(l.side==='C'?' selected':'')+'>貸</option></select></td>'
+    +'<td><input type="number" step="0.01" class="ev-amt" style="width:130px;text-align:right;" value="'+(l.amount!=null?l.amount:'')+'"></td>'
+    +'<td><input type="text" class="ev-memo" maxlength="100" style="width:220px;" value="'+esc(l.memo||'')+'"></td>'
+    +'<td>'+(auto?'':'<button class="ev-del" title="刪除此列">×</button>')+'</td></tr>';
+}
+function evBalance(){
+  var d=0,c=0; $('#evLines tr').each(function(){ var a=Number($(this).find('.ev-amt').val())||0; if($(this).find('.ev-side').val()==='D') d+=a; else c+=a; });
+  var ok=Math.abs(d-c)<0.01; $('#evBal').html('借方 <b>'+nf2(d)+'</b>　貸方 <b>'+nf2(c)+'</b>　<span style="color:'+(ok?'#5B7F3A':'#DD5138')+';">'+(ok?'平衡':'不平衡')+'</span>');
+}
+/* 改科目代號 → 即時帶出科目名稱（先查已載入的科目表，沒有再向後端查含停用的全部科目） */
+function evShowName($inp, name){
+  var $d=$inp.siblings('.ev-nm'); if(!$d.length) $d=$('<div class="ev-nm" style="font-size:11.5px;"></div>').insertAfter($inp);
+  if(name){ $d.css('color','#8a6d45').text(name); } else { $d.css('color','#DD5138').text('科目表查無此代號'); }
+}
+$(document).on('input change','.ev-code',function(){
+  var $i=$(this), c=$.trim($i.val()), seq=($i.data('seq')||0)+1; $i.data('seq',seq);
+  if(!/^\d{4,10}$/.test(c)){ $i.siblings('.ev-nm').remove(); return; }
+  var hit=ACCT.filter(function(a){ return String(a.code)===c; })[0];
+  if(hit){ evShowName($i, hit.name); return; }
+  $.getJSON(API,{action:'vch_accounts'},function(r){
+    if($i.data('seq')!==seq) return;                       // 打字很快時只採用最後一次查詢
+    var all=(r&&r.all_accounts)||[], h=all.filter(function(a){ return String(a.code)===c; })[0];
+    evShowName($i, h?h.name:'');
+  });
+});
+$(document).on('click','#btnEvLineAdd',function(){ $('#evLines').append(evLineRow({side:'D'})); evBalance(); });
+$(document).on('click','.ev-del',function(){ $(this).closest('tr').remove(); evBalance(); });
+$(document).on('input change','#evLines input,#evLines select',evBalance);
 $(document).on('click','#btnVSave',function(){
   var id=$(this).data('id'), d=$('#evDate').val(); if(!d){ toast('請填傳票日期', true); return; }
-  $.post(API+'?action=vch_update',{csrf:CSRF,voucher_id:id,voucher_no:normNo($('#evNo').val(), d),voucher_date:d,note:$('#evNote').val()},function(r){
+  var lines=[]; $('#evLines tr').each(function(){ var $t=$(this); lines.push({code:$.trim($t.find('.ev-code').val()),side:$t.find('.ev-side').val(),amount:$t.find('.ev-amt').val(),memo:$t.find('.ev-memo').val(),is_auto:$t.data('auto')}); });
+  var post={csrf:CSRF,voucher_id:id,voucher_no:normNo($('#evNo').val(), d),voucher_date:d,note:$('#evNote').val()};
+  if($('#evLines').length) post.lines=JSON.stringify(lines);
+  $.post(API+'?action=vch_update',post,function(r){
     if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
     toast('已儲存'); closeMask('mkV'); loadList();
   },'json').fail(function(x){ failMsg(x,'儲存失敗'); });

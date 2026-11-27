@@ -4011,6 +4011,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // 折扣百分比允許範圍（接受扣%）：讀／存，存僅本頁管理員
+    if (in_array($_POST['action'], ['disc_range_get', 'disc_range_save'], true)) {
+        try {
+            require_once __DIR__ . '/../../src/common/acc_lib.php';
+            if ($_POST['action'] === 'disc_range_get') { echo json_encode(['success' => true, 'range' => acc_disc_range($pdo)]); exit; }
+            if (empty($is_admin)) throw new Exception('僅管理員可修改折扣範圍');
+            $r = acc_disc_range_save($pdo, $_POST['min'] ?? '', $_POST['max'] ?? '', (string)$uid, (string)($_SESSION['userName'] ?? ''));
+            echo json_encode($r, JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE); }
+        exit;
+    }
+
     // 收款方式／客戶可接受對帳單提供方式 選項維護：僅本頁管理員；被客戶選用者不可改名／刪除
     if (in_array($_POST['action'], ['cust_opt_save', 'cust_opt_delete', 'cust_opt_list'], true)) {
         try {
@@ -4032,6 +4044,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'get_customer') {
         try {
             eg_party_ensure_schema($pdo);   // 確保新欄位已建立，SELECT * 才拿得到
+            try { require_once __DIR__ . '/../../src/common/cust_option_lib.php'; eg_cust_opt_ensure($pdo); } catch (Throwable $e) {}   // deduct_pct 欄位
             $cid = trim($_POST['customer_id']);
             $stmt = $pdo->prepare("SELECT * FROM customer_list WHERE customer_id=?");
             $stmt->execute([$cid]);
@@ -4221,6 +4234,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if (empty($customer_id)) throw new Exception('客戶代碼不可為空');
             if (empty($customer))    throw new Exception('客戶名稱不可為空');
+            // 接受扣%：勾選時折扣百分比必填，範圍由管理員設定（預設 0.1~30，最多 3 位小數）；沒勾＝清空
+            $deduct_pct = null; $deduct_pct_touch = false;
+            if ($canSettle) {
+                $deduct_pct_touch = true;
+                if ($allow_deduct) {
+                    require_once __DIR__ . '/../../src/common/acc_lib.php';
+                    [$deduct_pct, $_dpErr] = acc_disc_pct_check($pdo, $_POST['deduct_pct'] ?? '');
+                    if ($_dpErr) throw new Exception($_dpErr);
+                }
+            }
 
             // 私Line：勾選時必須從聯絡人挑一位（後端同規則再擋；沒送 recon_channels＝不動）
             $recon_line_contact = null;   // null＝不動；''＝清除
@@ -4299,6 +4322,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             ->execute([$customer_id,$_sf,$_so,$_sn,$uid,$uid]);
                     }
                 } catch (Throwable $_le) {}
+            }
+            if ($deduct_pct_touch) {   // 折扣百分比（欄位由 eg_cust_opt_ensure 補）
+                require_once __DIR__ . '/../../src/common/cust_option_lib.php';
+                eg_cust_opt_ensure($pdo);
+                $pdo->prepare("UPDATE customer_list SET deduct_pct=? WHERE customer_id=?")->execute([$deduct_pct, $customer_id]);
             }
             // 電子發票設定（頁數上限／同料號合併）：與對帳單設定同權限，沒送＝不動
             if (_mdPerm('recon', 'edit', $is_admin) && array_key_exists('einv_max_pages', $_POST)) {
@@ -11150,9 +11178,20 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
         <div class="form-group">
             <label style="display:block;">接受扣%</label>
             <label style="font-weight:normal;cursor:pointer;padding-top:5px;">
-                <input type="checkbox" id="cf-allow_deduct" name="allow_deduct" value="1" style="margin-right:6px;" <?= $mdSettleEdit?'':'disabled' ?>>
+                <input type="checkbox" id="cf-allow_deduct" name="allow_deduct" value="1" style="margin-right:6px;" <?= $mdSettleEdit?'':'disabled' ?> onchange="mdDeductToggle()">
                 同意扣款百分比
             </label>
+            <?php require_once __DIR__ . '/../../src/common/acc_lib.php'; $__dr = acc_disc_range($pdo); ?>
+            <div id="cf-deduct_pct_wrap" style="display:none;margin-top:4px;">
+                <div class="input-group">
+                    <input type="text" inputmode="decimal" class="form-control" id="cf-deduct_pct" name="deduct_pct" maxlength="7" autocomplete="off" data-eg-skip
+                           data-min="<?= htmlspecialchars(acc_disc_pct_txt($__dr['min'])) ?>" data-max="<?= htmlspecialchars(acc_disc_pct_txt($__dr['max'])) ?>"
+                           placeholder="折扣%" <?= $mdSettleEdit?'':'disabled' ?> oninput="mdDeductInput(this)" onblur="mdDeductBlur(this)">
+                    <span class="input-group-addon">%</span>
+                </div>
+                <div class="id-hint" id="cf-deduct_pct_hint" style="margin-top:2px;"></div>
+                <?php if (!empty($is_admin)): ?><a href="#" onclick="mdDeductRange();return false;" style="font-size:12px;">修改可輸入範圍</a><?php endif; ?>
+            </div>
         </div>
     </div>
     <?php endif; ?>
@@ -20154,6 +20193,48 @@ function openCustOptMgr(kind) {
     });
     api({ action: 'cust_opt_list', kind: kind }).done(function(r){ render(r.options || []); });
 }
+/* ── 接受扣%：折扣百分比輸入（範圍由管理員設定，最多 3 位小數，尾數 0 不顯示） ── */
+function mdDeductToggle(keep) {
+    var cb = document.getElementById('cf-allow_deduct'), w = document.getElementById('cf-deduct_pct_wrap');
+    if (!cb || !w) return;
+    w.style.display = cb.checked ? '' : 'none';
+    if (cb.checked && !keep) { var e = document.getElementById('cf-deduct_pct'); if (e) { e.focus(); } }
+    if (!cb.checked) { var h = document.getElementById('cf-deduct_pct_hint'); if (h) h.textContent = ''; }
+}
+function mdDeductInput(el) {
+    var v = el.value.replace(/[^0-9.]/g, '');
+    var p = v.split('.'); if (p.length > 2) v = p[0] + '.' + p.slice(1).join('');
+    p = v.split('.'); if (p[1] !== undefined) v = p[0] + '.' + p[1].slice(0, 3);
+    if (v !== el.value) el.value = v;
+    mdDeductCheck(el, false);
+}
+function mdDeductBlur(el) {
+    if (el.value !== '' && !isNaN(parseFloat(el.value))) el.value = String(parseFloat(el.value));   // 2.500 → 2.5
+    mdDeductCheck(el, true);
+}
+/** 檢查；回錯誤字串或 ''（空欄位只在 strict 時視為錯誤，輸入中不提早喊紅字） */
+function mdDeductCheck(el, strict) {
+    var h = document.getElementById('cf-deduct_pct_hint'), mn = parseFloat(el.dataset.min), mx = parseFloat(el.dataset.max), msg = '';
+    var cb = document.getElementById('cf-allow_deduct');
+    if (!cb || !cb.checked) { el.style.borderColor = ''; if (h) h.textContent = ''; return ''; }
+    if (el.value === '') { if (strict) msg = '請輸入折扣百分比'; }
+    else if (isNaN(parseFloat(el.value)) || parseFloat(el.value) < mn || parseFloat(el.value) > mx) msg = '須介於 ' + mn + ' ~ ' + mx;
+    el.style.borderColor = msg ? '#DD5138' : '';
+    if (h) { h.textContent = msg || ('可輸入 ' + mn + ' ~ ' + mx + '，最多 3 位小數'); h.style.color = msg ? '#DD5138' : ''; }
+    return msg;
+}
+function mdDeductRange() {
+    var el = document.getElementById('cf-deduct_pct'); if (!el) return;
+    var mn = prompt('折扣百分比下限（大於 0，最多 3 位小數）', el.dataset.min); if (mn === null) return;
+    var mx = prompt('折扣百分比上限（最大 100，最多 3 位小數）', el.dataset.max); if (mx === null) return;
+    api({ action: 'disc_range_save', min: mn, max: mx }).done(function(r){
+        showToast(r.message || (r.success ? '已儲存' : '失敗'), r.success ? 'success' : 'error');
+        if (r.success && r.range) {
+            el.dataset.min = String(parseFloat(r.range.min)); el.dataset.max = String(parseFloat(r.range.max));
+            mdDeductCheck(el, false);
+        }
+    }).fail(function(){ showToast('網路錯誤', 'error'); });
+}
 function onReconProvideByChange() {
     var chk = document.getElementById('cf-need_recon_stmt');
     var sel = document.getElementById('cf-recon_provide_by');
@@ -20327,6 +20408,9 @@ function openCustomerModal(customer_id, readonly) {
             document.getElementById('cf-est_date').value = d.est_date || _mdmTodayStr();
             var ad = document.getElementById('cf-allow_deduct');
             if (ad) ad.checked = (d.allow_deduct==1||d.allow_deduct=='1');
+            var dpEl = document.getElementById('cf-deduct_pct');
+            if (dpEl) dpEl.value = (d.deduct_pct!=null && d.deduct_pct!=='') ? String(parseFloat(d.deduct_pct)) : '';
+            if (typeof mdDeductToggle === 'function') mdDeductToggle(true);
             // Grade
             var gsel = document.getElementById('cf-customer_grade');
             if (gsel) gsel.value = d.customer_grade||'';
@@ -20418,6 +20502,8 @@ function openCustomerModal(customer_id, readonly) {
         }
         var ad = document.getElementById('cf-allow_deduct');
         if (ad) ad.checked = false;
+        var dpEl0 = document.getElementById('cf-deduct_pct'); if (dpEl0) dpEl0.value = '';
+        if (typeof mdDeductToggle === 'function') mdDeductToggle(true);
         var gsel = document.getElementById('cf-customer_grade');
         if (gsel) gsel.value = '';
         document.getElementById('cf-est_date').value = _mdmTodayStr();
@@ -20474,7 +20560,8 @@ function submitCustomerForm() {
         invoice_dept:     gv('cf-invoice_dept'),
         shipping_req_none: gc('cf-shipping_req_none'),
         allow_deduct:     gc('cf-allow_deduct'),
-        bank_name:        gv('cf-bank_name'),
+        deduct_pct:       gv('cf-deduct_pct'),
+        bank_name:       gv('cf-bank_name'),
         bank_branch:      gv('cf-bank_branch'),
         bank_account:     gv('cf-bank_account'),
         billing_contact:  gv('cf-billing_contact'),
@@ -20508,6 +20595,10 @@ function submitCustomerForm() {
     }
     if (!data.customer_id) { showToast('客戶代碼不可為空','error'); return; }
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }
+    var _dpEl = document.getElementById('cf-deduct_pct');
+    if (_dpEl && !_dpEl.disabled && String(data.allow_deduct)!=='0' && data.allow_deduct) {
+        if (mdDeductCheck(_dpEl, true)) { _dpEl.focus(); showToast(document.getElementById('cf-deduct_pct_hint').textContent || '請輸入折扣百分比','error'); return; }
+    }
     if (data.settlement_mode==='FIXED' && (!data.settlement_day||data.settlement_day<1||data.settlement_day>31)) {
         showToast('固定日請輸入 1~31','error'); return;
     }

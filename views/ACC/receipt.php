@@ -125,6 +125,8 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
 .frm input[type=number]::-webkit-outer-spin-button,
 .frm input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .frm .full{grid-column:2 / span 3;}
+.frm input.rc-fixed{border-color:transparent;background:transparent;font-weight:bold;text-align:left;padding-left:0;pointer-events:none;}
+.frm input[type=number].rc-fixed{text-align:left;}
 .frm label{margin:0;font-weight:normal;}
 
 .alloc-in{width:110px;height:25px;text-align:right;border:1px solid var(--a-line2);
@@ -585,10 +587,13 @@ if(CAN_EDIT){
     $('#rcNote').val(v?(v.note||''):(pre.note||''));
     if(pre.customer) $('#rcCust').val(pre.customer);
     if(pre.due) rcCalc();
+    // 由勾選的發票帶入的客戶、應收金額：只顯示文字，不可更改
+    $('#rcCust').prop('readonly',!!pre.customer).toggleClass('rc-fixed',!!pre.customer);
+    $('#rcDue').prop('readonly',!!pre.due).toggleClass('rc-fixed',!!pre.due);
     rcLegacy=legacy; rcShow(); rcTerms();
     bindRules($('#mkRc'));
     openMask('mkRc');
-    setTimeout(function(){ $('#rcCust').focus(); },80);
+    setTimeout(function(){ (pre.customer?$('#rcDate'):$('#rcCust')).focus(); },80);
   }
   $('#btnNew').on('click',function(){ openRc(null); });
   $('#btnDueRecv').on('click',function(){
@@ -616,7 +621,7 @@ if(CAN_EDIT){
     var c=$.trim($('#rcCust').val()); if(!c){ $('#rcTerms').text(''); return; }
     $.post(API+'?action=rcpt_opts',{customer:c},function(r){
       if(!r.ok||!r.terms){ $('#rcTerms').text(''); return; }
-      $('#rcTerms').html('收帳條件：'+esc(r.terms.terms_text)+(Number(r.terms.allow_deduct)?'　<b>此客戶接受扣%</b>':'　（主檔未勾選接受扣%）')
+      $('#rcTerms').html('收帳條件：'+esc(r.terms.terms_text)+(Number(r.terms.allow_deduct)?'　<b>此客戶接受扣%'+(Number(r.terms.deduct_pct)>0?'（'+Number(r.terms.deduct_pct)+'%）':'')+'</b>':'　（主檔未勾選接受扣%）')
         +(r.terms.payment_methods?'　常用收款方式：'+esc(r.terms.payment_methods):''));
     },'json');
   }

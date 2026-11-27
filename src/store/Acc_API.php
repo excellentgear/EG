@@ -918,7 +918,8 @@ case 'vch_update': {
     if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     $r = acc_voucher_update($db, (int)($_POST['voucher_id'] ?? 0), acc_u8((string)($_POST['voucher_no'] ?? '')),
-        trim((string)($_POST['voucher_date'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
+        trim((string)($_POST['voucher_date'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), (string)($_SESSION['userName'] ?? $uid),
+        isset($_POST['lines']) ? (json_decode(acc_u8((string)$_POST['lines']), true) ?: []) : null);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }
@@ -1790,6 +1791,7 @@ case 'sheet_load': {
                  'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
                  'opt' => acc_recon_party_opt($db, $side, $pid),
                  'settlement' => acc_default_billing_month($db, $side, $pid),
+                 'disc_pct' => ($side === 'ar') ? acc_disc_pct_of(acc_customer_of_name($db, (string)$pid)) : 0,
                  'contact_hint' => acc_contact_hint_for($db, $side, $pid),
                  'missing' => $missing, 'excluded' => $excluded, 'stale' => $stale, 'range' => $rangeOut]);
     }
@@ -1805,6 +1807,7 @@ case 'sheet_load': {
              'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
              'opt' => acc_recon_party_opt($db, $side, $pid),
              'settlement' => acc_default_billing_month($db, $side, $pid),
+             'disc_pct' => ($side === 'ar') ? acc_disc_pct_of(acc_customer_of_name($db, (string)$pid)) : 0,
              'contact_hint' => acc_contact_hint_for($db, $side, $pid),
              'missing' => [], 'stale' => [], 'range' => $built['range'] ?? null]);
 }

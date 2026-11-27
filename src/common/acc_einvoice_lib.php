@@ -119,7 +119,7 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
     $st->execute($ids);
     $invs = $st->fetchAll(PDO::FETCH_ASSOC);
 
-    $sti = $db->prepare("SELECT * FROM acc_invoice_item WHERE invoice_id IN ($ph) ORDER BY invoice_id, src_date, src_no, item_id");
+    $sti = $db->prepare("SELECT * FROM acc_invoice_item WHERE invoice_id IN ($ph) ORDER BY invoice_id, (src_type='DISC'), src_date, src_no, item_id");
     $sti->execute($ids);
     $itemsBy = [];
     $isIds = [];
@@ -186,7 +186,8 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
             $part = (string)$it['product_id'];
             if ($isRet && ctype_digit($part)) $part = (string)($dName[(int)$part] ?? $part);
             $tag  = (!$isRet && isset($isOrder[(int)$it['src_id']])) ? ($tags[$isOrder[(int)$it['src_id']]] ?? null) : null;
-            $lines[] = ['part' => $part, 'desc' => acc_einv_desc_of_tag($tag), 'qty' => (float)$it['qty'],
+            if ($it['src_type'] === 'DISC') { $part = ''; $tag = null; }   // 客戶折扣列：品名＝「?%折扣」
+            $lines[] = ['part' => $part, 'desc' => $it['src_type'] === 'DISC' ? (string)$it['spec'] : acc_einv_desc_of_tag($tag), 'qty' => (float)$it['qty'],
                         'amt' => (float)$it['amount'], 'no' => (string)$it['src_no'], 'merged' => 1];
         }
         $rawCnt = count($lines);

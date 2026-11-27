@@ -953,7 +953,8 @@ var PREF = <?= json_encode($reconPref) ?>;
 var PART_ATTACH_ON = <?= $partAttachOn ? 'true' : 'false' ?>;
 var dragOn = false, autoOn = false, checkSeq = 0;
 var OPT = {no_statement:0, note:null};        // 這個對象的選項（是否提供對帳單）
-var SETL = null;                              // 這個對象實際適用的結帳條件
+var DISCP = 0;                              // 此客戶折扣%（主檔接受扣%）
+var SETL = null;                            // 這個對象實際適用的結帳條件
 var refSrc = null;                            // 目前在右側面板顯示的來源憑證
 function prefKey(k){ return 'acc_recon_' + k; }
 function loadSwitches(){
@@ -1243,6 +1244,7 @@ function loadSheet(o){
     });
     OPT = r.opt || {no_statement:0, note:null};
     SETL = r.settlement || null;
+    DISCP = Number(r.disc_pct)||0;
     // 勾選順序：底稿存回來時只剩 sort_order，用它重建一組序號，之後再勾的就接在後面
     checkSeq = 0;
     lines.slice().sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); })
@@ -1434,12 +1436,16 @@ function totals(){
   var cnet=0; lines.forEach(function(l){ if(l.checked && !pk[l.client_key]) cnet+=amtOf(l); });
   return {net:net, tax:tax, total:net+tax, checked:ck, count:lines.length, cnet:cnet};
 }
+/* 與對方紙本比對的基準：應收對方紙本多為未稅；應付對方紙本填的是含稅金額，故應付以含稅比對 */
+function cmpBase(base){
+  return SIDE==='ap' ? base+Math.round(base*TAX_RATE) : base;
+}
 function updateStat(){
   var t=totals();
   var noStmt = !!(OPT && OPT.no_statement);
   var their = (noStmt || $('#theirTotal').val()==='') ? null : Number($('#theirTotal').val());
   // 與對方紙本比對的基準＝「已勾選（已對到）」的合計（鎖帳也只鎖已勾選的）；一列都沒勾時才退回全部合計
-  var diff  = (their===null) ? null : Math.round((their - (t.checked?t.cnet:t.net))*100)/100;
+  var diff  = (their===null) ? null : Math.round((their - cmpBase(t.checked?t.cnet:t.net))*100)/100;
   // 不提供對帳單的對象：沒有「對方紙本」這回事，欄位收起來免得看的人以為漏填
   $('#theirTotal').closest('div').toggle(!noStmt);
   $('#stDiff').closest('div').toggle(!noStmt);
@@ -1737,7 +1743,7 @@ $('#btnSave').on('click',function(){
 $('#btnConfirm').on('click',function(){
   var t=totals();
   var their=((OPT&&OPT.no_statement)||$('#theirTotal').val()==='')?null:Number($('#theirTotal').val());
-  var diff = their===null?null:Math.round((their-(t.checked?t.cnet:t.net))*100)/100;
+  var diff = their===null?null:Math.round((their-cmpBase(t.checked?t.cnet:t.net))*100)/100;
   var warn='';
   if(!t.checked){ toast('請先勾選已對到的明細，鎖帳只會鎖定已勾選的列', true); return; }
   var noStmt = !!(OPT && OPT.no_statement);
@@ -1945,6 +1951,9 @@ function drawSyncBox(){
       +'</b> 日（與'+(SIDE==='ap'?'廠商':'客戶')+'預設不同）：'+esc(SETL.reason||'')
       +'　目前開的是 <b>'+esc(sheet.billing_month)+'</b>。'
       +'<button class="btn-mini" id="btnUseSetlBm" style="margin-left:8px;">改對 '+esc(SETL.billing_month)+'</button></div>';
+  }
+  if(SIDE==='ar' && DISCP>0){
+    h+='<div class="info" style="color:#DD5138;"><b>此客戶有折扣 '+esc(String(DISCP))+'%</b>（主檔「接受扣%」）：開發票時會自動加一筆「'+esc(String(DISCP))+'%折扣」（未稅金額 × '+esc(String(DISCP))+'%，以負數列示），開傳票時折扣借「銷貨折讓 4103000」。</div>';
   }
   if(stale && stale.length){
     h+='<div class="warn">有 <b>'+stale.length+'</b> 筆底稿上的單據<b>已不屬於本月份</b>（可能被改到別的月份）：'
@@ -2712,7 +2721,7 @@ function doPrint(m){
   // 以畫面上輸入的金額為準：剛組出來還沒暫存的底稿 sheet.their_total 是 null，
   // 拿它一起判斷會變成「打了紙本金額卻印不出來」
   var their  = (noStmt || $('#theirTotal').val()==='') ? null : Number($('#theirTotal').val());
-  var diff   = (their===null) ? null : Math.round((their - t.net)*100)/100;
+  var diff   = (their===null) ? null : Math.round((their - cmpBase(t.net))*100)/100;
 
   // 顯示順序與畫面一致；拆分父列只是容器不印（金額由子列代表）
   var ord=[];

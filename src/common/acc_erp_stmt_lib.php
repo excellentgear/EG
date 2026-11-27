@@ -270,13 +270,7 @@ function acc_erp_stmt_apply(PDO $db, array $stash, array $isIds, string $userNam
             $done[] = $label;
         }
         foreach (array_keys($sync) as $iid) {
-            $t = $db->prepare("SELECT COALESCE(SUM(amount),0) FROM acc_invoice_item WHERE invoice_id=?");
-            $t->execute([$iid]);
-            $net = (float)$t->fetchColumn();
-            $rate = acc_tax_rate($db);
-            $tax = round($net * $rate);
-            $db->prepare("UPDATE acc_invoice SET sales_amount=?, tax_amount=?, total_amount=? WHERE invoice_id=? AND status='draft'")
-               ->execute([$net, $tax, $net + $tax, $iid]);
+            acc_inv_recalc($db, $iid);   // 含客戶折扣列重算
         }
         $db->commit();
     } catch (Throwable $ex) {

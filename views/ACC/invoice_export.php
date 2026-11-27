@@ -319,7 +319,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
             <th style="width:32px;"><input type="checkbox" id="ivChkAll"></th>
             <th>類型</th><th>狀態</th><th>發票號碼/附件</th><th>開立日期</th>
             <th>客戶</th><th>統一編號</th><th>帳款月份</th>
-            <th>未稅</th><th>稅額</th><th>含稅</th><th>已收</th><th>未收</th><th>帳齡</th>
+            <th>未稅(折扣)</th><th>稅額</th><th>含稅</th><th>已收</th><th>未收</th><th>帳齡</th>
             <th>明細</th><th>操作</th>
           </tr></thead>
           <tbody id="ivBody"><tr><td colspan="16" style="padding:22px;color:#8a6d45;">請按查詢</td></tr></tbody>
@@ -896,10 +896,11 @@ function renderInv(){
           : (Number(v.attach_cnt)>0 ? '<a href="#" class="att-open" data-id="'+id+'" title="開啟附件"><b>'+esc(v.invoice_no||'—')+'</b></a>' : '<b>'+esc(v.invoice_no||'—')+'</b>'))
         +' <span style="display:inline-block;width:30px;text-align:left;vertical-align:middle;">'+(Number(v.attach_cnt)>0 ? '<a href="#" class="att-open" data-id="'+id+'" title="有 '+v.attach_cnt+' 個附件，點選開啟" style="color:#B9793C;"><i class="fa fa-paperclip"></i>'+(v.attach_cnt>1?'<sup>'+v.attach_cnt+'</sup>':'')+'</a>' : '')+'</span></td>'
       +'<td>'+(v.invoice_date?esc(String(v.invoice_date).replace(/-/g,'.')):'—')+'</td>'
-      +'<td class="l">'+esc(v.customer_full||v.customer_name)+'</td>'
+      +'<td class="l" style="max-width:84px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="'+esc(v.customer_full||v.customer_name)+'">'+esc(v.customer_name)+'</td>'
       +'<td>'+esc(v.tax_id||'—')+'</td>'
       +'<td>'+esc(v.billing_month)+'</td>'
-      +'<td class="r">'+(isAllow?'-':'')+nf(v.sales_amount)+'</td>'
+      +'<td class="r">'+(isAllow?'-':'')+nf(v.sales_amount)
+        +(Number(v.discount_amt)>0?' <span style="color:#DD5138;white-space:nowrap;">(已折 '+esc(String(Number(v.discount_pct)))+'% '+nf(v.discount_amt)+')</span>':'')+'</td>'
       +'<td class="r">'+(isAllow?'-':'')+nf(v.tax_amount)+'</td>'
       +'<td class="r"><b>'+(isAllow?'-':'')+nf(v.total_amount)+'</b></td>'
       +'<td class="r">'+(v.paid_amt>0?nf(v.paid_amt):'')+'</td>'
@@ -975,9 +976,9 @@ $(document).on('click','.iv-detail',function(){
       +'<table class="a-t"><thead><tr><th>#</th><th>類型</th><th>來源單號</th><th>日期</th>'
       +'<th>料號</th><th>品名規格</th><th>數量</th><th>單價</th><th>金額</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it,i){
-      var ret=(it.src_type==='IR');
+      var ret=(it.src_type==='IR'||it.src_type==='DISC');
       h+='<tr'+(ret?' style="color:#DD5138;"':'')+'><td>'+(i+1)+'</td>'
-        +'<td>'+(ret?'退貨':'出貨')+'</td><td>'+esc(it.src_no)+'</td><td>'+esc(it.src_date)+'</td>'
+        +'<td>'+(it.src_type==='DISC'?'折扣':(ret?'退貨':'出貨'))+'</td><td>'+esc(it.src_no)+'</td><td>'+esc(it.src_date)+'</td>'
         +'<td class="l">'+esc(it.product_id)+'</td><td class="l">'+esc((it.spec||'').substr(0,24))+'</td>'
         +'<td class="r">'+nf(it.qty)+'</td><td class="r">'+np(it.unit_price)+'</td>'
         +'<td class="r">'+nf(it.amount)+'</td></tr>';

@@ -160,7 +160,8 @@ function acc_voucher_candidates(PDO $db, string $side, string $partyId, string $
             'invoiced' => isset($imap[$k]),
         ];
     }
-    return ['party_name' => $b['party_name'], 'items' => $items];
+    $dp = ($side === 'ar') ? acc_disc_pct_of(acc_customer_of_name($db, $partyId)) : 0.0;
+    return ['party_name' => $b['party_name'], 'items' => $items, 'disc_pct' => $dp];
 }
 
 /** 建立傳票。$sel＝[{src_type,src_id}]；明細內容一律以當下資料庫重算，不信前端金額 */
@@ -209,6 +210,14 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     };
     $shipT = $rf($shipT); $retT = $rf($retT);
     $total = round($shipT - $retT, 2);
+    // 應收：客戶接受扣%且主檔有折扣百分比時，折扣＝（出貨－退貨）未稅淨額 × ?%，借「銷貨折讓」，傳票金額為折扣後
+    $discPct = 0.0; $discAmt = 0.0;
+    if ($side === 'ar') {
+        $discPct = acc_disc_pct_of(acc_customer_of_name($db, $partyId));
+        $discAmt = acc_disc_amount($total, $discPct);
+        if ($discAmt <= 0) $discPct = 0.0;
+        $total = round($total - $discAmt, 2);
+    }
     // 分錄：自動分錄（依選取明細金額重算）＋使用者追加的科目（匯費、手續費…），借貸必須平衡
     [$extraLines, $exErr] = acc_vch_clean_extra($db, $extra);
     if ($exErr) return ['success' => false, 'message' => $exErr];
@@ -242,7 +251,7 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
             $expGroups[$mi]['amount'] = round($expGroups[$mi]['amount'] + $diff, 2);
         }
     }
-    $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT], $expGroups);
+    $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT, 'disc' => $discAmt, 'disc_pct' => $discPct], $expGroups);
     // 使用者手改自動分錄的科目：以該列順序為鍵，科目名稱一律取自科目表；借貸方向維持原分錄結構
     foreach ($autoOvr as $ai => $ocode) {
         if (is_array($ocode)) $ocode = $ocode['code'] ?? '';   // 前端送 {code,name}，名稱一律以科目表為準
@@ -257,6 +266,7 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     $lines = array_merge($autoLines, $extraLines);
     [$dSum, $cSum] = acc_vch_lines_balance($lines);
     if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2) . '，請調整追加的科目'];
+    if ($discAmt > 0) acc_vch_account_upsert($db, '4103000', '銷貨折讓');   // 科目表沒有時補上
     try {
         $db->beginTransaction();
         $db->prepare("INSERT INTO acc_voucher (voucher_no,voucher_date,side,party_id,party_name,billing_month,total_amount,item_cnt,note,created_by)
@@ -343,6 +353,8 @@ function acc_voucher_get(PDO $db, int $id): ?array
     }
     $signs = json_decode((string)($v['sign_json'] ?? ''), true); if (!is_array($signs)) $signs = [];
     $v['maker_name'] = acc_vch_cname($db, $v['created_by'] ?? '');
+    $stl = acc_voucher_settled($db, $id);
+    $v['settled'] = $stl['settled'] ? 1 : 0; $v['settled_reason'] = $stl['reason'];
     foreach ($signs as &$sg) if (!empty($sg['name'])) $sg['name'] = acc_vch_cname($db, $sg['name']);
     unset($sg);
     if ($v['status'] === 'void' && !empty($v['void_items_json'])) {          // 作廢後明細已釋放，顯示當時的快照
@@ -357,13 +369,63 @@ function acc_voucher_get(PDO $db, int $id): ?array
     return ['voucher' => $v, 'items' => $q->fetchAll(PDO::FETCH_ASSOC), 'lines' => $lines, 'signs' => $signs];
 }
 
-/** 修改傳票號碼／日期／備註（明細不可改） */
-function acc_voucher_update(PDO $db, int $id, ?string $no, string $date, string $note, string $userName): array
+/**
+ * 這張傳票是否已沖帳（傳票本身不沖帳，沖的是它涵蓋的發票／採購單）：
+ *  應收＝明細所屬發票有收款沖帳（acc_receipt_alloc）；應付＝明細對應的採購單有付款沖帳（acc_payment_alloc）。
+ * 回 ['settled'=>bool, 'reason'=>string]
+ */
+function acc_voucher_settled(PDO $db, int $id): array
+{
+    $q = $db->prepare("SELECT DISTINCT inv.invoice_no
+                       FROM acc_voucher_item vi
+                       JOIN acc_invoice_item ii ON ii.src_type=vi.src_type AND ii.src_id=vi.src_id
+                       JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id AND inv.status<>'void'
+                       JOIN acc_receipt_alloc a ON a.invoice_id=inv.invoice_id AND a.amount<>0
+                       WHERE vi.voucher_id=? LIMIT 5");
+    $q->execute([$id]);
+    $nos = $q->fetchAll(PDO::FETCH_COLUMN);
+    if ($nos) return ['settled' => true, 'reason' => '發票 ' . implode('、', $nos) . ' 已有收款沖帳'];
+    try {
+        $q = $db->prepare("SELECT DISTINCT vi.src_no
+                           FROM acc_voucher_item vi
+                           JOIN acc_payment_alloc pa ON pa.src_type=vi.src_type AND pa.src_id=vi.src_id AND pa.amount<>0
+                           WHERE vi.voucher_id=? LIMIT 5");
+        $q->execute([$id]);
+        $nos = $q->fetchAll(PDO::FETCH_COLUMN);
+        if ($nos) return ['settled' => true, 'reason' => '單號 ' . implode('、', $nos) . ' 已有付款沖帳'];
+    } catch (Throwable $e) { /* 付款沖帳表尚未建立＝尚無沖帳 */ }
+    return ['settled' => false, 'reason' => ''];
+}
+
+/** 修改傳票號碼／日期／備註；$lines 有給時一併改分錄（僅未沖帳可改；明細本身不可改） */
+function acc_voucher_update(PDO $db, int $id, ?string $no, string $date, string $note, string $userName, ?array $lines = null): array
 {
     acc_voucher_ensure($db);
     $v = acc_voucher_get($db, $id);
     if (!$v) return ['success' => false, 'message' => '找不到傳票'];
     if ($v['voucher']['status'] === 'void') return ['success' => false, 'message' => '已作廢的傳票不可修改'];
+    $st = acc_voucher_settled($db, $id);
+    if ($st['settled']) return ['success' => false, 'message' => '此傳票已沖帳（' . $st['reason'] . '），不可修改；如需更正請先取消沖帳'];
+    $newLines = null;
+    if ($lines !== null) {
+        $newLines = [];
+        foreach ($lines as $i => $l) {
+            $n = $i + 1;
+            $code = trim((string)($l['code'] ?? ''));
+            if (!preg_match('/^\d{4,10}$/', $code)) return ['success' => false, 'message' => "分錄第 {$n} 列：科目代號須為 4~10 位數字"];
+            $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$code]);
+            $name = (string)$q->fetchColumn();
+            if ($name === '') return ['success' => false, 'message' => "分錄第 {$n} 列：科目 {$code} 不在科目表"];
+            $amt = round((float)($l['amount'] ?? 0), 2);
+            if ($amt <= 0) return ['success' => false, 'message' => "分錄第 {$n} 列：金額須大於 0"];
+            $side = ($l['side'] ?? '') === 'C' ? 'C' : 'D';
+            $newLines[] = ['code' => $code, 'name' => $name, 'side' => $side, 'amount' => $amt,
+                           'auto' => !empty($l['is_auto']) ? 1 : 0, 'memo' => mb_substr(trim((string)($l['memo'] ?? '')), 0, 100)];
+        }
+        if (!$newLines) return ['success' => false, 'message' => '分錄不可為空'];
+        [$dSum, $cSum] = acc_vch_lines_balance($newLines);
+        if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2)];
+    }
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '傳票日期格式錯誤'];
     $no = acc_vch_no_normalize((string)$no, $date);
     if ($no !== '') {
@@ -374,8 +436,23 @@ function acc_voucher_update(PDO $db, int $id, ?string $no, string $date, string 
         $q->execute([$no, $id]);
         if ($q->fetchColumn()) return ['success' => false, 'message' => '傳票號碼 ' . $no . ' 已被其他傳票使用'];
     }
-    $db->prepare("UPDATE acc_voucher SET voucher_no=?, voucher_date=?, note=?, modified_by=?, modified_at=NOW() WHERE voucher_id=?")
-       ->execute([$no === '' ? null : $no, $date, $note, $userName, $id]);
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE acc_voucher SET voucher_no=?, voucher_date=?, note=?, modified_by=?, modified_at=NOW() WHERE voucher_id=?")
+           ->execute([$no === '' ? null : $no, $date, $note, $userName, $id]);
+        if ($newLines !== null) {
+            $db->prepare("DELETE FROM acc_voucher_line WHERE voucher_id=?")->execute([$id]);
+            $ins = $db->prepare("INSERT INTO acc_voucher_line (voucher_id,seq,code,name,side,amount,is_auto,memo) VALUES (?,?,?,?,?,?,?,?)");
+            foreach ($newLines as $i => $l) {
+                $ins->execute([$id, $i + 1, $l['code'], $l['name'], $l['side'], $l['amount'], $l['auto'], $l['memo'] ?: null]);
+                if (!$l['auto']) acc_vch_account_upsert($db, $l['code'], $l['name']);
+            }
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '儲存失敗：' . $e->getMessage()];
+    }
     return ['success' => true, 'message' => '已儲存'];
 }
 
@@ -647,11 +724,15 @@ function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = n
     if ($side === 'ar' && $parts !== null) {
         // 應收：收入與退回分開列示；銷項稅額只列一行，以（出貨－退貨）淨額計算；應收帳款以含稅淨額入帳
         $ship = (float)$parts['ship']; $ret = (float)$parts['ret'];
-        $netAmt = round($ship - $ret, 2); $neg = $netAmt < 0;
+        $disc = (float)($parts['disc'] ?? 0);
+        $netAmt = round($ship - $ret - $disc, 2); $neg = $netAmt < 0;
         $tax = (float)round(abs($netAmt) * $rate);
         $L = [];
         $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $neg ? 'C' : 'D', 'amount' => round(abs($netAmt) + $tax, 2), 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_ret']['code'],  'name' => $cfg['ar_ret']['name'],  'side' => 'D', 'amount' => $ret,  'auto' => 1, 'memo' => ''];
+        // 客戶折扣：借「銷貨折讓」4103000，備註 ?%折扣
+        $L[] = ['code' => '4103000', 'name' => '銷貨折讓', 'side' => 'D', 'amount' => $disc, 'auto' => 1,
+                'memo' => $disc > 0 ? acc_disc_pct_txt($parts['disc_pct'] ?? 0) . '%折扣' : ''];
         $L[] = ['code' => $cfg['ar_tax']['code'],  'name' => $cfg['ar_tax']['name'],  'side' => $neg ? 'D' : 'C', 'amount' => $tax, 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_rev']['code'],  'name' => $cfg['ar_rev']['name'],  'side' => 'C', 'amount' => $ship, 'auto' => 1, 'memo' => ''];
         return array_values(array_filter($L, fn($l) => $l['amount'] > 0.004));

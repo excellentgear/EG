@@ -16,7 +16,7 @@
 require_once __DIR__ . '/acc_lib.php';
 require_once __DIR__ . '/acc_voucher_lib.php';
 
-const ACC_RCPT_METHODS = ['匯款', '支票', '現金', '信用狀', '附回郵', '其他'];
+const ACC_RCPT_METHODS = ['匯款', '支票', '現金', '信用狀', '其他'];
 
 function acc_rcpt_ext_ensure(PDO $db): void
 {
@@ -43,7 +43,7 @@ function acc_rcpt_methods(PDO $db): array
     $out = ACC_RCPT_METHODS;
     try {
         require_once __DIR__ . '/cust_option_lib.php';
-        foreach (eg_cust_opt_names($db, 'pay_method') as $n) if (!in_array($n, $out, true)) array_splice($out, count($out) - 1, 0, [$n]);
+        foreach (eg_cust_opt_names($db, 'pay_method') as $n) if ($n !== '附回郵' && !in_array($n, $out, true)) array_splice($out, count($out) - 1, 0, [$n]);
     } catch (Throwable $e) {}
     return $out;
 }
@@ -57,7 +57,7 @@ function acc_rcpt_cust_terms(PDO $db, string $customerName): array
             'payment_method' => null, 'payment_methods' => null, 'settlement_mode' => null];
     if ($cid === '') return $out;
     try {
-        $st = $db->prepare("SELECT net_days, net_unit, allow_deduct, payment_method, payment_methods, settlement_mode
+        $st = $db->prepare("SELECT net_days, net_unit, allow_deduct, deduct_pct, payment_method, payment_methods, settlement_mode
                             FROM customer_list WHERE customer_id=? LIMIT 1");
         $st->execute([$cid]);
         if ($r = $st->fetch(PDO::FETCH_ASSOC)) $out = array_merge($out, $r);

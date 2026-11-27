@@ -53,6 +53,9 @@ function eg_cust_opt_ensure(PDO $db): void
             $mx = $db->query("SELECT COALESCE(MAX(sort_order),0) FROM cust_option WHERE kind='recon_channel'")->fetchColumn();
             $db->prepare("INSERT IGNORE INTO cust_option (kind,opt_name,sort_order) VALUES ('recon_channel','私Line',?)")->execute([(int)$mx + 1]);
         }
+        if (!isset($have['deduct_pct'])) {
+            $db->exec("ALTER TABLE customer_list ADD COLUMN deduct_pct DECIMAL(6,3) NULL DEFAULT NULL COMMENT '接受扣%時的折扣百分比（0.1~30，最多3位小數；開發票自動帶入折扣明細）'");
+        }
         if (!isset($have['einv_max_pages'])) {
             $db->exec("ALTER TABLE customer_list ADD COLUMN einv_max_pages INT NULL DEFAULT NULL COMMENT '電子發票頁數上限（NULL=不限；1頁=每張發票筆數上限的1倍，超過時同出貨單同料號同數量金額加總）'");
         }
