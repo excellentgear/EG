@@ -284,7 +284,8 @@ function bindAll() {
     $('#mSearch').on('click', function () { MPAGE = 1; loadItems(); });
     $('#mPageSize').on('change', function () { MPS = parseInt(this.value, 10) || 20; MPAGE = 1; loadItems(); });
     $('#btnNewItem').on('click', function () { openItem(0); });
-    $('#btnSaveItem').on('click', saveItem);
+    $('#btnSaveItem').on('click', function () { saveItem(); });
+    $('#btnSaveItemNext').on('click', function () { saveItem(true); });
     $('#btnAddSpec').on('click', function () { openSpec(0); });
     $('#btnSaveSpec').on('click', saveSpec);
     $('#btnBrands').on('click', openBrandMgr);
@@ -400,7 +401,7 @@ function renderList(r) {
                 ? '<span class="hint">' + esc(ppTypeName(x.purpose_type)) + '</span>' +
                   (x.purpose_label ? '<br>' + esc(x.purpose_label) : '')
                 : '<span class="hint">—</span>') + '</td>' +
-            '<td>' + esc(x.requester_name || '') + '</td><td>' + esc(x.dept_name || '') + '</td>' +
+            '<td>' + esc(x.requester_name || '') + (x.proxy_by_name ? '<div class="hint">' + esc(x.proxy_by_name) + ' 補單</div>' : '') + '</td><td>' + esc(x.dept_name || '') + '</td>' +
             '<td>' + esc(x.item_cnt) + '</td>' +
             '<td class="l">' + (x.masked_vendor ? '＊＊＊' : esc(x.vendor_name || '')) + '</td>' +
             '<td class="r money">' + (x.masked_amount ? '＊＊＊'
@@ -467,8 +468,32 @@ function exportCsv() {
 }
 
 /* ── 申請單編輯 ───────────────────────────── */
+/** 補單：有權限者可改申請人（預設本人）。人員清單與到貨交付對象共用 recv_people，同一人只留一列 */
+function setupRequesterPick(selId) {
+    var canP = !!(META && META.perms && META.perms.canProxy);
+    $('#rRequester').toggle(canP); $('#rRequesterHint').toggle(canP); $('#rWho').toggle(!canP);
+    if (!canP) return;
+    loadRecvPeople(function () {
+        var seen = {}, h = '';
+        (RECV_PEOPLE || []).forEach(function (p) {
+            if (seen[p.id]) return; seen[p.id] = 1;
+            h += '<option value="' + p.id + '" data-n="' + esc(p.name) + '" data-d="' + esc(p.dept_name || '') + '">' +
+                 esc((p.dept_name ? p.dept_name + '　' : '') + p.name) + '</option>';
+        });
+        $('#rRequester').html(h);
+        $('#rRequester').val(selId || META.me.id);
+        syncProxyTag();
+    });
+}
+function syncProxyTag() {
+    var v = parseInt($('#rRequester').val(), 10) || 0;
+    $('#rProxyTag').toggle(!!v && v !== parseInt(META.me.id, 10) && $('#rRequester').is(':visible'));
+}
+$(document).on('change', '#rRequester', syncProxyTag);
+
 function openReq(id) {
     EDIT = { id: id || 0, items: [], atts: [], tempAtts: [] };
+    $('#rProxyTag').hide(); setupRequesterPick(0);
     $('#reqTitle').text(id ? '修改採購申請' : '提出採購申請');
     $('#btnSaveReq').html('<i class="fa fa-save"></i> ' + (id ? '儲存修改' : '送出申請'));
     $('#rTitle,#rNeed,#rReason,#pkKw').val('');
@@ -482,6 +507,7 @@ function openReq(id) {
         api('req_detail', { req_id: id }).done(function (r) {
             var q = r.req;
             $('#rTitle').val(q.title || ''); $('#rNeed').val(q.need_date || ''); $('#rReason').val(q.reason || '');
+            if (META.perms.canProxy) setupRequesterPick(q.requester_id);
             $('#rApply').val(q.apply_date || String(q.Created_At || '').substr(0, 10)); syncBackTag();
             $('#rDVendor').val(q.designated_vendor_id ? (q.designated_vendor_name || '') : '').data('vid', q.designated_vendor_id || '');
             $('#rUrgent').prop('checked', false);   // 品項載入後再依「是否全部急件」回推
@@ -639,6 +665,7 @@ function saveReq() {
     var items = reqIsSimple() ? [] : collectItems(); if (!items) return;
     // 精簡版不顯示標題，一律留白交給後端自動組（用途＋品名）
     var d = { req_id: EDIT.id, is_new: EDIT.id ? '0' : '1', title: FULL ? $('#rTitle').val() : '',
+              requester_id: META.perms.canProxy ? ($('#rRequester').val() || '') : '',
               apply_date: $('#rApply').val() || META.today,
               designated_vendor_id: $('#rDVendor').data('vid') || '',
               need_date: reqIsSimple() ? '' : $('#rNeed').val(), reason: $('#rReason').val(),
@@ -1119,7 +1146,7 @@ function renderDetail(q) {
             ? '<b>' + esc(ppTypeName(q.purpose_type)) + '</b>' + (q.purpose_label ? '　' + esc(q.purpose_label) : '')
             : '<span class="hint">未指定</span>') +
         (q.vehicle_mileage ? fld('里程數', esc(String(q.vehicle_mileage).replace(/\B(?=(\d{3})+(?!\d))/g, ',')) + ' 公里' + (q.vehicle_mileage_date ? '　(' + esc(q.vehicle_mileage_date.replace(/-/g, '.')) + ')' : '')) : '') +
-        fld('申請人', esc(q.requester_name) + '／' + esc(q.dept_name || '')) +
+        fld('申請人', esc(q.requester_name) + '／' + esc(q.dept_name || '') + (q.proxy_by_name ? ' <span class="urg" style="background:#F0A24B;color:#fff;">補單：' + esc(q.proxy_by_name) + '</span>' : '')) +
         fld('申請日', esc(applyDateOf(q)) + backTagHtml(q) + (isBackfill(q) ? ' <span class="hint">（建立於 ' + esc(String(q.Created_At || '').substr(0, 16)) + '）</span>' : '')) + fld('希望到貨日', q.need_date || '—') +
         fld('廠商', q.masked_vendor ? '＊＊＊' : esc(q.vendor_name || '—')) +
         fld('稅別', esc(META.tax_types[q.tax_type] || '')) +
@@ -1289,7 +1316,7 @@ $(document).on('click', '#dtPrint', function () {
         '<table class="g"><tr>' + T('單號', esc(q.req_no)) + T('狀態', esc((META.statuses || {})[q.status] || q.status)) + '</tr>' +
         '<tr>' + T('申請日期', esc(dotDate(applyDateOf(q))) + (isBackfill(q) ? '　<b>【補單】</b>' : '')) +
         T('希望到貨日', esc(dotDate(q.need_date) || '—')) + '</tr>' +
-        '<tr>' + T('申請人／部門', esc(q.requester_name || '') + '／' + esc(q.dept_name || '')) +
+        '<tr>' + T('申請人／部門', esc(q.requester_name || '') + '／' + esc(q.dept_name || '') + (q.proxy_by_name ? '（' + esc(q.proxy_by_name) + ' 補單）' : '')) +
         T('用途', q.purpose_type ? (q.purpose_label && String(q.purpose_label).indexOf(ppTypeName(q.purpose_type)) === 0 ? esc(q.purpose_label) : esc(ppTypeName(q.purpose_type)) + (q.purpose_label ? '：' + esc(q.purpose_label) : '')) : '—') + '</tr>' +
         '<tr>' + T('採購', esc(q.buyer_name || '—')) + T('廠商', q.masked_vendor ? '＊＊＊' : esc(q.vendor_name || '—') + (q.designated_vendor_name ? '　（指定：' + esc(q.designated_vendor_name) + '）' : '')) + '</tr>' +
         (q.vehicle_mileage ? '<tr>' + T('里程數', esc(String(q.vehicle_mileage).replace(/\B(?=(\d{3})+(?!\d))/g, ',')) + ' 公里') +
@@ -2148,7 +2175,7 @@ function openSign() {
     var q = CUR;
     var h = '<div class="pq-sec"><div class="pq-grid" style="margin:0;">' +
         fld('單號', esc(q.req_no) + (parseInt(q.is_urgent, 10) ? ' <span class="urg">急件</span>' : '')) +
-        fld('申請人', esc(q.requester_name) + '／' + esc(q.dept_name || '')) +
+        fld('申請人', esc(q.requester_name) + '／' + esc(q.dept_name || '') + (q.proxy_by_name ? ' <span class="urg" style="background:#F0A24B;color:#fff;">補單：' + esc(q.proxy_by_name) + '</span>' : '')) +
         fld('用途', q.purpose_type
             ? '<b>' + esc(ppTypeName(q.purpose_type)) + '</b>' + (q.purpose_label ? '　' + esc(q.purpose_label) : '')
             : '<span class="hint">未指定</span>') +
@@ -2190,7 +2217,8 @@ function loadItems() {
             var h = '';
             r.rows.forEach(function (x) {
                 var tg = (x.tags || []).map(function (t) { return '<span class="tag-chip">' + esc(t.tag_name) + '</span>'; }).join('');
-                h += '<tr><td>' + esc(x.item_code) + '</td><td>' + (x.purpose_type ? '用途：' + esc(ppTypeName(x.purpose_type)) : esc(x.category_name)) + '</td>' +
+                h += '<tr><td>' + esc(x.item_code) + '</td><td>' + (x.purpose_type ? '用途：' + esc(ppTypeName(x.purpose_type)) : esc(x.category_name)) +
+                     (x.group_label ? '<div class="hint">' + esc(x.group_label) + '</div>' : '') + '</td>' +
                      '<td class="l"><a href="javascript:;" class="op-item" data-id="' + x.item_id + '">' + esc(x.item_name) + '</a></td>' +
                      '<td class="l">' + tg + '</td><td class="r">' + x.spec_cnt + '</td>' +
                      '<td class="r">' + nz(x.stock_qty) + '</td><td class="l">' + esc(x.default_vendor_name || '') + '</td>' +
@@ -2209,13 +2237,18 @@ function loadItems() {
 $(document).on('click', '#mPgBtns button', function () { MPAGE = parseInt($(this).data('p'), 10) || 1; loadItems(); });
 $(document).on('click', '.op-item', function () { openItem($(this).data('id')); });
 
+function showSavedToast(msg) {
+    var $t = $('<div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#5b3a1e;color:#fff;padding:8px 16px;border-radius:6px;z-index:99999;font-size:13px;"></div>').text(msg).appendTo('body');
+    setTimeout(function () { $t.fadeOut(300, function () { $t.remove(); }); }, 2600);
+}
 function openItem(id) {
     ITEMEDIT = { id: id || 0, specs: [], attrs: [], tags: [] };
     $('#itTitle').text(id ? '編輯品項' : '新增品項');
     $('#itName,#itNote,#itVendor').val(''); $('#itDup').empty();
     $('#itCat').val(META.categories.length ? META.categories[0].category_id : '');
     $('#itPurp').val(''); setItGroup('category');
-    $('#itUnit').val(''); renderTagPick([]);
+    $('#itUnit').val(''); renderTagPick([]); $('#itTagNew').val('');
+    renderGrpPick(0);
     $('#specSec').toggle(!!id);
     $('#specHint').text(id ? '' : '');
     if (!id) { $('#specBody').empty(); openMask('mItem'); return; }
@@ -2224,6 +2257,7 @@ function openItem(id) {
         $('#itCat').val(it.category_id); $('#itName').val(it.item_name);
         if (it.purpose_type) { $('#itPurp').val(it.purpose_type); setItGroup('purpose'); } else setItGroup('category');
         $('#itUnit').val(it.default_unit_id || ''); $('#itNote').val(it.note || '');
+        renderGrpPick(parseInt(it.group_id, 10) || 0);
         $('#itVendor').val(it.default_vendor_name || '').data('vid', it.default_vendor_id || '');
         ITEMEDIT.specs = it.specs || []; ITEMEDIT.attrs = it.attrs || [];
         if (it.brands) { BRANDS = it.brands; renderBrandOptions(); }   // 規格編輯的品牌下拉來源
@@ -2232,14 +2266,59 @@ function openItem(id) {
         openMask('mItem');
     }).fail(fail);
 }
+/** 大類／小類下拉（選填）：gid 可為大類或小類 id */
+function renderGrpPick(gid) {
+    var G = META.groups || [], g1 = 0, g2 = 0;
+    G.forEach(function (g) { if (parseInt(g.group_id, 10) === gid) { if (parseInt(g.parent_id, 10) > 0) { g1 = parseInt(g.parent_id, 10); g2 = gid; } else g1 = gid; } });
+    var h = '<option value="">（大類：不設定）</option>';
+    G.filter(function (g) { return parseInt(g.parent_id, 10) === 0; }).forEach(function (g) { h += '<option value="' + g.group_id + '">' + esc(g.group_name) + '</option>'; });
+    $('#itGrp1').html(h).val(g1 || '');
+    fillGrp2(g1, g2);
+}
+function fillGrp2(g1, g2) {
+    var h = '<option value="">（小類：不設定）</option>';
+    (META.groups || []).filter(function (g) { return g1 && parseInt(g.parent_id, 10) === g1; })
+        .forEach(function (g) { h += '<option value="' + g.group_id + '">' + esc(g.group_name) + '</option>'; });
+    $('#itGrp2').html(h).val(g2 || '').prop('disabled', !g1);
+}
+$(document).on('change', '#itGrp1', function () { fillGrp2(parseInt(this.value, 10) || 0, 0); });
+function itGroupId() { return parseInt($('#itGrp2').val(), 10) || parseInt($('#itGrp1').val(), 10) || 0; }
+$(document).on('click', '#itGrp1Add,#itGrp2Add', function () {
+    var isSub = this.id === 'itGrp2Add', parent = isSub ? (parseInt($('#itGrp1').val(), 10) || 0) : 0;
+    if (isSub && !parent) { alert('請先選大類，再新增它底下的小類'); return; }
+    var name = $.trim(prompt(isSub ? '新小類名稱：' : '新大類名稱：') || '');
+    if (!name) return;
+    api('group_save', { group_name: name, parent_id: parent }, 'POST').done(function (r) {
+        api('meta').done(function (m) {
+            META.groups = m.groups;
+            var gid = parseInt(r.group_id, 10);
+            renderGrpPick(isSub ? gid : gid);
+        });
+    }).fail(fail);
+});
+function addQuickTag() {
+    var v = $.trim($('#itTagNew').val() || '');
+    if (!v) return;
+    var cur = $('.tg-pick:checked').map(function () { return parseInt(this.value, 10); }).get();
+    api('tag_quick', { tag_name: v }, 'POST').done(function (r) {
+        var t = r.tag, tid = parseInt(t.tag_id, 10);
+        if (!(META.tags || []).some(function (x) { return parseInt(x.tag_id, 10) === tid; })) META.tags.push(t);
+        if (cur.indexOf(tid) < 0) cur.push(tid);
+        renderTagPick(cur); $('#itTagNew').val('').focus();
+        $('#mTag,#pkTag').html(optList(META.tags, 'tag_id', 'tag_name', '', '全部標籤'));
+    }).fail(fail);
+}
+$(document).on('click', '#itTagAdd', addQuickTag);
+$(document).on('keydown', '#itTagNew', function (e) { if (e.key === 'Enter') { e.preventDefault(); addQuickTag(); } });
+
 function renderTagPick(sel) {
     var h = '';
     (META.tags || []).forEach(function (t) {
         h += '<label style="margin-right:10px;font-size:12px;font-weight:normal;color:#5b3a1e;">' +
              '<input type="checkbox" class="tg-pick" value="' + t.tag_id + '"' +
-             (sel.indexOf(parseInt(t.tag_id, 10)) > -1 ? ' checked' : '') + '> ' + esc(t.tag_name) + '</label>';
+             (sel.indexOf(parseInt(t.tag_id, 10)) > -1 ? ' checked' : '') + '> #' + esc(t.tag_name) + '</label>';
     });
-    $('#itTags').html(h || '<span class="hint">尚未建立標籤（標籤管理可新增）</span>');
+    $('#itTags').html(h || '<span class="hint">尚未建立標籤——在下方輸入框打 #標籤名稱 就能直接建立</span>');
 }
 function renderSpecs() {
     if (!ITEMEDIT.specs.length) {
@@ -2251,7 +2330,8 @@ function renderSpecs() {
         // 供應商：主要那家標星號，其餘只顯示家數（同規格可跟多家買）
         var vs = s.vendors || [], pri = vs.filter(function (v) { return v.is_primary === 1; })[0] || vs[0];
         var vTxt = !vs.length ? '<span class="hint">未設定</span>'
-            : (esc(pri.vendor_name || pri.vendor_id) + (vs.length > 1 ? ' <span class="hint">等 ' + vs.length + ' 家</span>' : ''));
+            : (esc(pri.vendor_name || pri.vendor_id) + (pri.vendor_part_no ? ' <span class="tag-chip">廠商料號 ' + esc(pri.vendor_part_no) + '</span>' : '') +
+               (vs.length > 1 ? ' <span class="hint">等 ' + vs.length + ' 家</span>' : ''));
         h += '<tr><td>' + esc(s.spec_code) + '</td><td class="l">' + esc(s.spec_text) + '</td>' +
              '<td>' + (s.brand ? esc(s.brand) : '<span class="hint">—</span>') + '</td>' +
              '<td class="l">' + vTxt + '</td>' +
@@ -2279,17 +2359,28 @@ function setItGroup(g) {
                                            : '類別＝庫存分類');
 }
 $(document).on('change', 'input[name=itGroup]', function () { setItGroup(this.value); });
-function saveItem() {
+function saveItem(next) {
     var name = $('#itName').val().trim();
     if (!name) { alert('請輸入品名'); return; }
     var grp = $('input[name=itGroup]:checked').val() || 'category';
     if (grp === 'purpose' && !$('#itPurp').val()) { alert('請選擇用途類別'); $('#itPurp').focus(); return; }
     var tags = $('.tg-pick:checked').map(function () { return parseInt(this.value, 10); }).get();
     api('item_save', { item_id: ITEMEDIT.id, group_by: grp, purpose_type: grp === 'purpose' ? $('#itPurp').val() : '',
-        category_id: grp === 'category' ? $('#itCat').val() : '', item_name: name,
+        category_id: grp === 'category' ? $('#itCat').val() : '', item_name: name, group_id: itGroupId() || 0,
         default_unit_id: $('#itUnit').val() || 0, default_vendor_name: $('#itVendor').val(),
         default_vendor_id: $('#itVendor').data('vid') || '', note: $('#itNote').val(),
         tag_ids: JSON.stringify(tags) }, 'POST').done(function (r) {
+        if (next === true) {
+            // 連續建立：保留歸類／大小類／單位／標籤，只清掉品名、備註、廠商，立刻開下一筆
+            var keep = { grp: grp, cat: $('#itCat').val(), purp: $('#itPurp').val(), g: itGroupId(),
+                         unit: $('#itUnit').val(), tags: tags };
+            loadItems(); openItem(0);
+            setItGroup(keep.grp); $('#itCat').val(keep.cat); $('#itPurp').val(keep.purp);
+            renderGrpPick(keep.g); $('#itUnit').val(keep.unit); renderTagPick(keep.tags);
+            showSavedToast('已建立 ' + r.item_code + '「' + name + '」，可繼續輸入下一筆');
+            $('#itName').focus();
+            return;
+        }
         if (!ITEMEDIT.id) { loadItems(); openItem(r.item_id); }
         else { alert('已儲存'); loadItems(); }
     }).fail(fail);
@@ -2326,6 +2417,10 @@ function openSpec(spec) {
     $('#spBrand').val(s ? (s.brand || '') : '');
     renderBrandOptions();
     SV_ROWS = (s && s.vendors) ? s.vendors.map(function (v) { return $.extend({}, v); }) : [];
+    // 新增規格時，品項若有預設廠商就先帶一列（只要補「廠商料號」，進貨時才對得到對方的品號）
+    if (!s && !SV_ROWS.length && $('#itVendor').data('vid')) {
+        SV_ROWS.push({ vendor_id: $('#itVendor').data('vid'), vendor_name: $('#itVendor').val(), vendor_part_no: '', ref_price: '', quote_date: '', is_primary: 1, note: '' });
+    }
     $('#svKw').val(''); $('#svVendorList').empty();
     renderSpecVendors();
     openMask('mSpec');

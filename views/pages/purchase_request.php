@@ -418,7 +418,10 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-fld"><label>申請日期 <span id="rBackTag" style="display:none;background:#F0A24B;color:#fff;border-radius:8px;padding:0 8px;font-size:11px;">補單</span></label>
                 <input type="date" id="rApply"><span class="hint" id="rApplyHint">補過去的單可改日期，早於今天會標示為補單</span></div>
             <div class="pq-fld pq-req-detail"><label>希望到貨日</label><input type="date" id="rNeed"></div>
-            <div class="pq-fld"><label>申請人／部門</label><input type="text" id="rWho" readonly style="background:#F5EEE2;"></div>
+            <div class="pq-fld"><label>申請人／部門 <span id="rProxyTag" style="display:none;background:#F0A24B;color:#fff;border-radius:8px;padding:0 8px;font-size:11px;">補單</span></label>
+                <input type="text" id="rWho" readonly style="background:#F5EEE2;">
+                <select id="rRequester" data-eg-filter="輸入姓名或部門篩選…" style="display:none;"></select>
+                <span class="hint" id="rRequesterHint" style="display:none;">替別人補單時改選申請人；單據會註記是誰補單</span></div>
             <div class="pq-fld pq-req-detail"><label>急件</label>
                 <label style="display:flex;align-items:center;gap:6px;height:30px;font-weight:normal;cursor:pointer;">
                     <input type="checkbox" id="rUrgent" style="width:auto;margin:0;"> 整張單都是急件
@@ -795,6 +798,16 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <select id="itCat"></select>
                 <select id="itPurp" style="display:none;"></select>
                 <span class="hint" id="itGroupHint">類別＝庫存分類</span></div>
+            <div class="pq-fld"><label>大類／小類（選填，可不設定）</label>
+                <div style="display:flex;gap:4px;">
+                    <select id="itGrp1" style="flex:1;min-width:0;"></select>
+                    <button class="pq-btn" type="button" id="itGrp1Add" title="新增大類">＋</button>
+                </div>
+                <div style="display:flex;gap:4px;margin-top:4px;">
+                    <select id="itGrp2" style="flex:1;min-width:0;"></select>
+                    <button class="pq-btn" type="button" id="itGrp2Add" title="在所選大類底下新增小類">＋</button>
+                </div>
+                <span class="hint">例：大類「包裝」→小類「紙箱」。與左邊「類別」(庫存分類)不同，只用來整理與查找</span></div>
             <div class="pq-fld"><label>品名 <span style="color:#DD5138;">*</span></label>
                 <input type="text" id="itName" placeholder="例：鑽頭（尺寸請放在下方規格）" autocomplete="off">
                 <div id="itDup"></div></div>
@@ -802,8 +815,12 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-fld"><label>預設廠商</label><input type="text" id="itVendor" placeholder="輸入搜尋" autocomplete="off">
                 <div id="itVendorList"></div></div>
         </div>
-        <div class="pq-fld" style="margin-bottom:10px;"><label>標籤（可複選，之後可依標籤篩選）</label>
-            <div id="itTags" style="border:1px solid #D8BE93;border-radius:4px;padding:6px;min-height:32px;"></div></div>
+        <div class="pq-fld" style="margin-bottom:10px;"><label>#標籤（可複選；一個品項可有多個，搜尋時打 # 開頭即可，例：#常備品）</label>
+            <div id="itTags" style="border:1px solid #D8BE93;border-radius:4px;padding:6px;min-height:32px;"></div>
+            <div style="display:flex;gap:6px;margin-top:4px;">
+                <input type="text" id="itTagNew" maxlength="40" placeholder="輸入 #新標籤 後按 Enter 或「加入」，沒有就直接建立" autocomplete="off" style="flex:1;">
+                <button class="pq-btn" type="button" id="itTagAdd">加入</button>
+            </div></div>
         <div class="pq-fld" style="margin-bottom:10px;"><label>備註</label><input type="text" id="itNote"></div>
 
         <div class="pq-sec" id="specSec">
@@ -821,6 +838,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     </div>
     <div class="m-foot">
         <button class="pq-btn" onclick="closeMask('mItem')">關閉</button>
+        <button class="pq-btn" id="btnSaveItemNext" title="存好後保留類別、大小類、單位、標籤，直接開下一筆"><i class="fa fa-plus"></i> 儲存並新增下一筆</button>
         <button class="pq-btn warm" id="btnSaveItem"><i class="fa fa-save"></i> 儲存品項</button>
     </div>
 </div></div>

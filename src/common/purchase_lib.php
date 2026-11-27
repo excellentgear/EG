@@ -54,6 +54,7 @@ define('PURCHASE_FEATURES', [
     ['code' => 'purchase_view_amount', 'group' => 'view', 'label' => '看得到金額（單價、小計、總額、統計卡）'],
     ['code' => 'purchase_view_vendor', 'group' => 'view', 'label' => '看得到廠商與發票／付款資訊'],
     ['code' => 'purchase_apply',       'group' => 'op',   'label' => '提出／修改自己的申請單、上傳附件'],
+    ['code' => 'purchase_proxy_apply', 'group' => 'op',   'label' => '替別的使用者補單（可更改申請人，單據上會註記是誰補單）'],
     ['code' => 'purchase_form_full',   'group' => 'op',   'label' => '使用採購版申請單（找採購品、標題、預估單價、到貨處理、附件分類）'],
     ['code' => 'purchase_receive',     'group' => 'op',   'label' => '登錄到貨（入庫待領／直接交付／不列管）'],
     ['code' => 'purchase_buy',         'group' => 'op',   'label' => '詢價填金額、下單、發票付款、結案、維護採購品主檔'],
@@ -157,6 +158,15 @@ function purchase_ensure_schema(PDO $db): void
         UNIQUE KEY uq_spec_code (spec_code),
         KEY idx_item (item_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='採購品規格變體(=採購料號，庫存以此計數)'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS purchase_group (
+        group_id INT AUTO_INCREMENT PRIMARY KEY,
+        parent_id INT NOT NULL DEFAULT 0 COMMENT '0=大類；其餘=所屬大類的 group_id（小類）',
+        group_name VARCHAR(40) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT NOT NULL DEFAULT 1,
+        UNIQUE KEY uq_grp (parent_id, group_name)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='採購品大類／小類(可不設定，與庫存類別、標籤是三件事)'");
 
     purchase_ensure_brand_vendor_schema($db);
 
@@ -294,7 +304,8 @@ function purchase_ensure_schema(PDO $db): void
                                     'designated_vendor_id VARCHAR(11) NULL', 'designated_vendor_name VARCHAR(120) NULL',
                                     "skip_quote TINYINT NOT NULL DEFAULT 0 COMMENT '1=免詢價直接核價'",
                                     "total_adjust DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '含稅總額調整（廠商四捨五入／無條件捨去的差額）'",
-                                    "order_date DATE NULL COMMENT '下訂日期'"],
+                                    "order_date DATE NULL COMMENT '下訂日期'",
+                                    "proxy_by_id INT NULL COMMENT '補單人（代申請人填單者）'", 'proxy_by_name VARCHAR(60) NULL'],
         'stock_items'           => ["source VARCHAR(20) NULL COMMENT 'purchase=採購進貨'"],
         'stock_item_categories' => ["party_label VARCHAR(10) NOT NULL DEFAULT '客戶' COMMENT '列表「客戶」欄顯示名稱：客戶／廠商'"],
         'purchase_request_item' => ['purpose_vehicle_id INT NULL', 'purpose_equip_kind VARCHAR(10) NULL', 'purpose_equip_id INT NULL',
@@ -302,6 +313,7 @@ function purchase_ensure_schema(PDO $db): void
                                     'designated_vendor_name VARCHAR(120) NULL',
                                     "added_at_receive TINYINT NOT NULL DEFAULT 0 COMMENT '1=到貨時才新增的細項（保養／維修明細）'",
                                     "stock_category_id INT NULL COMMENT '到貨入庫時選的庫存品項種類（沒有採購料號時用）'"],
+        'purchase_item'         => ["group_id INT NULL COMMENT '大類／小類(purchase_group.group_id)，可不設定'"],
         'purchase_receipt'      => ['vendor_id VARCHAR(11) NULL', 'vendor_name VARCHAR(120) NULL', 'erp_rcpt_no VARCHAR(20) NULL'],
     ] as $vt => $cols) {
         foreach ($cols as $def) {
@@ -425,7 +437,7 @@ function purchase_perms(PDO $db, ?array $u): array
     $none = ['isAdmin'=>false,'canAdmin'=>false,'canBuy'=>false,'canReceive'=>false,
              'canView'=>false,'canApply'=>false,'canApproveTop'=>false,'canEnter'=>false,
              'canFormFull'=>false,'canViewAmount'=>false,'canViewVendor'=>false,
-             'canMaint'=>false,'canVehicle'=>false];
+             'canMaint'=>false,'canVehicle'=>false,'canProxy'=>false];
     if (!$u) return $none;
     $uid = (int)$u['id'];
     $isAdmin = in_array((int)$u['user_status'], [9, 90], true);
@@ -478,6 +490,8 @@ function purchase_perms(PDO $db, ?array $u): array
         // 保養類別／車輛清單的維護權：採購作業不再自動擁有，要在角色設定裡另外勾（管理員固定有）
         'canMaint'=>$canAdmin || $has('purchase_maint_manage'),
         'canVehicle'=>$canAdmin || $has('purchase_vehicle_manage'),
+        // 替別人補單（可改申請人）：採購管理員固定有，其他人要在角色設定另外勾
+        'canProxy'=>$canAdmin || $has('purchase_proxy_apply'),
     ];
 }
 

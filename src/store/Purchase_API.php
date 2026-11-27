@@ -112,6 +112,8 @@ case 'meta': {
         'me' => ['id' => $uid, 'name' => $uname, 'dept_id' => $u['dept_id'], 'dept_name' => $u['dept_name']],
         'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn(),   // 用資料庫時間：PHP 是 UTC，凌晨會差一天
         'categories' => $cats, 'units' => $units, 'locations' => $locs, 'tags' => $tags,
+        'groups' => $db->query("SELECT group_id, parent_id, group_name FROM purchase_group WHERE is_active=1
+                                ORDER BY sort_order, group_name")->fetchAll(PDO::FETCH_ASSOC),
         // 到貨入庫可選的儲位：管理員有限定就只給那些（空＝全部）
         'recv_locations' => (function () use ($db, $locs) {
             $ids = purchase_recv_loc_ids($db);
@@ -278,6 +280,53 @@ case 'spec_vendor_save': {
 /* ============================================================
  * 採購品主檔：標籤 / 規格屬性
  * ============================================================ */
+/** 大類／小類（可不設定）：採購作業以上可新增；parent_id=0 為大類 */
+case 'group_save': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $name = mb_substr(pv('group_name'), 0, 40);
+    $parent = pint('parent_id');
+    if ($name === '') jerr('請輸入名稱');
+    if ($parent > 0) {
+        $pq = $db->prepare("SELECT parent_id FROM purchase_group WHERE group_id=? AND is_active=1");
+        $pq->execute([$parent]);
+        $pp0 = $pq->fetchColumn();
+        if ($pp0 === false) jerr('大類不存在');
+        if ((int)$pp0 > 0) jerr('只有兩層：小類底下不能再建小類');
+    }
+    $ex = $db->prepare("SELECT group_id, is_active FROM purchase_group WHERE parent_id=? AND group_name=?");
+    $ex->execute([$parent, $name]);
+    if ($r0 = $ex->fetch(PDO::FETCH_ASSOC)) {
+        if (!(int)$r0['is_active']) $db->prepare("UPDATE purchase_group SET is_active=1 WHERE group_id=?")->execute([$r0['group_id']]);
+        jout(['group_id' => (int)$r0['group_id'], 'existed' => true]);
+    }
+    $db->prepare("INSERT INTO purchase_group (parent_id, group_name) VALUES (?,?)")->execute([$parent, $name]);
+    jout(['group_id' => (int)$db->lastInsertId()]);
+}
+case 'group_delete': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $gid = pint('group_id');
+    $c = $db->prepare("SELECT COUNT(*) FROM purchase_item WHERE is_active=1 AND (group_id=? OR group_id IN (SELECT group_id FROM purchase_group WHERE parent_id=?))");
+    $c->execute([$gid, $gid]);
+    if ((int)$c->fetchColumn() > 0) jerr('還有品項歸在這個分類（含小類），請先把品項改到別的分類');
+    $db->prepare("UPDATE purchase_group SET is_active=0 WHERE group_id=? OR parent_id=?")->execute([$gid, $gid]);
+    jout([]);
+}
+/** 品項編輯時直接輸入 #標籤名稱 就建立（已存在則直接回傳既有的）；不必先去標籤管理 */
+case 'tag_quick': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $name = mb_substr(ltrim(pv('tag_name'), "# "), 0, 40);
+    if (mb_substr($name, 0, 1) === '＃') $name = mb_substr($name, 1);
+    if ($name === '') jerr('請輸入標籤名稱');
+    $ex = $db->prepare("SELECT tag_id, tag_name, color, is_active FROM purchase_tag WHERE tag_name=?");
+    $ex->execute([$name]);
+    if ($t = $ex->fetch(PDO::FETCH_ASSOC)) {
+        if (!(int)$t['is_active']) $db->prepare("UPDATE purchase_tag SET is_active=1 WHERE tag_id=?")->execute([$t['tag_id']]);
+        jout(['tag' => ['tag_id' => (int)$t['tag_id'], 'tag_name' => $t['tag_name'], 'color' => $t['color']]]);
+    }
+    $db->prepare("INSERT INTO purchase_tag (tag_name, color) VALUES (?, '#F7E0BD')")->execute([$name]);
+    jout(['tag' => ['tag_id' => (int)$db->lastInsertId(), 'tag_name' => $name, 'color' => '#F7E0BD']]);
+}
+
 case 'tag_save': {
     if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
     $tagId = pint('tag_id');
@@ -345,15 +394,28 @@ case 'item_list': {
     $tagId = (int)($_GET['tag_id'] ?? 0);
     $ptypeF = strtoupper(trim((string)($_GET['purpose_type'] ?? '')));
     $page  = max(1, (int)($_GET['page'] ?? 1));
-    $ps    = in_array((int)($_GET['page_size'] ?? 20), [5, 10, 20, 50], true) ? (int)$_GET['page_size'] : 20;
+    $ps    = in_array((int)($_GET['page_size'] ?? 20), [5, 10, 20, 50], true) ? (int)($_GET['page_size'] ?? 20) : 20;
     $where = ['i.is_active=1']; $bind = [];
+    $grpId = (int)($_GET['group_id'] ?? 0);
     if ($kw !== '') {
-        // 打「鑽頭」找得到整個品項；打「鑽頭 5」也能命中規格
-        $where[] = "(i.item_name LIKE ? OR i.item_code LIKE ? OR EXISTS
-                     (SELECT 1 FROM purchase_spec s2 WHERE s2.item_id=i.item_id
-                      AND (s2.spec_text LIKE ? OR s2.spec_code LIKE ?)))";
-        $lk = '%' . $kw . '%'; array_push($bind, $lk, $lk, $lk, $lk);
+        // 每個詞都要命中（可分散在不同欄位）：「#」開頭＝標籤名稱；其餘比對品名／編碼／規格／廠商料號／大小類
+        foreach (preg_split('/\s+/', $kw) as $w) {
+            if ($w === '') continue;
+            if ($w[0] === '#' || mb_substr($w, 0, 1) === '＃') {
+                $where[] = "EXISTS (SELECT 1 FROM purchase_item_tag it2 JOIN purchase_tag t2 ON t2.tag_id=it2.tag_id
+                            WHERE it2.item_id=i.item_id AND t2.tag_name LIKE ?)";
+                $bind[] = '%' . mb_substr($w, 1) . '%';
+                continue;
+            }
+            $where[] = "(i.item_name LIKE ? OR i.item_code LIKE ? OR EXISTS
+                         (SELECT 1 FROM purchase_spec s2 WHERE s2.item_id=i.item_id
+                          AND (s2.spec_text LIKE ? OR s2.spec_code LIKE ?
+                               OR EXISTS (SELECT 1 FROM purchase_spec_vendor sv2 WHERE sv2.spec_id=s2.spec_id AND sv2.vendor_part_no LIKE ?)))
+                         OR EXISTS (SELECT 1 FROM purchase_group g2 WHERE g2.group_id=i.group_id AND g2.group_name LIKE ?))";
+            $lk = '%' . $w . '%'; array_push($bind, $lk, $lk, $lk, $lk, $lk, $lk);
+        }
     }
+    if ($grpId > 0) { $where[] = '(i.group_id=? OR i.group_id IN (SELECT group_id FROM purchase_group WHERE parent_id=?))'; array_push($bind, $grpId, $grpId); }
     if ($catId > 0) { $where[] = 'i.category_id=? AND i.purpose_type IS NULL'; $bind[] = $catId; }
     if ($ptypeF !== '' && isset(PURCHASE_PURPOSE_TYPES[$ptypeF])) { $where[] = 'i.purpose_type=?'; $bind[] = $ptypeF; }
     if ($tagId > 0) { $where[] = 'EXISTS (SELECT 1 FROM purchase_item_tag t WHERE t.item_id=i.item_id AND t.tag_id=?)'; $bind[] = $tagId; }
@@ -365,6 +427,9 @@ case 'item_list': {
 
     $off = ($page - 1) * $ps;
     $st = $db->prepare("SELECT i.*, COALESCE(c.category_name,'') category_name,
+                        (SELECT CASE WHEN g.parent_id>0 THEN CONCAT(gp.group_name,' › ',g.group_name) ELSE g.group_name END
+                           FROM purchase_group g LEFT JOIN purchase_group gp ON gp.group_id=g.parent_id
+                           WHERE g.group_id=i.group_id) group_label,
                         (SELECT COUNT(*) FROM purchase_spec s WHERE s.item_id=i.item_id AND s.is_active=1) spec_cnt,
                         (SELECT COALESCE(SUM(si.qty),0) FROM stock_items si
                           JOIN purchase_spec s3 ON s3.spec_id=si.purchase_spec_id
@@ -447,18 +512,24 @@ case 'item_save': {
     }
     if ($name === '' || $catId <= 0) jerr($byPurpose ? '請輸入品項名稱' : '請選擇類別並輸入品項名稱');
     $tagIds = array_map('intval', pjson('tag_ids'));
+    $groupId = pint('group_id') ?: null;   // 大類／小類，可不設定
+    if ($groupId) {
+        $gq = $db->prepare("SELECT 1 FROM purchase_group WHERE group_id=? AND is_active=1");
+        $gq->execute([$groupId]);
+        if (!$gq->fetchColumn()) jerr('所選的大類／小類不存在或已停用');
+    }
     $db->beginTransaction();
     if ($itemId > 0) {
-        $db->prepare("UPDATE purchase_item SET category_id=?, purpose_type=?, item_name=?, default_unit_id=?, default_vendor_id=?,
+        $db->prepare("UPDATE purchase_item SET group_id=?, category_id=?, purpose_type=?, item_name=?, default_unit_id=?, default_vendor_id=?,
                       default_vendor_name=?, note=?, is_active=?, Modified_By=? WHERE item_id=?")
-           ->execute([$catId, $ptype, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
+           ->execute([$groupId, $catId, $ptype, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
                       pv('default_vendor_name') ?: null, pv('note') ?: null, pint('is_active', 1), $uid, $itemId]);
     } else {
         // 用途類別歸類的品項用「PU」開頭的採購用編號，與庫存類別的編號分開
         $code = purchase_next_item_code($db, $byPurpose ? 0 : $catId);
-        $db->prepare("INSERT INTO purchase_item (item_code, category_id, purpose_type, item_name, default_unit_id,
-                      default_vendor_id, default_vendor_name, note, Created_By) VALUES (?,?,?,?,?,?,?,?,?)")
-           ->execute([$code, $catId, $ptype, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
+        $db->prepare("INSERT INTO purchase_item (item_code, group_id, category_id, purpose_type, item_name, default_unit_id,
+                      default_vendor_id, default_vendor_name, note, Created_By) VALUES (?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$code, $groupId, $catId, $ptype, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
                       pv('default_vendor_name') ?: null, pv('note') ?: null, $uid]);
         $itemId = (int)$db->lastInsertId();
     }
@@ -566,8 +637,15 @@ case 'spec_search': {
         // 逐字拆開 AND 比對，讓「鑽頭 5」找得到 鑽頭 Ø5
         foreach (preg_split('/\s+/', $kw) as $w) {
             if ($w === '') continue;
-            $where[] = "(i.item_name LIKE ? OR i.item_code LIKE ? OR s.spec_text LIKE ? OR s.spec_code LIKE ?)";
-            $lk = '%' . $w . '%'; array_push($bind, $lk, $lk, $lk, $lk);
+            if ($w[0] === '#' || mb_substr($w, 0, 1) === '＃') {
+                $where[] = "EXISTS (SELECT 1 FROM purchase_item_tag it2 JOIN purchase_tag t2 ON t2.tag_id=it2.tag_id
+                            WHERE it2.item_id=i.item_id AND t2.tag_name LIKE ?)";
+                $bind[] = '%' . mb_substr($w, 1) . '%';
+                continue;
+            }
+            $where[] = "(i.item_name LIKE ? OR i.item_code LIKE ? OR s.spec_text LIKE ? OR s.spec_code LIKE ?
+                         OR EXISTS (SELECT 1 FROM purchase_spec_vendor sv2 WHERE sv2.spec_id=s.spec_id AND sv2.vendor_part_no LIKE ?))";
+            $lk = '%' . $w . '%'; array_push($bind, $lk, $lk, $lk, $lk, $lk);
         }
     }
     if ($catId > 0) { $where[] = 'i.category_id=?'; $bind[] = $catId; }
@@ -836,7 +914,7 @@ case 'req_export': {
     $ps     = in_array((int)($_GET['page_size'] ?? 10), [5, 10, 20, 50], true) ? (int)$_GET['page_size'] : 10;
 
     $where = ['r.is_active=1']; $bind = [];
-    if ($scope === 'mine')       { $where[] = 'r.requester_id=?'; $bind[] = $uid; }
+    if ($scope === 'mine')       { $where[] = '(r.requester_id=? OR r.proxy_by_id=?)'; array_push($bind, $uid, $uid); }
     elseif ($scope === 'buy')    { if (!$perms['canBuy']) jerr('無採購作業權限', 403);
                                    $where[] = "r.status IN ('submitted','approved','ordered','partial')"; }
     elseif ($scope === 'sign')   { $where[] = "r.status='quoted'"; }
@@ -844,7 +922,7 @@ case 'req_export': {
                                    $where[] = "r.pay_status='unpaid' AND r.status IN ('ordered','partial','received','closed')"; }
     elseif ($scope === 'all')    { if (!$perms['canView']) jerr('無「檢閱全部單據」權限', 403); }
     // 認不出來的 scope 一律退回只看自己的（fail-closed，不可變成看全部）
-    else                         { $where[] = 'r.requester_id=?'; $bind[] = $uid; }
+    else                         { $where[] = '(r.requester_id=? OR r.proxy_by_id=?)'; array_push($bind, $uid, $uid); }
     if ($status !== '' && isset(PURCHASE_STATUS[$status])) { $where[] = 'r.status=?'; $bind[] = $status; }
     if ($pay !== '')  { $where[] = 'r.pay_status=?'; $bind[] = $pay; }
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $df)) { $where[] = 'DATE(r.Created_At)>=?'; $bind[] = $df; }
@@ -971,7 +1049,7 @@ case 'req_detail': {
     $st->execute([$reqId]);
     $req['approvals'] = $st->fetchAll(PDO::FETCH_ASSOC);
 
-    $isOwner = ((int)$req['requester_id'] === $uid);
+    $isOwner = ((int)$req['requester_id'] === $uid || (int)($req['proxy_by_id'] ?? 0) === $uid);
     $req['can'] = [
         // 申請內容只有申請人本人能改（且限尚未進入採購流程）。採購人員一律不得修改申請單，
         // 他們買到什麼寫在 buy_* 那一層（詢價頁）。系統管理者保留更正權限。
@@ -1072,10 +1150,25 @@ case 'req_save': {
     $applyDate = pdate('apply_date') ?: ($reqId > 0 ? (string)(purchase_load_req($db, $reqId)['apply_date'] ?: $today) : $today);
     if ($applyDate > $today) jerr('申請日期不可晚於今天');
 
+    // 替別人補單：只有「補單」權限者可改申請人；單據記錄申請人＝被補單者，補單人另存（proxy_by_*）
+    $rq = ['id' => $uid, 'name' => $uname, 'dept_id' => $u['dept_id'], 'dept_name' => $u['dept_name']];
+    $pxId = pint('requester_id');
+    if ($pxId > 0 && $pxId !== $uid) {
+        if (!$perms['canProxy']) jerr('沒有替別人補單的權限', 403);
+        $pq = $db->prepare("SELECT u.id, u.user_cname, m.department_id, COALESCE(d.name,'') dn
+                            FROM user u
+                            LEFT JOIN user_department_position_map m ON m.user_id=u.id AND m.is_main=1
+                            LEFT JOIN department d ON d.id=m.department_id
+                            WHERE u.id=? AND u.state=1 LIMIT 1");
+        $pq->execute([$pxId]);
+        $pr = $pq->fetch(PDO::FETCH_ASSOC);
+        if (!$pr) jerr('找不到該申請人（可能已離職）');
+        $rq = ['id' => (int)$pr['id'], 'name' => (string)$pr['user_cname'], 'dept_id' => $pr['department_id'], 'dept_name' => $pr['dn']];
+    }
     $db->beginTransaction();
     if ($reqId > 0) {
         $req = purchase_load_req($db, $reqId);
-        $isOwner = ((int)$req['requester_id'] === $uid);
+        $isOwner = ((int)$req['requester_id'] === $uid || (int)($req['proxy_by_id'] ?? 0) === $uid);
         // 採購人員不得改申請內容（連 canBuy 都不行）；他們的資料寫在 buy_* 那一層
         if (!($perms['isAdmin'] || ($isOwner && $req['status'] === 'submitted'))) {
             $db->rollBack();
@@ -1090,19 +1183,23 @@ case 'req_save': {
                       ...purchase_purpose_vals($pp),
                       $dvH['id'] ?? null, $dvH['name'] ?? null,
                       $urgent, $uid, $reqId]);
+        if ($pxId > 0 && $perms['canProxy'] && $rq['id'] !== (int)$req['requester_id']) {
+            $db->prepare("UPDATE purchase_request SET requester_id=?, requester_name=?, dept_id=?, dept_name=?, proxy_by_id=?, proxy_by_name=? WHERE req_id=?")
+               ->execute([$rq['id'], $rq['name'], $rq['dept_id'], $rq['dept_name'], $uid, $uname, $reqId]);
+        }
         $db->prepare("DELETE FROM purchase_request_item WHERE req_id=? AND qty_received=0")->execute([$reqId]);
         $reqNo = $req['req_no'];
     } else {
         $reqNo = purchase_next_req_no($db);
         $db->prepare("INSERT INTO purchase_request (req_no, title, dept_id, dept_name, requester_id, requester_name,
                       need_date, reason, apply_date, " . implode(', ', purchase_purpose_cols()) . ",
-                      designated_vendor_id, designated_vendor_name, is_urgent, status, Created_By)
-                      VALUES (?,?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?,?,?, 'submitted', ?)")
-           ->execute([$reqNo, $title, $u['dept_id'], $u['dept_name'], $uid, $uname,
+                      designated_vendor_id, designated_vendor_name, is_urgent, status, Created_By, proxy_by_id, proxy_by_name)
+                      VALUES (?,?,?,?,?,?,?,?,?," . str_repeat('?,', count(purchase_purpose_cols())) . "?,?,?, 'submitted', ?,?,?)")
+           ->execute([$reqNo, $title, $rq['dept_id'], $rq['dept_name'], $rq['id'], $rq['name'],
                       pdate('need_date'), pv('reason') ?: null, $applyDate,
                       ...purchase_purpose_vals($pp),
                       $dvH['id'] ?? null, $dvH['name'] ?? null,
-                      $urgent, $uid]);
+                      $urgent, $uid, $rq['id'] !== $uid ? $uid : null, $rq['id'] !== $uid ? $uname : null]);
         $reqId = (int)$db->lastInsertId();
     }
 
@@ -1150,7 +1247,7 @@ case 'req_save': {
         if (!$targets) $targets = purchase_role_users($db, 'purchase_admin');
         purchase_notify($db, $targets, 'PURCHASE_NEW', $reqId,
             ($urgent ? '【急】' : '') . '新採購申請：' . $reqNo,
-            $uname . ' 提出採購申請 ' . $reqNo . '（' . $title . '）'
+            ($rq['id'] !== $uid ? $uname . ' 代 ' . $rq['name'] . ' 補單：' : $uname . ' 提出採購申請 ') . $reqNo . '（' . $title . '）'
             . '，用途：' . PURCHASE_PURPOSE_TYPES[$pp['type']] . ' ' . (string)$pp['label']
             . '，請詢價。', 'read', $uid);
     }
@@ -1162,7 +1259,7 @@ case 'req_delete': {
     $reason = pv('delete_reason');
     if ($reason === '') jerr('請輸入刪除原因');
     $req = purchase_load_req($db, $reqId);
-    $isOwner = ((int)$req['requester_id'] === $uid);
+    $isOwner = ((int)$req['requester_id'] === $uid || (int)($req['proxy_by_id'] ?? 0) === $uid);
     if (!($perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'))) jerr('無刪除權限或此單已進入採購流程', 403);
     $st = $db->prepare("SELECT COALESCE(SUM(qty_received),0) FROM purchase_request_item WHERE req_id=?");
     $st->execute([$reqId]);
