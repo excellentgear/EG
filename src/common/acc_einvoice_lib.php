@@ -14,12 +14,14 @@ require_once __DIR__ . '/order_as_tag_lib.php';
 /** 管理員設定（system_settings）：每張電子發票筆數上限、開立日期可往前幾天 */
 function acc_einv_settings(PDO $db): array
 {
-    $out = ['max_rows' => 36, 'back_days' => 6, 'time' => '18:30'];
+    $out = ['max_rows' => 36, 'back_days' => 6, 'time' => '18:30', 'backfill' => false];
     try {
         $st = $db->query("SELECT setting_key, setting_value FROM system_settings
-                          WHERE setting_key IN ('acc_einv_max_rows','acc_einv_back_days','acc_einv_time')");
+                          WHERE setting_key IN ('acc_einv_max_rows','acc_einv_back_days','acc_einv_time','acc_einv_backfill_date')");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $v = trim((string)$r['setting_value']);
+            // 補帳模式：只在「設定當天」有效，隔天自動失效（需重新勾選）
+            if ($r['setting_key'] === 'acc_einv_backfill_date') { $out['backfill'] = ($v === date('Y-m-d')); continue; }
             if ($r['setting_key'] === 'acc_einv_time') { if (acc_einv_time_ok($v)) $out['time'] = $v; continue; }
             if (!ctype_digit($v)) continue;
             if ($r['setting_key'] === 'acc_einv_max_rows' && (int)$v >= 1)  $out['max_rows']  = min(500, (int)$v);
@@ -35,7 +37,7 @@ function acc_einv_time_ok(string $t): bool
     return (bool)preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $t);
 }
 
-function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, string $uname, $time = null): array
+function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, string $uname, $time = null, $backfill = null): array
 {
     $maxRows = trim((string)$maxRows); $backDays = trim((string)$backDays);
     if (!ctype_digit($maxRows) || (int)$maxRows < 1 || (int)$maxRows > 500) return ['success' => false, 'message' => '每張發票筆數上限須為 1~500 的整數'];
@@ -49,17 +51,21 @@ function acc_einv_settings_save(PDO $db, $maxRows, $backDays, string $uid, strin
         if (!acc_einv_time_ok(trim((string)$time))) return ['success' => false, 'message' => '發票時間格式須為 HH:MM（例 18:30）'];
         $st->execute(['acc_einv_time', trim((string)$time), (int)$uid, $uname]);
     }
+    if ($backfill !== null) {
+        $st->execute(['acc_einv_backfill_date', ((string)$backfill === '1') ? date('Y-m-d') : '', (int)$uid, $uname]);
+    }
     return ['success' => true, 'message' => '已儲存', 'settings' => acc_einv_settings($db)];
 }
 
 /** 開立日期可選範圍：今天往前最多 N 天（管理員設定）、往後到「今天所在月份」月底 */
 function acc_einv_date_range(?PDO $db = null, ?string $today = null): array
 {
-    $back = $db ? acc_einv_settings($db)['back_days'] : 6;
+    $cfg = $db ? acc_einv_settings($db) : ['back_days' => 6, 'backfill' => false];
+    $back = $cfg['back_days'];
     $t = new DateTime($today ?: date('Y-m-d'));
-    $min = (clone $t)->modify('-' . $back . ' days')->format('Y-m-d');
+    $min = $cfg['backfill'] ? '2000-01-01' : (clone $t)->modify('-' . $back . ' days')->format('Y-m-d');
     $max = $t->format('Y-m-t');
-    return ['min' => $min, 'max' => $max, 'today' => $t->format('Y-m-d'), 'back_days' => $back];
+    return ['min' => $min, 'max' => $max, 'today' => $t->format('Y-m-d'), 'back_days' => $back, 'backfill' => (bool)$cfg['backfill']];
 }
 
 /** 驗證開立日期；不合法回錯誤字串，合法回 null */

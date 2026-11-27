@@ -596,7 +596,7 @@ case 'inv_einv_settings_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!$perms['canAdmin']) acc_err('只有會計管理員可以修改設定', 403);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
-    $r = acc_einv_settings_save($db, $_POST['max_rows'] ?? '', $_POST['back_days'] ?? '', (string)$uid, (string)($_SESSION['userName'] ?? ''), $_POST['time'] ?? null);
+    $r = acc_einv_settings_save($db, $_POST['max_rows'] ?? '', $_POST['back_days'] ?? '', (string)$uid, (string)($_SESSION['userName'] ?? ''), $_POST['time'] ?? null, $_POST['backfill'] ?? null);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

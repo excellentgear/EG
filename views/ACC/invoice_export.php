@@ -235,7 +235,7 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
         <?php endif; ?>
         <a href="erp_stmt_import.php" style="text-decoration:none;"><button type="button"><i class="fa fa-upload"></i> 匯入ERP對帳單</button></a>
         <a href="voucher.php" style="text-decoration:none;"><button type="button"><i class="fa fa-book"></i> 傳票管理</button></a>
-        <a href="customer_invoice_data.php" style="text-decoration:none;">
+        <a href="customer_invoice_data.php" target="_blank" rel="noopener" style="text-decoration:none;">
           <button type="button"><i class="fa fa-id-card-o"></i> 去補客戶發票資料</button></a>
       </div>
 
@@ -411,6 +411,10 @@ table.a-t tbody tr.voided{color:#b09a86;text-decoration:line-through;}
       <label>開立日期可往前幾天</label><br>
       <input type="number" id="cfgBackDays" min="0" max="60" step="1" style="width:120px;"> 天
       <div style="font-size:12px;color:#8a6d45;">往後固定到「今天所在月份」月底。</div>
+    </div>
+    <div style="margin-top:12px;padding:8px 10px;background:#FFF3D6;border:1px solid #F0A24B;border-radius:6px;">
+      <label style="cursor:pointer;margin:0;"><input type="checkbox" id="cfgBackfill"> 開補帳模式（限今天）</label>
+      <div style="font-size:12px;color:#8a6d45;">勾選後，<b>今天</b>開立日期不受「可往前幾天」限制（補舊帳用）；隔天自動失效，需要時要再來勾選一次。</div>
     </div>
   </div>
   <div class="m-foot"><button data-close="mkEinvCfg">取消</button>
@@ -788,14 +792,14 @@ function openEinv(ids){
     else if(ds.some(function(x){ return x!==ds[0]; })) toast('選取的發票開立日期不一致，預覽先用第一張的 '+esc(ds[0])+'，請確認', true);
     $('#einvDate').attr({min:r.min,max:r.max}).val(useD);
     $('#einvTime').val((r.settings&&r.settings.time)||'18:30');
-    CAN_CFG=r.can_admin; $('#einvRange').text('可選 '+r.min+' ~ '+r.max+'（往前最多 '+r.back_days+' 天，往後到本月月底）');
+    CAN_CFG=r.can_admin; $('#einvRange').text('可選 '+r.min+' ~ '+r.max+(r.backfill?'（今日補帳模式：往前不限，往後到本月月底）':'（往前最多 '+r.back_days+' 天，往後到本月月底）'));
     openMask('mkEinv'); einvLoad();
   });
 }
 $('#btnEinvCfg').on('click',function(){
   $.getJSON(API,{action:'inv_einv_range'},function(r){
     if(!r.ok){ toast(esc(r.error||'讀取失敗'), true); return; }
-    $('#cfgMaxRows').val(r.settings.max_rows); $('#cfgBackDays').val(r.settings.back_days); $('#cfgTime').val(r.settings.time||'18:30');
+    $('#cfgMaxRows').val(r.settings.max_rows); $('#cfgBackDays').val(r.settings.back_days); $('#cfgTime').val(r.settings.time||'18:30'); $('#cfgBackfill').prop('checked',!!r.settings.backfill);
     openMask('mkEinvCfg');
   });
 });
@@ -804,7 +808,7 @@ $('#btnEinvCfgSave').on('click',function(){
   if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(tm)){ toast('發票時間格式須為 HH:MM（例 18:30）', true); return; }
   if(!/^\d+$/.test(mr)||+mr<1||+mr>500){ toast('每張發票筆數上限須為 1~500 的整數', true); return; }
   if(!/^\d+$/.test(bd)||+bd>60){ toast('可往前開立天數須為 0~60 的整數', true); return; }
-  $.post(API+'?action=inv_einv_settings_save',{csrf:CSRF,max_rows:mr,back_days:bd,time:tm},function(r){
+  $.post(API+'?action=inv_einv_settings_save',{csrf:CSRF,max_rows:mr,back_days:bd,time:tm,backfill:$('#cfgBackfill').is(':checked')?1:0},function(r){
     if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
     closeMask('mkEinvCfg'); toast('已儲存電子發票設定');
   },'json').fail(function(x){ var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true); });
