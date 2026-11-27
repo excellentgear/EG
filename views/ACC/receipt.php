@@ -213,6 +213,8 @@ table.a-t tr.row-sel td{background:#DDEFD0;}
         <input type="text" id="dueKw" placeholder="客戶名稱／客戶ID／發票號碼" style="width:200px;">
         <label><input type="checkbox" id="dueOver"> 只看已逾期</label>
         <label><input type="checkbox" id="dueGt"> 只看未收餘額＞含稅金額</label>
+        <span style="white-space:nowrap;">含稅金額 <input type="number" id="dueTotMin" placeholder="最小" style="width:90px;"> ~ <input type="number" id="dueTotMax" placeholder="最大" style="width:90px;"></span>
+        <span style="white-space:nowrap;">未收餘額 <input type="number" id="dueOpenMin" placeholder="最小" style="width:90px;"> ~ <input type="number" id="dueOpenMax" placeholder="最大" style="width:90px;"></span>
         <button id="btnDueLoad" class="btn-warm"><i class="fa fa-refresh"></i> 重新載入</button>
         <?php if ($perms['canEdit']): ?>
         <button id="btnDueRecv" disabled><i class="fa fa-money"></i> 登錄收款（勾選的發票）</button>
@@ -479,9 +481,14 @@ function termsHtml(v){
 function renderDue(){
   var kw=$.trim($('#dueKw').val()).toLowerCase().split(/\s+/).filter(Boolean), od=$('#dueOver').is(':checked'), gt=$('#dueGt').is(':checked');
   var list=[];
+  function nv(id){ var s=$.trim($(id).val()).replace(/,/g,''); return s===''||isNaN(Number(s))?null:Number(s); }
+  var rng={tmin:nv('#dueTotMin'),tmax:nv('#dueTotMax'),omin:nv('#dueOpenMin'),omax:nv('#dueOpenMax')};
   dueRows.forEach(function(v,i){
-    if(od && !(v.overdue_days>0)) return;
+    if(od&& !(v.overdue_days>0)) return;
     if(gt && !(Number(v.open)>Number(v.total_amount)+0.005)) return;
+    var tot=Number(v.total_amount)||0, opn=Number(v.open)||0;
+    if(rng.tmin!==null && tot<rng.tmin) return; if(rng.tmax!==null && tot>rng.tmax) return;
+    if(rng.omin!==null && opn<rng.omin) return; if(rng.omax!==null && opn>rng.omax) return;
     if(kw.length){
       var hay=[v.customer_name,v.customer_id,v.invoice_no,v.voucher_no,v.billing_month].join(' ').toLowerCase();
       for(var k=0;k<kw.length;k++) if(hay.indexOf(kw[k])<0) return;
@@ -527,6 +534,7 @@ $(document).on('change','.dck',function(){
 $('#btnDueLoad').on('click',loadDue);
 $('#dueKw').on('input',renderDue).on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); renderDue(); } });
 $('#dueOver,#dueGt').on('change',renderDue);
+$('#dueTotMin,#dueTotMax,#dueOpenMin,#dueOpenMax').on('input',renderDue);
 
 /* 預設近三個月 */
 (function(){
