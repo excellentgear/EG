@@ -78,12 +78,13 @@ function acc_einv_date_check(PDO $db, string $d): ?string
     return null;
 }
 
-/** 品名說明文字：全製→齒輪、砂輪→砂輪、刀具→刀具，其餘（單製／多製程…）→齒輪加工 */
+/** 品名說明文字：全製→齒輪、治具→治具、砂輪→砂輪、刀具→刀具，其餘（單製／多製程…）→齒輪加工 */
 function acc_einv_desc_of_tag(?array $tag): string
 {
     if (!$tag) return '齒輪加工';
     $lab = (string)($tag['proc_name'] ?? '') . (string)($tag['label'] ?? '');
     if (!empty($tag['is_full']) || mb_strpos($lab, '全製') !== false) return '齒輪';
+    if (mb_strpos($lab, '治具') !== false) return '治具';
     if (mb_strpos($lab, '砂輪') !== false) return '砂輪';
     if (mb_strpos($lab, '刀具') !== false) return '刀具';
     return '齒輪加工';
@@ -188,22 +189,23 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
             $tag  = (!$isRet && isset($isOrder[(int)$it['src_id']])) ? ($tags[$isOrder[(int)$it['src_id']]] ?? null) : null;
             if ($it['src_type'] === 'DISC') { $part = ''; $tag = null; }   // 客戶折扣列：品名＝「?%折扣」
             $lines[] = ['part' => $part, 'desc' => $it['src_type'] === 'DISC' ? (string)$it['spec'] : acc_einv_desc_of_tag($tag), 'qty' => (float)$it['qty'],
-                        'amt' => (float)$it['amount'], 'no' => (string)$it['src_no'], 'merged' => 1];
+                        'amt' => (float)$it['amount'], 'no' => (string)$it['src_no'], 'merged' => 1, 'ret' => $isRet];
         }
         $rawCnt = count($lines);
         $mode = '';
 
         // 2) 壓縮：勾「同料號合併一筆」→ 不分出貨單、同料號（同說明）數量與金額加總
+        //    退貨不與出貨混在一起：發票上仍列出退貨，同一退貨單號＋同料號合併成一筆，備註註明退貨單號
         if ($mergePart && $lines) {
             $g = [];
             foreach ($lines as $l) {
-                $k = $l['part'] . '|' . $l['desc'];
+                $k = !empty($l['ret']) ? 'RET|' . $l['no'] . '|' . $l['part'] . '|' . $l['desc'] : $l['part'] . '|' . $l['desc'];
                 if (!isset($g[$k])) { $g[$k] = $l; $g[$k]['nos'] = []; $g[$k]['merged'] = 0; }
                 else { $g[$k]['qty'] += $l['qty']; $g[$k]['amt'] += $l['amt']; }
                 $g[$k]['merged']++;
                 $g[$k]['nos'][$l['no']] = 1;
             }
-            foreach ($g as &$x) { $x['no'] = ''; } unset($x);
+            foreach ($g as &$x) { if (empty($x['ret'])) $x['no'] = ''; } unset($x);   // 退貨保留退貨單號供備註
             $lines = array_values($g); $mode = 'merge_part';
         }
         // 3) 有頁數上限且仍超出 → 同出貨單同料號同數量的金額加總（數量不加總）
@@ -229,7 +231,8 @@ function acc_einv_build(PDO $db, array $ids, string $invDate, string $invTime = 
                 $amt = round($l['amt']);
                 $price = ($l['merged'] > 1 || $mode !== '') ? ($qty != 0 ? round($l['amt'] / $qty, 4) : 0) : ($qty != 0 ? round($l['amt'] / $qty, 4) : 0);
                 $note = '';
-                if ($l['no'] !== '' && $l['no'] !== $lastNo) $note = $l['no'];
+                if (!empty($l['ret']) && $l['no'] !== '') $note = '退貨 ' . $l['no'];   // 退貨列每筆都註明退貨單號
+                elseif ($l['no'] !== '' && $l['no'] !== $lastNo) $note = $l['no'];
                 $lastNo = $l['no'];
                 $rows[] = [
                     $orderNo,
