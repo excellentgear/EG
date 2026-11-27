@@ -211,12 +211,36 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
     $shipT = $rf($shipT); $retT = $rf($retT);
     $total = round($shipT - $retT, 2);
     // 應收：客戶接受扣%且主檔有折扣百分比時，折扣＝（出貨－退貨）未稅淨額 × ?%，借「銷貨折讓」，傳票金額為折扣後
-    $discPct = 0.0; $discAmt = 0.0;
+    $discPct = 0.0; $discAmt = 0.0; $invGroups = null;
     if ($side === 'ar') {
         $discPct = acc_disc_pct_of(acc_customer_of_name($db, $partyId));
         $discAmt = acc_disc_amount($total, $discPct);
         if ($discAmt <= 0) $discPct = 0.0;
-        $total = round($total - $discAmt, 2);
+        // 明細涉及多張發票：每張發票各列一筆應收帳款（備註發票號碼），收入／退回／稅額仍合計
+        $gs = [];
+        foreach ($pick as $it) {
+            $gk = trim((string)($it['invoice_no'] ?? ''));
+            if (!isset($gs[$gk])) $gs[$gk] = ['inv' => $gk, 'ship' => 0.0, 'ret' => 0.0];
+            if ($it['amount'] >= 0) $gs[$gk]['ship'] += $it['amount']; else $gs[$gk]['ret'] += -$it['amount'];
+        }
+        $realInv = array_filter(array_keys($gs), fn($k) => $k !== '');
+        if (count($realInv) > 1) {
+            $gl = []; $okSign = true; $sg = null; $sumDisc = 0.0; $sumNet = 0.0;
+            foreach ($gs as $g) {
+                $g['ship'] = $rf(round($g['ship'], 2)); $g['ret'] = $rf(round($g['ret'], 2));
+                $n = round($g['ship'] - $g['ret'], 2);
+                $g['disc'] = $discPct > 0 ? acc_disc_amount($n, $discPct) : 0.0;
+                $sumDisc += $g['disc']; $sumNet += $n - $g['disc'];
+                $s = $n - $g['disc'] < 0;
+                if ($sg !== null && $sg !== $s) $okSign = false;
+                $sg = $s; $gl[] = $g;
+            }
+            if ($okSign) {          // 各張發票淨額正負不一時退回單一應收列（稅額單行無法同時平衡）
+                $invGroups = $gl; $discAmt = round($sumDisc, 2); $total = round($sumNet, 2);
+                if ($discAmt <= 0) $discPct = 0.0;
+            }
+        }
+        if ($invGroups === null) $total = round($total - $discAmt, 2);
     }
     // 分錄：自動分錄（依選取明細金額重算）＋使用者追加的科目（匯費、手續費…），借貸必須平衡
     [$extraLines, $exErr] = acc_vch_clean_extra($db, $extra);
@@ -251,12 +275,23 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
             $expGroups[$mi]['amount'] = round($expGroups[$mi]['amount'] + $diff, 2);
         }
     }
-    $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT, 'disc' => $discAmt, 'disc_pct' => $discPct], $expGroups);
+    $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT, 'disc' => $discAmt, 'disc_pct' => $discPct, 'groups' => $invGroups], $expGroups);
     // 使用者手改自動分錄的科目：以該列順序為鍵，科目名稱一律取自科目表；借貸方向維持原分錄結構
     foreach ($autoOvr as $ai => $ocode) {
-        if (is_array($ocode)) $ocode = $ocode['code'] ?? '';   // 前端送 {code,name}，名稱一律以科目表為準
+        $omemo = null;
+        if (is_array($ocode)) { $omemo = $ocode['memo'] ?? null; $ocode = $ocode['code'] ?? ''; }   // 前端送 {code,name,memo}，名稱一律以科目表為準
         $ocode = trim((string)$ocode);
-        if ($ocode === '' || !isset($autoLines[(int)$ai])) continue;
+        if (!isset($autoLines[(int)$ai])) continue;
+        // 摘要：可手動補充；系統帶出的「?%折扣」不可刪除、折讓科目不可改
+        $isDisc = ($autoLines[(int)$ai]['code'] === '4103000' && $discAmt > 0);
+        if ($omemo !== null) {
+            $sysM = (string)($autoLines[(int)$ai]['memo'] ?? '');
+            $m = mb_substr(trim((string)$omemo), 0, 100);
+            if ($isDisc && $sysM !== '' && mb_strpos($m, $sysM) !== 0) $m = mb_substr($sysM . ($m !== '' ? ' ' . $m : ''), 0, 100);
+            $autoLines[(int)$ai]['memo'] = $m;
+        }
+        if ($isDisc) continue;
+        if ($ocode === '') continue;
         if (!preg_match('/^\d{4,10}$/', $ocode)) return ['success' => false, 'message' => '分錄第 ' . ((int)$ai + 1) . ' 列：科目代號須為 4~10 位數字'];
         $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$ocode]);
         $oname = (string)$q->fetchColumn();
@@ -728,6 +763,16 @@ function acc_vch_auto_lines(PDO $db, string $side, float $net, ?array $parts = n
         $netAmt = round($ship - $ret - $disc, 2); $neg = $netAmt < 0;
         $tax = (float)round(abs($netAmt) * $rate);
         $L = [];
+        if (!empty($parts['groups'])) {
+            // 多張發票：每張一筆應收帳款，稅額為各張稅額合計
+            $tax = 0.0;
+            foreach ($parts['groups'] as $g) {
+                $gn = round($g['ship'] - $g['ret'] - $g['disc'], 2);
+                $gt = (float)round(abs($gn) * $rate); $tax += $gt;
+                $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $gn < 0 ? 'C' : 'D',
+                        'amount' => round(abs($gn) + $gt, 2), 'auto' => 1, 'memo' => $g['inv'] !== '' ? '發票 ' . $g['inv'] : ''];
+            }
+        } else
         $L[] = ['code' => $cfg['ar_recv']['code'], 'name' => $cfg['ar_recv']['name'], 'side' => $neg ? 'C' : 'D', 'amount' => round(abs($netAmt) + $tax, 2), 'auto' => 1, 'memo' => ''];
         $L[] = ['code' => $cfg['ar_ret']['code'],  'name' => $cfg['ar_ret']['name'],  'side' => 'D', 'amount' => $ret,  'auto' => 1, 'memo' => ''];
         // 客戶折扣：借「銷貨折讓」4103000，備註 ?%折扣

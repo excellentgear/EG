@@ -371,11 +371,28 @@ function autoLines(){
   var P=selParts(), net=selNet(), side=$('#vSide').val(), L=[];
   // 客戶折扣：（出貨－退貨）淨額 × 折扣%，借銷貨折讓 4103000（與後端 acc_vch_auto_lines 同一規則）
   var disc=(side==='ar' && DISCPCT>0 && net>0)?Math.round(net*DISCPCT/100):0;
-  if(disc>0) net=Math.round((net-disc)*100)/100;
+  // 多張發票：每張發票各一筆應收帳款（與後端同一規則；各張淨額正負不一時退回單一列）
+  var IG=null;
+  if(side==='ar'){
+    var gm={}, go=[], mf=$('#jRound').val(), ff=function(n){ return mf==='round'?Math.round(n):(mf==='floor'?Math.floor(n+1e-9):n); };
+    Object.keys(SEL).forEach(function(i){ var it=items[i], k=$.trim(it.invoice_no||''), v=Number(it.amount)||0;
+      if(!gm[k]){ gm[k]={inv:k,ship:0,ret:0}; go.push(k); } if(v>=0) gm[k].ship+=v; else gm[k].ret+=-v; });
+    if(go.filter(function(k){ return k!==''; }).length>1){
+      var ok=true, sg=null, sd=0, sn=0, gl=[];
+      go.forEach(function(k){ var g=gm[k]; g.ship=ff(Math.round(g.ship*100)/100); g.ret=ff(Math.round(g.ret*100)/100);
+        var n=Math.round((g.ship-g.ret)*100)/100; g.disc=(DISCPCT>0&&n>0)?Math.round(n*DISCPCT/100):0; sd+=g.disc; sn+=n-g.disc;
+        var s=(n-g.disc)<0; if(sg!==null&&sg!==s) ok=false; sg=s; gl.push(g); });
+      if(ok){ IG=gl; disc=Math.round(sd*100)/100; net=Math.round(sn*100)/100; }
+    }
+  }
+  if(!IG && disc>0) net=Math.round((net-disc)*100)/100;
   var abs=Math.abs(net), tax=Math.round(abs*TAXR), neg=net<0;
   var A=function(k){ return ACFG[k]||{code:'',name:''}; };
   if(side==='ar'){
     // 收入與退回分開列示、銷項稅額分兩行，應收帳款以含稅淨額入帳
+    if(IG){ tax=0; IG.forEach(function(g){ var gn=Math.round((g.ship-g.ret-g.disc)*100)/100, gt=Math.round(Math.abs(gn)*TAXR); tax+=gt;
+        L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:gn<0?'C':'D',amount:Math.round((Math.abs(gn)+gt)*100)/100,memo:g.inv?('發票 '+g.inv):''}); }); }
+    else
     L.push({code:A('ar_recv').code,name:A('ar_recv').name,side:neg?'C':'D',amount:Math.round((abs+tax)*100)/100});
     L.push({code:A('ar_ret').code,name:A('ar_ret').name,side:'D',amount:P.ret});
     L.push({code:'4103000',name:'銷貨折讓',side:'D',amount:disc,memo:disc>0?(String(Math.round(DISCPCT*1000)/1000)+'%折扣'):''});
