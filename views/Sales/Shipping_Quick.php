@@ -978,7 +978,12 @@ function bbBtn(bomNo){
     + '<i class="fa fa-link"></i> 綁定舊出貨單</button>' : '';
 }
 var BB = {bom:'', ships:[], alts:[], fromBom:false};
-$(document).on('click','.ub-ship',function(e){ e.stopPropagation(); if(!CAN_BIND_OLD) return; var b=String($(this).data('bom')||''); if(!b){ toast('這張訂單還沒有製令，無法綁定舊出貨單', true); return; } BB.fromBom=true; openBomBind(b, []); });
+$(document).on('click','.ub-ship',function(e){ e.stopPropagation(); if(!CAN_BIND_OLD) return; var b=String($(this).data('bom')||''); if(!b){
+    /* 沒有製令（外購／現貨／尚未建製令）：舊出貨單直接綁到訂單，改開「舊資料訂單回填」並預選這個料號 */
+    var rr=rows[+$(this).closest('tr').data('i')]||{};
+    if(!$('#btnMatch').length){ toast('你沒有「舊資料訂單回填」的權限，無法綁定舊出貨單', true); return; }
+    window.SQ_PRE_PART=String(rr.d_id||''); $('#btnMatch').click(); return;
+  } BB.fromBom=true; openBomBind(b, []); });
 $(document).on('click','.btn-bb',function(){ BB.fromBom = true; openBomBind(String($(this).data('bom')), []); });
 /* 一般快速出貨：只勾一筆訂單、且這張訂單的製令底下有「還沒綁訂單」的同料號舊出貨時，才出現底部的綁定鈕 */
 var bbProbeKey = '';
