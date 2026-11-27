@@ -159,15 +159,21 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 
     <div style="color:#8a6d45;font-size:12.5px;margin-bottom:6px;">
       ①會先依 ERP 更正單價、補上網頁漏掉的出貨明細，再把與 ERP 一致的明細標成「已對到」暫存；點客戶名稱可另開分頁核對（核對完回來按「重新整理狀態」）。
-      ②只鎖已對到的明細，沒對到的會移出底稿。③發票日期可各別填。④傳票需填 ERP 傳票號碼（只填 1~3 碼＝流水號，年月日取自傳票日期）。
+      ②只鎖已對到的明細，沒對到的會移出底稿。③發票日期可各別填。④傳票只需填 ERP 流水號（1~3 碼，欄位下方即時顯示完整號碼，年月日取自該列傳票日期），填完離開欄位會依號碼由舊到新排序。發票號碼可選填（2 英文＋8 數字），有填就直接標為已開立。上方日期改了就全部套用同一天。
       金額欄「ERP 檔」是檔內明細合計；「已對到」是網頁對帳底稿中已勾選對到的明細，兩邊不同代表還有差異要核對。</div>
+    <div style="margin-bottom:6px;"><input type="text" id="bbKw" placeholder="篩選：客戶編號／客戶名稱／檔名（可打一部分）" style="width:320px;" autocomplete="off"> <span id="bbCnt" style="color:#8a6d45;font-size:12px;"></span></div>
     <div style="overflow:auto;"><table class="a-t" id="tblB">
       <thead><tr><th style="width:28px;"><input type="checkbox" id="bbAll"></th><th>客戶／檔案</th><th>帳款月</th>
         <th>ERP 未稅</th><th>ERP 稅金</th><th>ERP 含稅</th>
         <th>已對到 未稅</th><th>稅金</th><th>含稅</th><th>未對到</th>
-        <th>底稿</th><th>發票</th><th>傳票</th><th>發票日期</th><th>傳票日期</th><th>ERP傳票號碼</th><th>結果</th></tr></thead>
+        <th>底稿</th><th>發票</th><th>傳票</th><th>發票日期</th><th>發票號碼</th><th>傳票日期</th><th>ERP傳票號碼（只填流水號）</th><th>結果</th></tr></thead>
       <tbody id="bbBody"></tbody></table></div>
   </div>
+</div></div>
+<div class="a-mask" id="mkWarn" style="z-index:100001;"><div class="a-modal narrow">
+  <div class="m-head" style="background:#DD5138;color:#fff;"><i class="fa fa-exclamation-triangle"></i>&nbsp;有對帳單對應不到客戶<span class="m-close" data-close="mkWarn">✕</span></div>
+  <div class="m-body" id="warnBody" style="font-size:13.5px;line-height:1.7;"></div>
+  <div class="m-foot"><button data-close="mkWarn">知道了</button></div>
 </div></div>
 <div class="a-msg" id="msg"></div>
 
@@ -356,10 +362,27 @@ function stTxt(st){
   var vch=(st.vouchers||[]).length?('<span class="pill st-same">'+esc(st.vouchers.map(function(v){return v.voucher_no||'(未填號)';}).join('、'))+'</span>'):'—';
   return {sheet:'<span class="pill '+(st.sheet_status==='confirmed'?'st-locked':(st.sheet_status==='draft'?'st-price':'st-site_only'))+'">'+sh+'</span>',inv:inv,vch:vch};
 }
+/* 只輸入 1~3 碼＝流水號 → V-民國年3碼＋MMDD＋流水3碼（年月日取自該列傳票日期）；其餘（7／10 碼或完整號碼）交後端補齊 */
+function vFull(r){
+  var n=String(r.vch_no||'').trim().toUpperCase(), d=String(r.vch_date||'');
+  if(!n) return '';
+  var m=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(/^\d{1,3}$/.test(n)&&m) return 'V-'+('00'+(parseInt(m[1],10)-1911)).slice(-3)+m[2]+m[3]+('00'+n).slice(-3);
+  if(/^\d{10}$/.test(n)) return 'V-'+n;
+  if(/^\d{7}$/.test(n)&&m) return 'V-'+('00'+(parseInt(m[1],10)-1911)).slice(-3)+n;
+  return n;
+}
+function sortByVch(){   // 有傳票號碼者由舊到新（號碼小到大），沒填的排最後；同號依原順序
+  var o=BR.map(function(r,i){ return {r:r,i:i,k:vFull(r)}; });
+  o.sort(function(a,b){ if(!a.k&&!b.k) return a.i-b.i; if(!a.k) return 1; if(!b.k) return -1; return a.k<b.k?-1:(a.k>b.k?1:a.i-b.i); });
+  BR=o.map(function(x){ return x.r; });
+}
 function bRender(){
-  var h='';
+  var h='', kw=($('#bbKw').val()||'').trim().toLowerCase(), shown=0;
   BR.forEach(function(r,i){
-    if(!r.ok){ h+='<tr><td></td><td class="l" colspan="15" style="color:#DD5138;">'+esc(r.file_name)+'：'+esc(r.error||'讀取失敗')+'</td><td></td></tr>'; return; }
+    if(kw && (String(r.customer_id||'')+' '+String(r.party_id||'')+' '+String(r.customer_name||'')+' '+String(r.file_name||'')).toLowerCase().indexOf(kw)<0) return;
+    shown++;
+    if(!r.ok){ h+='<tr><td></td><td class="l" colspan="16" style="color:#DD5138;">'+esc(r.file_name)+'：'+esc(r.error||'讀取失敗')+'</td><td></td></tr>'; return; }
     var st=r.status, t=stTxt(st), ok=!!st&&st.sheet_status!=='none';
     var diff=(ok&&r.net!=null)?(st.net-r.net):0;
     h+='<tr data-i="'+i+'"><td><input type="checkbox" class="bck"'+(r.sel?' checked':'')+'></td>'
@@ -371,16 +394,24 @@ function bRender(){
       +'<td class="r'+(ok&&st.unchecked_cnt?' chg':'')+'">'+(ok?st.unchecked_cnt:'')+'</td>'
       +'<td>'+t.sheet+'</td><td>'+t.inv+'</td><td>'+t.vch+'</td>'
       +'<td><input type="date" class="bdi" value="'+esc(r.inv_date||'')+'" style="width:132px;"></td>'
+      +'<td><input type="text" class="bin" value="'+esc(r.inv_no||'')+'" style="width:110px;text-transform:uppercase;" maxlength="10" autocomplete="off" placeholder="AB12345678"></td>'
       +'<td><input type="date" class="bdv" value="'+esc(r.vch_date||'')+'" style="width:132px;"></td>'
-      +'<td><input type="text" class="bvn" value="'+esc(r.vch_no||'')+'" style="width:110px;" maxlength="12" autocomplete="off"></td>'
-      +'<td class="l" style="font-size:12px;color:'+(r.bad?'#DD5138':'#5b3a1e')+';">'+esc(r.msg||'')+'</td></tr>';
+      +'<td><input type="text" class="bvn" value="'+esc(r.vch_no||'')+'" style="width:84px;" maxlength="12" autocomplete="off" placeholder="流水號">'
+      +'<div class="bvf" style="font-size:11px;color:#8a6d45;">'+esc(vFull(r))+'</div></td>'
+      +'<td class="l" style="font-size:12px;color:'+((r.bad||(r.warn&&!r.msg))?'#DD5138':'#5b3a1e')+';">'+(r.warn?'<b>⚠ 對應不到：</b>':'')+esc(r.msg||r.warn||'')+'</td></tr>';
   });
-  $('#bbBody').html(h||'<tr><td colspan="17" style="padding:20px;color:#8a6d45;">沒有資料</td></tr>');
+  $('#bbCnt').text(kw?('顯示 '+shown+' / '+BR.length+' 筆'):'');
+  $('#bbBody').html(h||'<tr><td colspan="18" style="padding:20px;color:#8a6d45;">沒有資料</td></tr>');
 }
 $(document).on('change','#bbBody .bck',function(){ BR[$(this).closest('tr').data('i')].sel=this.checked; });
 $(document).on('input change','#bbBody .bdi',function(){ BR[$(this).closest('tr').data('i')].inv_date=this.value; });
-$(document).on('input change','#bbBody .bdv',function(){ BR[$(this).closest('tr').data('i')].vch_date=this.value; });
-$(document).on('input','#bbBody .bvn',function(){ BR[$(this).closest('tr').data('i')].vch_no=this.value; });
+$(document).on('input change','#bbBody .bdv',function(){ var r=BR[$(this).closest('tr').data('i')]; r.vch_date=this.value; $(this).closest('tr').find('.bvf').text(vFull(r)); });
+$(document).on('input','#bbBody .bin',function(){ BR[$(this).closest('tr').data('i')].inv_no=this.value.toUpperCase(); });
+$(document).on('input','#bbBody .bvn',function(){ var r=BR[$(this).closest('tr').data('i')]; r.vch_no=this.value; $(this).closest('tr').find('.bvf').text(vFull(r)); });
+$(document).on('change','#bbBody .bvn',function(){ sortByVch(); bRender(); });   // 打完號碼離開欄位時才依號碼由舊到新排序（邊打邊排會跳行）
+$('#bbKw').on('input',bRender);
+$('#bbVchAll').on('change',function(){ var v=this.value; if(!v) return; BR.forEach(function(r){ r.vch_date=v; }); bRender(); });   // 改上方傳票日期＝全部同一天
+$('#bbInvAll').on('change',function(){ var v=this.value; if(!v) return; BR.forEach(function(r){ r.inv_date=v; }); bRender(); });
 $('#bbAll').on('change',function(){ var on=this.checked; BR.forEach(function(r){ if(r.ok) r.sel=on; }); bRender(); });
 $('#bbInvApply').on('click',function(){ var v=$('#bbInvAll').val(); if(!v) return; BR.forEach(function(r){ r.inv_date=v; }); bRender(); });
 $('#bbVchApply').on('click',function(){ var v=$('#bbVchAll').val(); if(!v) return; BR.forEach(function(r){ r.vch_date=v; }); bRender(); });
@@ -397,6 +428,13 @@ $('#btnBatchUp').on('click',function(){
       BR.forEach(function(x){ x.inv_date=TODAY; x.vch_date=TODAY; x.vch_no=''; });
       $('#bbInvAll,#bbVchAll').val(TODAY);
       bRender(); $('#btnBatchOpen').show(); openMask('mkBatch');
+      var wl=BR.filter(function(x){ return x.warn; });
+      if(wl.length){
+        $('#warnBody').html('<div style="margin-bottom:8px;">以下 <b>'+wl.length+'</b> 份對帳單對應不到網頁的客戶或出貨明細，請先處理再繼續（其餘的仍可照常批次處理）：</div>'
+          +wl.map(function(x){ return '<div style="border-left:3px solid #DD5138;padding:4px 8px;margin-bottom:6px;background:#fff7f3;"><b>'+esc(x.customer_name||x.file_name)+'</b>'
+            +' <span style="color:#8a6d45;font-size:12px;">'+esc(x.file_name)+'</span><div>'+esc(x.warn)+'</div></div>'; }).join(''));
+        openMask('mkWarn');
+      }
       toast('共 '+fl.length+' 個檔案，列出 '+BR.length+' 個'+(done?('；'+done+' 個客戶已鎖帳且發票、傳票都辦完，未列出'):''), false);
       return;
     }
@@ -464,7 +502,7 @@ $('#bbInv').on('click',function(){
   if(bad.length){ toast('請填 '+esc(bad[0].party_id)+' 的發票日期',true); return; }
   stepRun(l,'erp_batch_invoice','批次開發票',function(r){
     if(r.status&&r.status.invoices&&r.status.invoices.length){ setMsg(r,'已開過發票，略過'); return false; }
-    return {party_id:r.party_id,bm:r.bm,date:r.inv_date};
+    return {party_id:r.party_id,bm:r.bm,date:r.inv_date,invoice_no:String(r.inv_no||'').trim()};
   },function(x){ return x.message||'已建立發票'; });
 });
 $('#bbVch').on('click',function(){
@@ -473,7 +511,7 @@ $('#bbVch').on('click',function(){
   if(bad.length){ toast('請填 '+esc(bad[0].party_id)+' 的傳票日期與 ERP 傳票號碼',true); return; }
   stepRun(l,'erp_batch_voucher','批次轉傳票',function(r){
     if(r.status&&r.status.vouchers&&r.status.vouchers.length){ setMsg(r,'已有傳票，略過'); return false; }
-    return {party_id:r.party_id,bm:r.bm,date:r.vch_date,voucher_no:r.vch_no};
+    return {party_id:r.party_id,bm:r.bm,date:r.vch_date,voucher_no:vFull(r)};
   },function(x){ return x.message||'已建立傳票'; });
 });
 })(jQuery);

@@ -142,8 +142,10 @@ function acc_erp_batch_lock(PDO $db, string $party, string $bm, ?array $user): a
 }
 
 /** 批次開發票：沿用 acc_create_invoices，建完設定開立日期（先驗日期才建，免得建了又失敗） */
-function acc_erp_batch_invoice(PDO $db, string $party, string $bm, string $invDate, string $userId): array
+function acc_erp_batch_invoice(PDO $db, string $party, string $bm, string $invDate, string $userId, string $invNo = ''): array
 {
+    $invNo = strtoupper(trim($invNo));
+    if ($invNo !== '' && !preg_match('/^[A-Z]{2}[0-9]{8}$/', $invNo)) return ['success' => false, 'message' => '發票號碼格式不正確（2 個英文字母＋8 位數字）'];
     if ($e = acc_einv_date_check($db, $invDate)) return ['success' => false, 'message' => $e];
     $r = acc_create_invoices($db, [['customer' => $party, 'billing_month' => $bm]], $userId);
     if (empty($r['success']) || empty($r['invoices'])) {
@@ -155,7 +157,13 @@ function acc_erp_batch_invoice(PDO $db, string $party, string $bm, string $invDa
     $ph = implode(',', array_fill(0, count($ids), '?'));
     $db->prepare("UPDATE acc_invoice SET invoice_date=?, Modified_By=?, Modified_At=NOW() WHERE invoice_id IN ($ph) AND status IN ('draft','exported')")
        ->execute(array_merge([$invDate, $userId], $ids));
-    return ['success' => true, 'message' => $r['message'], 'invoice_ids' => $ids];
+    $msg = $r['message'];
+    if ($invNo !== '') {   // 有填發票號碼：直接回填為已開立（與發票頁手動回填同一支）
+        if (count($ids) !== 1) return ['success' => true, 'message' => $msg . '；產生 ' . count($ids) . ' 張發票，發票號碼未回填，請到發票頁逐張填', 'invoice_ids' => $ids];
+        $b = acc_invoice_backfill($db, [['invoice_id' => $ids[0], 'invoice_no' => $invNo, 'invoice_date' => $invDate]], $userId);
+        $msg .= (!empty($b['errors']) ? '；' . implode('；', $b['errors']) : '；已填發票號碼 ' . $invNo);
+    }
+    return ['success' => true, 'message' => $msg, 'invoice_ids' => $ids];
 }
 
 /** 批次轉傳票：該客戶該月份尚未有傳票的明細全部轉入（自動分錄，不加追加科目） */

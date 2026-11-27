@@ -773,6 +773,15 @@ case 'erp_batch_upload': {
                 } else {
                     $row += ['party_id' => $tg['party_id'], 'bm' => $tg['bm'], 'status' => $stx, 'link' => acc_erp_batch_link($tg)];
                 }
+                // 對應不到客戶主檔：出貨單的客戶簡稱與客戶主檔對不起來，發票／傳票的客戶資料（統編、結帳日…）都會套不上
+                $cm = acc_customer_by_name($db);
+                if (!isset($cm[$tg['party_id']])) {
+                    $row['warn'] = '網頁出貨單的客戶「' . $tg['party_id'] . '」在客戶主檔找不到（可能是簡稱與主檔不同），無法取得統編／結帳日，開發票會失敗。'
+                                 . '請到「對帳作業」按「對應到客戶主檔」建立別名後再處理。';
+                }
+            } else {
+                $row['warn'] = '這份對帳單（' . $parsed['customer_name'] . '）無法對應到網頁的出貨明細／客戶：' . ($tg['message'] ?? '')
+                             . '。常見原因：出貨單尚未匯入網頁、客戶簡稱與 ERP 不同、或檔案不是客戶對帳單。';
             }
         } catch (Throwable $e) { $row['error'] = $e->getMessage(); }
         $rows[] = $row;
@@ -816,7 +825,7 @@ case 'erp_batch_lock': case 'erp_batch_invoice': case 'erp_batch_voucher': {
         $r = acc_erp_batch_lock($db, $party, $bm, $u);
     } else {
         if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
-        if ($action === 'erp_batch_invoice') $r = acc_erp_batch_invoice($db, $party, $bm, trim((string)($_POST['date'] ?? '')), (string)$uid);
+        if ($action === 'erp_batch_invoice') $r = acc_erp_batch_invoice($db, $party, $bm, trim((string)($_POST['date'] ?? '')), (string)$uid, (string)($_POST['invoice_no'] ?? ''));
         else $r = acc_erp_batch_voucher($db, $party, $bm, trim((string)($_POST['date'] ?? '')), acc_u8((string)($_POST['voucher_no'] ?? '')), (string)($_SESSION['userName'] ?? $uid));
     }
     if (empty($r['success'])) acc_err($r['message'] ?? '失敗');
