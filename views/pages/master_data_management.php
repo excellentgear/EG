@@ -11301,9 +11301,10 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     <div class="col-md-12">
         <div class="form-group">
             <label>從聯絡人帶入</label>
-            <select class="form-control" id="cf-invoice_contact_pick" onfocus="refreshInvContactPick()" onmousedown="refreshInvContactPick()" onchange="onInvContactPick(this)" data-eg-skip>
-                <option value="">（請選聯絡人，帶入發票收件人／部門／電子發票信箱）</option>
-            </select>
+            <div id="cf-invoice_contact_pick" onmouseenter="refreshInvContactPick()" onfocusin="refreshInvContactPick()" style="border:1px solid #ccc;border-radius:3px;padding:4px 10px;max-height:150px;overflow-y:auto;background:#fff;">
+                <span class="text-muted">（尚無聯絡人）</span>
+            </div>
+            <div class="id-hint" style="margin-top:3px;">可複選：勾選的聯絡人會帶入發票收件人（以「、」串接）、部門與電子發票信箱（以「;」串接）。</div>
         </div>
     </div>
 </div>
@@ -19947,19 +19948,36 @@ function _invContactRows() {
     });
     return out;
 }
+var _invPickChecked = {};   /* 已勾選的聯絡人（key＝姓名|部門|信箱），清單重建時保留勾選 */
+function _invKey(c) { return c.name + '|' + c.dept + '|' + c.email; }
 function refreshInvContactPick() {
-    var sel = document.getElementById('cf-invoice_contact_pick'); if (!sel) return;
-    var cur = sel.value, rows = _invContactRows(), h = '<option value="">（請選聯絡人，帶入發票收件人／部門／電子發票信箱）</option>';
+    var box = document.getElementById('cf-invoice_contact_pick'); if (!box) return;
+    var rows = _invContactRows(), h = '';
     rows.forEach(function(c, i){
-        h += '<option value="'+i+'">'+escHtml((c.dept?c.dept+' ':'')+c.name+(c.email?'　'+c.email:'　（未填信箱）')+(c.inv?'　★發票':''))+'</option>';
+        h += '<label style="display:block;font-weight:normal;margin:2px 0;cursor:pointer;"><input type="checkbox" class="inv-pick" data-i="'+i+'"'+(_invPickChecked[_invKey(c)]?' checked':'')+' style="margin-right:6px;">'
+           + escHtml((c.dept?c.dept+' ':'')+c.name+(c.email?'　'+c.email:'　（未填信箱）')+(c.inv?'　★發票':''))+'</label>';
     });
-    if (sel.getAttribute('data-sig') !== h) { sel.innerHTML = h; sel.setAttribute('data-sig', h); if (cur) sel.value = cur; }
+    if (!h) h = '<span class="text-muted">（尚無聯絡人，請先到「聯絡人」分頁新增）</span>';
+    if (box.getAttribute('data-sig') !== h) {
+        box.innerHTML = h; box.setAttribute('data-sig', h);
+        box.querySelectorAll('.inv-pick').forEach(function(cb){ cb.addEventListener('change', onInvContactPick); });
+    }
 }
-function onInvContactPick(sel) {
-    var c = _invContactRows()[parseInt(sel.value, 10)]; if (!c) return;
+function onInvContactPick() {
+    var rows = _invContactRows(), picked = [];
+    document.querySelectorAll('#cf-invoice_contact_pick .inv-pick').forEach(function(cb){
+        var c = rows[parseInt(cb.getAttribute('data-i'), 10)]; if (!c) return;
+        _invPickChecked[_invKey(c)] = cb.checked;
+        if (cb.checked) picked.push(c);
+    });
+    if (!picked.length) return;
+    var uniq = function(a){ return a.filter(function(v, i){ return v && a.indexOf(v) === i; }); };
     var set = function(id, v){ var e = document.getElementById(id); if (e) e.value = v; };
-    set('cf-invoice_recipient', c.name); set('cf-invoice_dept', c.dept); set('cf-invoice_email', c.email);
-    if (!c.email) alert('這位聯絡人沒有填信箱，電子發票信箱已清空，請到「聯絡人」分頁補上或直接在此輸入。');
+    set('cf-invoice_recipient', uniq(picked.map(function(c){ return c.name; })).join('、'));
+    set('cf-invoice_dept',      uniq(picked.map(function(c){ return c.dept; })).join('、'));
+    set('cf-invoice_email',     uniq(picked.map(function(c){ return c.email; })).join(';'));
+    var noMail = picked.filter(function(c){ return !c.email; }).map(function(c){ return c.name; });
+    if (noMail.length) alert('以下聯絡人沒有填信箱，未帶入電子發票信箱：' + noMail.join('、') + '\n請到「聯絡人」分頁補上或直接在此輸入。');
 }
 function syncContactsHidden() {
     var rows = document.querySelectorAll('#cf-contacts-wrap .contact-row');
