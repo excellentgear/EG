@@ -154,6 +154,8 @@ table.a-t tbody tr:hover{background:#FDF2E0;}
 .od{color:#DD5138;font-weight:bold;}
 table.a-t tr.row-od td{background:#FBE3E0;}
 table.a-t td.over-tot{background:#FFF3C4;}
+table.a-t tr.row-sel td{background:#DDEFD0;}
+#dueBody.has-sel .dck:not(:checked){visibility:hidden;}
 .tk{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;line-height:16px;font-weight:bold;}
 .tk-month{background:#F7E0BD;color:#6B4A1E;}
 .tk-next{background:#F0A24B;color:#4A2A0A;}
@@ -223,7 +225,7 @@ table.a-t td.over-tot{background:#FFF3C4;}
         <div><span class="n bad" id="dueOverCnt">—</span> <span class="l">逾期張數</span></div>
       </div>
       <div class="a-wrap" style="max-height:62vh;overflow:auto;">
-        <table class="a-t"><thead><tr><th style="width:30px;"><input type="checkbox" id="dueAll"></th><th>客戶</th><th>發票號碼</th><th>發票日期</th>
+        <table class="a-t"><thead><tr><th style="width:30px;"></th><th>客戶</th><th>發票號碼</th><th>發票日期</th>
           <th>帳款月份</th><th>請款日期</th><th>傳票號碼</th><th>收帳條件</th><th>應入帳日期</th><th>逾期</th><th>含稅金額</th><th>未收餘額</th></tr></thead>
           <tbody id="dueBody"><tr><td colspan="12" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody></table>
       </div>
@@ -514,12 +516,12 @@ function updDue(){
   var nc=Object.keys(cust).length;
   $('#dueSel').text(k.length?('已選 '+k.length+' 張、'+nf(amt)+' 元'+(nc>1?'（跨 '+nc+' 個客戶，一次只能收一個客戶）':'')):'');
   $('#btnDueRecv').prop('disabled', !k.length || nc!==1);
+  $('#dueBody').toggleClass('has-sel', k.length>0);
+  $('#dueBody tr').each(function(){ $(this).toggleClass('row-sel', !!dueSel[$(this).data('i')]); });
 }
 $(document).on('change','.dck',function(){
-  var i=$(this).closest('tr').data('i'); if(this.checked) dueSel[i]=1; else delete dueSel[i]; updDue();
-});
-$('#dueAll').on('change',function(){
-  var on=this.checked; $('#dueBody .dck').each(function(){ $(this).prop('checked',on); var i=$(this).closest('tr').data('i'); if(on) dueSel[i]=1; else delete dueSel[i]; }); updDue();
+  /* 一次只收一張：勾一筆後其他勾選框隱藏，取消後才恢復 */
+  var i=$(this).closest('tr').data('i'); dueSel={}; if(this.checked) dueSel[i]=1; updDue();
 });
 $('#btnDueLoad').on('click',loadDue);
 $('#dueKw').on('input',renderDue).on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); renderDue(); } });
