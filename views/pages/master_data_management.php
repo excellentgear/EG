@@ -3943,6 +3943,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $where .= " AND settlement_mode = :cf_sm"; $params[':cf_sm'] = $cf_sm;
                 }
             }
+            // 收帳天數篩選：has 有設定／none 未設定／days 依天數／month 月結／next 次月結
+            $cf_nt = trim($_POST['filter_net_type'] ?? '');
+            if ($cf_nt === 'has')        $where .= " AND net_days IS NOT NULL";
+            elseif ($cf_nt === 'none')   $where .= " AND net_days IS NULL";
+            elseif ($cf_nt === 'month')  $where .= " AND net_unit = 'month'";
+            elseif ($cf_nt === 'next')   $where .= " AND net_unit = 'next'";
+            elseif ($cf_nt === 'days')   $where .= " AND net_days IS NOT NULL AND (net_unit IS NULL OR net_unit NOT IN ('month','next'))";
             $cnt = $pdo->prepare("SELECT COUNT(*) FROM customer_list WHERE $where");
             $cnt->execute($params);
             $total = (int)$cnt->fetchColumn();
@@ -10102,6 +10109,13 @@ html, body { background:transparent !important; }
                     <span id="cust-settle-day-wrap" style="display:none;align-items:center;gap:3px;"><input type="number" id="cust-settle-day-input" class="settle-day-input form-control input-sm" placeholder="日" min="1" max="31" style="width:48px;height:24px;font-size:12px;padding:2px 6px;border-radius:10px;text-align:center;" oninput="onCustSettleDayInput(this.value)"><span style="font-size:11px;color:#888;">日</span></span>
                     <span class="fc" data-csettle="EOM" onclick="setCustSettleFilter('EOM',this)">月底</span>
                     <span class="fc" data-csettle="VARIABLE" onclick="setCustSettleFilter('VARIABLE',this)">不固定</span>
+                    <span style="margin-left:12px;font-size:11px;color:#aaa;">收帳天數</span>
+                    <span class="fc active" data-cnet="" onclick="setCustNetFilter('',this)" style="margin-left:4px;">全部</span>
+                    <span class="fc" data-cnet="has" onclick="setCustNetFilter('has',this)">有設定</span>
+                    <span class="fc" data-cnet="none" onclick="setCustNetFilter('none',this)">未設定</span>
+                    <span class="fc" data-cnet="days" onclick="setCustNetFilter('days',this)">依天數</span>
+                    <span class="fc" data-cnet="month" onclick="setCustNetFilter('month',this)">月結</span>
+                    <span class="fc" data-cnet="next" onclick="setCustNetFilter('next',this)">次月結</span>
                 </div>
             </div>
             <div class="data-card">
@@ -13820,7 +13834,7 @@ function deleteGearRow(gearId, dSettingDbId) {
 // ── Filter state ──────────────────────────────────────────
 var _toolFilterInit = function(){ return { kind:'', module:'', type:'', material:'', coating:'', pa:'', boreMin:'', boreMax:'' }; };
 var _partsFilter  = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null, gearPaMin:null, gearPaMax:null };
-var _custFilter   = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null };
+var _custFilter   = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, net_type:'' };
 var _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[], status:'' };
 
 // Palette for workpiece type chips (same logic as maker cat palette, no red)
@@ -15271,13 +15285,18 @@ function setCustFilter(val, el) {
 }
 
 function updateCustClearBtn() {
-    var has = _custFilter.grades.length || _custFilter.industries.length || _custFilter.industrySubs.length || _custFilter.keywords.length || _custFilter.pinnedCustIds.length || (_custFilter.quickKws && _custFilter.quickKws.length) || _custFilter.payment_method || _custFilter.settlement_mode || _custFilter.settlement_day;
+    var has = _custFilter.grades.length || _custFilter.industries.length || _custFilter.industrySubs.length || _custFilter.keywords.length || _custFilter.pinnedCustIds.length || (_custFilter.quickKws && _custFilter.quickKws.length) || _custFilter.payment_method || _custFilter.settlement_mode || _custFilter.settlement_day || _custFilter.net_type;
     var btn = document.getElementById('cust-clear-filter-btn');
     if (btn) btn.style.display = has ? '' : 'none';
 }
 function setCustPayFilter(val, el) {
     _custFilter.payment_method = val;
     document.querySelectorAll('[data-cpay]').forEach(function(c){ c.classList.toggle('active', c.dataset.cpay === val); });
+    updateCustClearBtn(); loadCustomers(1);
+}
+function setCustNetFilter(val, el) {
+    _custFilter.net_type = val;
+    document.querySelectorAll('[data-cnet]').forEach(function(c){ c.classList.toggle('active', c.dataset.cnet === val); });
     updateCustClearBtn(); loadCustomers(1);
 }
 function setCustSettleFilter(val, el) {
@@ -15316,11 +15335,12 @@ function onCustSettleDayInput(val) {
     _custSettleDayTimer = setTimeout(function(){ loadCustomers(1); }, 400);
 }
 function clearCustFilter() {
-    _custFilter = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null };
+    _custFilter = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, net_type:'' };
     var custDayWrap = document.getElementById('cust-settle-day-wrap');
     if (custDayWrap) { custDayWrap.style.display = 'none'; var di = document.getElementById('cust-settle-day-input'); if(di) di.value = ''; }
     document.querySelectorAll('[data-cpay]').forEach(function(c){ c.classList.toggle('active', c.dataset.cpay === ''); });
     document.querySelectorAll('[data-csettle]').forEach(function(c){ c.classList.toggle('active', c.dataset.csettle === ''); });
+    document.querySelectorAll('[data-cnet]').forEach(function(c){ c.classList.toggle('active', c.dataset.cnet === ''); });
     var cgc=document.getElementById('cust-grade-chips'); if(cgc) cgc.innerHTML='';
     // Clear industry sub-row
     var csr = document.getElementById('cust-industry-sub-filter');
@@ -19511,6 +19531,7 @@ function loadCustomers(pg) {
           filter_pinned_cust_ids:_custFilter.pinnedCustIds.join(','),
           filter_payment_method: _custFilter.payment_method,
           filter_settlement_mode: _custFilter.settlement_mode,
+          filter_net_type: _custFilter.net_type||'',
           filter_settlement_day: _custFilter.settlement_day !== null ? _custFilter.settlement_day : '' }).done(function(r) {
         if (!r.success) { showToast(r.message,'error'); return; }
         customersLoaded = true;
