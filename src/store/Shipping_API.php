@@ -282,6 +282,14 @@ case 'order_bom_bind': {
     sq_out(sq_order_bom_bind($db, (int)($_POST['order_id'] ?? 0), $pairs, is_array($u ?? null) ? $u : ['id' => $uid]));
 }
 
+/* ── 外購／現貨：標記訂單免製令（空字串＝取消）── */
+case 'order_src_set': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+    if (!$perms['canBindBom']) sq_err('無設定免製令的權限（需有綁製令權限）', 403);
+    if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+    sq_out(sq_order_src_set($db, (int)($_POST['order_id'] ?? 0), trim((string)($_POST['src'] ?? '')), is_array($u ?? null) ? $u : ['id' => $uid]));
+}
+
 case 'order_bom_auto_preview': {
     if (!$perms['canBindBom']) sq_err('無綁定製令的權限', 403);
     $ids = json_decode($_POST['order_ids'] ?? '[]', true);

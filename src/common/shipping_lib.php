@@ -472,6 +472,66 @@ function sq_order_ids_by_bom_kw(PDO $db, string $kw): array
  *                       include_paused(bool), page(int), per_page(int), sort
  * @return array ['rows'=>分頁後資料, 'total'=>符合筆數, 'summary'=>全部符合條件的合計]
  */
+/* ── 免製令訂單（外購現成品／現貨庫存收費；日後「採購單」也掛在這張表的 ref 欄）──
+   刻意另開小表、不動 order_track（那張表的 Modified_At 是訂單變更比對基準）。DDL 在交易外且只查一次。 */
+function sq_src_kinds(): array
+{
+    return ['buy' => '外購', 'stock' => '現貨', 'po' => '採購單'];
+}
+function sq_src_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        if (!$db->query("SHOW TABLES LIKE 'order_ship_src'")->fetch()) {
+            $db->exec("CREATE TABLE order_ship_src (
+                order_id INT NOT NULL PRIMARY KEY,
+                src VARCHAR(10) NOT NULL,
+                ref VARCHAR(60) NULL,
+                set_by VARCHAR(30) NULL,
+                set_at DATETIME NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) { error_log('[shipping] src ensure: ' . $e->getMessage()); }
+}
+function sq_src_map(PDO $db, array $orderIds): array
+{
+    sq_src_ensure($db);
+    $ids = array_values(array_filter(array_map('intval', $orderIds)));
+    if (!$ids) return [];
+    $out = [];
+    try {
+        $q = $db->query("SELECT order_id, src, ref FROM order_ship_src WHERE order_id IN (" . implode(',', $ids) . ")");
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['order_id']] = $r;
+    } catch (Throwable $e) { return []; }
+    return $out;
+}
+/** 設定／清除（src 空字串＝清除）。 */
+function sq_order_src_set(PDO $db, int $orderId, string $src, array $user): array
+{
+    sq_src_ensure($db);
+    if ($orderId <= 0) return ['success' => false, 'message' => '訂單不正確'];
+    $kinds = sq_src_kinds();
+    if ($src !== '' && !isset($kinds[$src])) return ['success' => false, 'message' => '類型不正確'];
+    $chk = $db->prepare("SELECT Order_oo FROM order_track WHERE Order_id = ?");
+    $chk->execute([$orderId]);
+    $oo = $chk->fetchColumn();
+    if ($oo === false) return ['success' => false, 'message' => '找不到這張訂單'];
+    if ($src === 'po') return ['success' => false, 'message' => '採購單綁定尚未開放'];
+    if ($src !== '') {
+        // 已經綁了製令的訂單不能標成免製令（兩種口徑並存會讓可出量算不清楚）
+        $b = sq_boms_for_orders($db, [$orderId])[$orderId] ?? [];
+        if ($b) return ['success' => false, 'message' => '這張訂單已經綁了製令（' . $b[0]['bom'] . '），不能標成免製令；要改請先解除製令綁定'];
+        $db->prepare("REPLACE INTO order_ship_src (order_id, src, ref, set_by, set_at) VALUES (?,?,NULL,?,NOW())")
+           ->execute([$orderId, $src, (string)($user['id'] ?? '')]);
+    } else {
+        $db->prepare("DELETE FROM order_ship_src WHERE order_id = ?")->execute([$orderId]);
+    }
+    sq_audit($db, 'order_src_set', 'order', (string)$orderId, (string)$oo, ['src' => $src], $user);
+    return ['success' => true, 'message' => $src === '' ? '已取消免製令標記' : ('已標記為「' . $kinds[$src] . '」，可直接出貨不必製令')];
+}
+
 function sq_pending_orders(PDO $db, array $f): array
 {
     // 排除無訂單號／訂單號 NA 的列：多半是廠內治具製作，不是要出給客戶的貨
@@ -552,6 +612,7 @@ function sq_pending_orders(PDO $db, array $f): array
         if ((int)($availMap[$bm]['done'] ?? 0) <= 0) $undoneBoms[] = $bm;
     }
     $progMap = sq_bom_progress_map($db, $undoneBoms);
+    $srcMap  = sq_src_map($db, $orderIds);   // 免製令（外購／現貨）標記
 
     // 刀具詢價「預留待出貨」：貨已到、已預留給這張訂單、還沒開出貨單的數量（tool_inq_alloc kind='hold'）。算進可出量並在畫面標出。
     $toolHold = [];
@@ -605,12 +666,19 @@ function sq_pending_orders(PDO $db, array $f): array
         }
         $hold  = $toolHold[$oid] ?? 0;
         $ready = min($remain, $readyTotal + $hold);
+        // 外購／現貨：不經製令，可出量＝未出量
+        $srcRow = $srcMap[$oid] ?? null;
+        $srcKinds = sq_src_kinds();
+        $shipSrc = ($srcRow && isset($srcKinds[$srcRow['src']])) ? $srcRow['src'] : '';
+        if ($shipSrc !== '') $ready = $remain;
 
         /* 可出量為 0 的原因要講清楚：製令明明已完工、只是被別張出貨吃完了，
            畫面卻寫「無完工」＝使用者一定會以為系統壞掉（2026-09-17 使用者回報）。 */
         $doneSum = array_sum(array_column($bomView, 'done'));
         $readyNote = '';
-        if ($ready <= 0) {
+        if ($shipSrc !== '') {
+            $readyNote = $srcKinds[$shipSrc];
+        } elseif ($ready <= 0) {
             if (!$bomView)          $readyNote = '無製令';
             elseif ($doneSum <= 0)  $readyNote = '無完工';
             else                    $readyNote = '製令已出完';
@@ -655,6 +723,8 @@ function sq_pending_orders(PDO $db, array $f): array
             'bom_count'        => count($bomView),
             'done_qty'         => $doneSum,
             'ready_note'       => $readyNote,
+            'ship_src'         => $shipSrc,
+            'ship_src_label'   => $shipSrc !== '' ? $srcKinds[$shipSrc] : '',
             'proc_brief'       => $procBrief,
         ];
     }

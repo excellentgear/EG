@@ -1110,6 +1110,17 @@ function openOrdBom(oid){
     $('#obList').html(h+'</tbody></table>'); obCount();
   },'json').fail(function(){ $('#obList').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
 }
+/* 外購／現貨：標記訂單免製令（再按「取消」還原） */
+$(document).on('click','.btn-src',function(e){
+  e.stopPropagation(); if(!CAN_BIND_BOM) return;
+  var $b=$(this), oid=+$b.data('oid')||0, src=String($b.data('src')||'');
+  if(src && !confirm('把這張訂單標成「'+(src==='buy'?'外購現成品':'現貨庫存（向客戶收費）')+'」？\n標記後不需要製令，可出量＝未出量。')) return;
+  $b.prop('disabled',true);
+  $.post(API+'?action=order_src_set',{csrf:CSRF,order_id:oid,src:src},function(r){
+    if(!r.ok || r.success===false){ $b.prop('disabled',false); toast(esc(r.message||r.error||'設定失敗'), true); return; }
+    toast(esc(r.message||'已設定')); load();
+  },'json').fail(function(){ $b.prop('disabled',false); toast('設定失敗（網路或伺服器錯誤）', true); });
+});
 $(document).on('click','.ob-unbind',function(){
   var bom=String($(this).data('bom')); if(!confirm('確定解除這張訂單與製令 '+bom+' 的綁定？')) return;
   var $b=$(this).prop('disabled',true);
@@ -1435,12 +1446,17 @@ function render(){
       +'<td class="r">'+np(r.unit_price)+'</td>'
       +'<td class="r amt">'+(s?nf(Math.round(s.qty*r.unit_price)):'')+'</td>'
       +'<td>'+esc(r.delivery_date||'—')+'</td>'
-      +'<td>'+(r.bom_count
+      +'<td>'+(r.ship_src
+          ? '<span class="pill" style="background:#F0A24B;color:#4a2c0a;" title="這張訂單不經製令（外購現成品／現貨收費），可出量＝未出量">'+esc(r.ship_src_label)+'・免製令</span>'
+            + (CAN_BIND_BOM?'<br><button type="button" class="btn-src" data-oid="'+r.order_id+'" data-src="" title="取消免製令標記，回到要有製令才算可出" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#fff;color:#8A5A2B;border-radius:3px;cursor:pointer;">取消</button>':'')
+          : r.bom_count
           ? '<span class="bom-cell">'+r.bom_count+' 張 '+prioPill((r.boms[0]||{}).priority)+'</span>'
             + (r.proc_brief ? '<br><span class="proc-brief" title="未完工製令的目前製程；點製令欄可看每一張的完整狀態">'
                               + esc(r.proc_brief)+'</span>' : '')
             + (CAN_BIND_BOM?'<br><button type="button" class="btn-ob btn-ob-edit" data-oid="'+r.order_id+'" title="綁錯了？看這張訂單目前綁的製令，可解除後重新綁定" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#fff;color:#8A5A2B;border-radius:3px;cursor:pointer;"><i class="fa fa-pencil"></i> 改綁</button>':'')
-          : '<span class="pill p-none">無</span>'+(CAN_BIND_BOM?'<br><button type="button" class="btn-ob" data-oid="'+r.order_id+'" title="這張訂單還沒有製令：列出同客戶同料號的製令，依建議綁定" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#FFF1DA;color:#8A5A2B;border-radius:3px;cursor:pointer;"><i class="fa fa-link"></i> 綁製令</button>':''))+'</td>'
+          : '<span class="pill p-none">無</span>'+(CAN_BIND_BOM?'<br><button type="button" class="btn-ob" data-oid="'+r.order_id+'" title="這張訂單還沒有製令：列出同客戶同料號的製令，依建議綁定" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#FFF1DA;color:#8A5A2B;border-radius:3px;cursor:pointer;"><i class="fa fa-link"></i> 綁製令</button>'
+            +'<br><button type="button" class="btn-src" data-oid="'+r.order_id+'" data-src="buy" title="外購現成品：不需製令，可出量＝未出量" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#fff;color:#8A5A2B;border-radius:3px;cursor:pointer;">外購</button> '
+            +'<button type="button" class="btn-src" data-oid="'+r.order_id+'" data-src="stock" title="現有庫存、向客戶收費：不需製令，可出量＝未出量" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#fff;color:#8A5A2B;border-radius:3px;cursor:pointer;">現貨</button>':''))+'</td>'
       +'</tr>';
   });
   $('#tbody').html(h);
