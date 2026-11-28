@@ -726,9 +726,20 @@ case 'erp_stmt_apply': {
     $stash = acc_erp_stash_get($token, $uid);
     if (!$stash) acc_err('比對結果已逾時，請重新上傳檔案');
     $ids = json_decode($_POST['is_ids'] ?? '[]', true);
-    if (!is_array($ids) || !$ids) acc_err('沒有勾選要更新的明細');
-    $r = acc_erp_stmt_apply($db, $stash, $ids, (string)($_SESSION['userName'] ?? $uid));
+    $irIds = json_decode($_POST['ir_ids'] ?? '[]', true);
+    if (!is_array($ids)) $ids = [];
+    if (!is_array($irIds)) $irIds = [];
+    if (!$ids && !$irIds) acc_err('沒有勾選要更新的明細');
+    $uname = (string)($_SESSION['userName'] ?? $uid);
+    $r = $ids ? acc_erp_stmt_apply($db, $stash, $ids, $uname) : ['success' => true, 'updated' => 0, 'skipped' => []];
     if (!$r['success']) acc_err($r['message']);
+    if ($irIds) {
+        $r2 = acc_erp_stmt_apply_returns($db, $stash, $irIds, $uname);
+        if (!$r2['success']) acc_err($r2['message']);
+        $r['updated'] = (int)$r['updated'] + (int)$r2['updated'];
+        $r['skipped'] = array_merge($r['skipped'] ?? [], $r2['skipped']);
+        $r['message'] = '已更新 ' . $r['updated'] . ' 筆' . ($r['skipped'] ? '，略過 ' . count($r['skipped']) . ' 筆' : '');
+    }
     acc_out($r);
 }
 
@@ -894,6 +905,29 @@ case 'vch_create': {
         (string)($_SESSION['userName'] ?? $uid), $extra, (string)($_POST['rounding'] ?? 'none'),
         (array)json_decode((string)($_POST['exp_choice'] ?? '[]'), true),
         (array)json_decode((string)($_POST['auto_ovr'] ?? '[]'), true));
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'vch_order_search': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    $s = $_POST ?: $_GET;
+    $r = acc_voucher_order_search($db, acc_u8(trim((string)($s['kw'] ?? ''))));
+    foreach ($r['rows'] as &$x) $x['overpaid'] = acc_customer_overpaid($db, (string)($x['customer_id'] ?: $x['Client_name_ID']));
+    unset($x);
+    acc_out($r);
+}
+
+case 'vch_create_manual': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $lines = json_decode(acc_u8((string)($_POST['lines'] ?? '[]')), true);
+    if (!is_array($lines)) acc_err('資料格式錯誤');
+    $r = acc_voucher_create_manual($db, (string)($_POST['kind'] ?? 'free'), (int)($_POST['order_id'] ?? 0), acc_u8(trim((string)($_POST['party_name'] ?? ''))),
+        trim((string)($_POST['voucher_date'] ?? '')), acc_u8((string)($_POST['voucher_no'] ?? '')), acc_u8((string)($_POST['note'] ?? '')), $lines,
+        (string)($_SESSION['userName'] ?? $uid));
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

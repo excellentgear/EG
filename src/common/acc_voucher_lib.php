@@ -41,6 +41,20 @@ function acc_voucher_ensure(PDO $db): void
         $db->exec("ALTER TABLE acc_voucher ADD COLUMN sign_json TEXT NULL COMMENT '簽章欄位（核准／會計／覆核／出納／登帳）JSON'");
     if (!isset($have['void_items_json']))
         $db->exec("ALTER TABLE acc_voucher ADD COLUMN void_items_json MEDIUMTEXT NULL COMMENT '作廢當下的明細快照（作廢後明細釋放，保留紀錄）'");
+    if (!isset($have['kind']))
+        $db->exec("ALTER TABLE acc_voucher ADD COLUMN kind VARCHAR(8) NOT NULL DEFAULT 'doc' COMMENT 'doc=依出貨/退貨/採購單據 order=訂單預收 free=無單據'");
+    $db->exec("CREATE TABLE IF NOT EXISTS acc_voucher_order (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        voucher_id INT NOT NULL,
+        order_id INT NOT NULL,
+        order_no VARCHAR(30) NULL,
+        c_order VARCHAR(60) NULL,
+        client_id VARCHAR(30) NULL,
+        client_name VARCHAR(60) NULL,
+        part_no VARCHAR(60) NULL,
+        UNIQUE KEY uk_v (voucher_id), KEY idx_o (order_id),
+        CONSTRAINT fk_vorder FOREIGN KEY (voucher_id) REFERENCES acc_voucher(voucher_id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單預收傳票對應的訂單'");
     $db->exec("CREATE TABLE IF NOT EXISTS acc_account (
         code   VARCHAR(12) NOT NULL PRIMARY KEY,
         name   VARCHAR(60) NOT NULL,
@@ -343,12 +357,13 @@ function acc_voucher_list(PDO $db, array $f): array
     if ($kw !== '') {
         $w[] = "(v.voucher_no LIKE ? OR v.party_name LIKE ? OR v.note LIKE ? OR v.party_id LIKE ?
                  OR EXISTS (SELECT 1 FROM acc_voucher_item i WHERE i.voucher_id=v.voucher_id AND (i.src_no LIKE ? OR i.product_id LIKE ?))
+                 OR EXISTS (SELECT 1 FROM acc_voucher_order vo WHERE vo.voucher_id=v.voucher_id AND (vo.order_no LIKE ? OR vo.c_order LIKE ? OR vo.part_no LIKE ?))
                  OR EXISTS (SELECT 1 FROM acc_invoice_item ii JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id
                             JOIN acc_voucher_item i2 ON i2.src_type=ii.src_type AND i2.src_id=ii.src_id
                             WHERE i2.voucher_id=v.voucher_id AND inv.invoice_no LIKE ?)
                  OR EXISTS (SELECT 1 FROM acc_recon_sheet vs WHERE v.side='ap' AND vs.side='ap' AND vs.party_id=v.party_id
                             AND vs.billing_month=v.billing_month AND vs.vendor_inv_no LIKE ?))";
-        for ($i = 0; $i < 8; $i++) $p[] = '%' . $kw . '%';
+        for ($i = 0; $i < 11; $i++) $p[] = '%' . $kw . '%';
     }
     foreach (['bm_from' => 'v.billing_month >= ?', 'bm_to' => 'v.billing_month <= ?'] as $k => $c)
         if (preg_match('/^\d{4}-\d{2}$/', (string)($f[$k] ?? ''))) { $w[] = $c; $p[] = $f[$k]; }
@@ -356,7 +371,10 @@ function acc_voucher_list(PDO $db, array $f): array
     if ($st === 'open' || $st === 'void') { $w[] = 'v.status=?'; $p[] = $st; }
     if (($f['no_number'] ?? '') === '1') $w[] = "(v.voucher_no IS NULL OR v.voucher_no='')";
     $side = trim((string)($f['side'] ?? ''));
-    if ($side === 'ar' || $side === 'ap') { $w[] = 'v.side=?'; $p[] = $side; }
+    if ($side === 'ar') { $w[] = "v.side='ar' AND v.kind<>'order'"; }
+    elseif ($side === 'ap') { $w[] = 'v.side=?'; $p[] = $side; }
+    elseif ($side === 'order') { $w[] = "v.kind='order'"; }
+    elseif ($side === 'free') { $w[] = "v.kind='free'"; }
     $ws = $w ? 'WHERE ' . implode(' AND ', $w) : '';
     $per = (int)($f['per_page'] ?? 20);
     if (!in_array($per, [5, 10, 20, 50], true)) $per = 20;
@@ -404,6 +422,8 @@ function acc_voucher_get(PDO $db, int $id): ?array
         $snap = json_decode($v['void_items_json'], true);
         return ['voucher' => $v, 'items' => is_array($snap) ? $snap : [], 'lines' => $lines, 'signs' => $signs];
     }
+    $oq = $db->prepare("SELECT * FROM acc_voucher_order WHERE voucher_id=?"); $oq->execute([$id]);
+    $v['order'] = $oq->fetch(PDO::FETCH_ASSOC) ?: null;
     $q = $db->prepare("SELECT i.*, (SELECT GROUP_CONCAT(DISTINCT inv.invoice_no) FROM acc_invoice_item ii
                                     JOIN acc_invoice inv ON inv.invoice_id=ii.invoice_id AND inv.status<>'void'
                                     WHERE ii.src_type=i.src_type AND ii.src_id=i.src_id) AS invoice_no
@@ -896,4 +916,130 @@ function acc_voucher_sign(PDO $db, int $id, string $slot, string $mode, string $
     }
     $db->prepare("UPDATE acc_voucher SET sign_json=? WHERE voucher_id=?")->execute([json_encode($s, JSON_UNESCAPED_UNICODE), $id]);
     return ['success' => true, 'signs' => $s];
+}
+
+/* ══ 訂單預收／無單據傳票 ═════════════════════════════════════════════ */
+
+const ACC_VCH_PREPAY = ['2251000', '預收貨款'];
+
+/** 搜尋訂單（客戶ID／客戶名稱／訂單編號／料號／客戶單號 模糊），附已預收金額 */
+function acc_voucher_order_search(PDO $db, string $kw): array
+{
+    acc_voucher_ensure($db);
+    $w = ["(ot.Order_status IS NULL OR ot.Order_status <> 6)", "ot.Order_oo IS NOT NULL", "TRIM(ot.Order_oo)<>''"];
+    $p = [];
+    $n = 0;
+    foreach (preg_split('/\s+/u', trim($kw), -1, PREG_SPLIT_NO_EMPTY) as $i => $t) {
+        $n++;
+        $w[] = "(ot.Order_oo LIKE :k$i OR ot.d_id LIKE :k$i OR ot.C_order LIKE :k$i OR ot.Client_name LIKE :k$i
+                 OR ot.Client_name_ID LIKE :k$i OR cl.customer LIKE :k$i OR cl.customer_id LIKE :k$i)";
+        $p[":k$i"] = '%' . $t . '%';
+    }
+    if (!$n) return ['rows' => []];
+    $q = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, COALESCE(ot.C_order,'') c_order, ot.Client_name, ot.Client_name_ID, ot.Qty,
+                              DATE_FORMAT(ot.Order_date,'%Y-%m-%d') order_date, COALESCE(cl.customer, ot.Client_name) client_display, cl.customer_id
+                       FROM order_track ot LEFT JOIN customer_list cl ON cl.customer_id=ot.Client_name_ID
+                       WHERE " . implode(' AND ', $w) . " ORDER BY ot.Order_id DESC LIMIT 60");
+    $q->execute($p);
+    $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+    $pre = acc_voucher_prepaid_map($db, array_column($rows, 'Order_id'));
+    foreach ($rows as &$r) $r['prepaid'] = $pre[(int)$r['Order_id']]['amount'] ?? 0;
+    return ['rows' => $rows];
+}
+
+/** 訂單已預收（有效的訂單預收傳票，貸方預收貨款合計）：[order_id => ['amount','cnt','nos']] */
+function acc_voucher_prepaid_map(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_filter(array_map('intval', $orderIds)));
+    if (!$ids) return [];
+    acc_voucher_ensure($db);
+    $q = $db->query("SELECT vo.order_id, SUM(l.amount) amt, COUNT(DISTINCT v.voucher_id) cnt, GROUP_CONCAT(DISTINCT v.voucher_no SEPARATOR '、') nos
+                     FROM acc_voucher_order vo JOIN acc_voucher v ON v.voucher_id=vo.voucher_id AND v.status='open'
+                     JOIN acc_voucher_line l ON l.voucher_id=v.voucher_id AND l.code='" . ACC_VCH_PREPAY[0] . "' AND l.side='C'
+                     WHERE vo.order_id IN (" . implode(',', $ids) . ") GROUP BY vo.order_id");
+    $m = [];
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['order_id']] = ['amount' => (float)$r['amt'], 'cnt' => (int)$r['cnt'], 'nos' => (string)$r['nos']];
+    return $m;
+}
+
+/** 客戶溢繳（收款單未沖帳餘額）合計 */
+function acc_customer_overpaid(PDO $db, string $customerId): float
+{
+    if ($customerId === '') return 0.0;
+    try {
+        $q = $db->prepare("SELECT COALESCE(SUM(r.amount + IF(r.settle_extra=1, COALESCE(r.deduct_amt,0)+COALESCE(r.fee,0), 0)
+                              - COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a WHERE a.receipt_id=r.receipt_id),0)),0)
+                           FROM acc_receipt r WHERE r.customer_id=?");
+        $q->execute([$customerId]);
+        return max(0.0, round((float)$q->fetchColumn(), 2));
+    } catch (Throwable $e) { return 0.0; }
+}
+
+/** 驗證手動分錄；回 [lines, 錯誤|null] */
+function acc_vch_clean_lines(PDO $db, array $lines): array
+{
+    $out = [];
+    foreach ($lines as $i => $l) {
+        $n = $i + 1;
+        $code = trim((string)($l['code'] ?? ''));
+        if (!preg_match('/^\d{4,10}$/', $code)) return [[], "分錄第 {$n} 列：科目代號須為 4~10 位數字"];
+        $q = $db->prepare("SELECT name FROM acc_account WHERE code=?"); $q->execute([$code]);
+        $name = (string)$q->fetchColumn();
+        if ($name === '') return [[], "分錄第 {$n} 列：科目 {$code} 不在科目表"];
+        $amt = round((float)($l['amount'] ?? 0), 2);
+        if ($amt <= 0) return [[], "分錄第 {$n} 列：金額須大於 0"];
+        $out[] = ['code' => $code, 'name' => $name, 'side' => ($l['side'] ?? '') === 'C' ? 'C' : 'D', 'amount' => $amt,
+                  'memo' => mb_substr(trim((string)($l['memo'] ?? '')), 0, 100)];
+    }
+    if (count($out) < 2) return [[], '分錄至少要有一借一貸'];
+    return [$out, null];
+}
+
+/** 開立訂單預收（kind=order）或無單據（kind=free）傳票 */
+function acc_voucher_create_manual(PDO $db, string $kind, int $orderId, string $partyName, string $date, ?string $no, string $note, array $lines, string $userName): array
+{
+    acc_voucher_ensure($db);
+    acc_vch_account_upsert($db, ACC_VCH_PREPAY[0], ACC_VCH_PREPAY[1]);   // DDL／寫入放在交易外
+    $kind = $kind === 'order' ? 'order' : 'free';
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '傳票日期格式錯誤'];
+    $no = acc_vch_no_normalize((string)$no, $date);
+    if ($no === '') return ['success' => false, 'message' => '請先填 ERP 傳票號碼再開立傳票'];
+    [$noErr, $noDate] = acc_vch_no_check($no);
+    if ($noErr) return ['success' => false, 'message' => $noErr];
+    if ($noDate !== $date) return ['success' => false, 'message' => '傳票號碼裡的日期（' . $noDate . '）與傳票日期（' . $date . '）不一致'];
+    $q = $db->prepare("SELECT voucher_id FROM acc_voucher WHERE voucher_no=? LIMIT 1"); $q->execute([$no]);
+    if ($q->fetchColumn()) return ['success' => false, 'message' => '傳票號碼 ' . $no . ' 已存在'];
+    [$cl, $err] = acc_vch_clean_lines($db, $lines);
+    if ($err) return ['success' => false, 'message' => $err];
+    [$dSum, $cSum] = acc_vch_lines_balance($cl);
+    if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2)];
+    $ord = null; $partyId = null;
+    if ($kind === 'order') {
+        $q = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, COALESCE(ot.C_order,'') c_order, ot.Client_name, ot.Client_name_ID,
+                                  COALESCE(cl.customer, ot.Client_name) cname, cl.customer_id
+                           FROM order_track ot LEFT JOIN customer_list cl ON cl.customer_id=ot.Client_name_ID WHERE ot.Order_id=?");
+        $q->execute([$orderId]);
+        $ord = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$ord) return ['success' => false, 'message' => '請先選定訂單'];
+        $partyName = (string)$ord['cname']; $partyId = $ord['customer_id'] ?: ($ord['Client_name_ID'] ?: null);
+        $hasPre = false;
+        foreach ($cl as $l) if ($l['code'] === ACC_VCH_PREPAY[0] && $l['side'] === 'C') $hasPre = true;
+        if (!$hasPre) return ['success' => false, 'message' => '訂單預收傳票貸方須有 ' . ACC_VCH_PREPAY[0] . ' ' . ACC_VCH_PREPAY[1]];
+    }
+    try {
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO acc_voucher (voucher_no,voucher_date,side,kind,party_id,party_name,billing_month,total_amount,item_cnt,note,created_by)
+                      VALUES (?,?,?,?,?,?,?,?,0,?,?)")
+           ->execute([$no, $date, $kind === 'order' ? 'ar' : 'fr', $kind, $partyId, mb_substr($partyName, 0, 100), substr($date, 0, 7), $dSum, mb_substr($note, 0, 300), $userName]);
+        $vid = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO acc_voucher_line (voucher_id,seq,code,name,side,amount,is_auto,memo) VALUES (?,?,?,?,?,?,0,?)");
+        foreach ($cl as $i => $l) $ins->execute([$vid, $i + 1, $l['code'], $l['name'], $l['side'], $l['amount'], $l['memo'] ?: null]);
+        if ($ord) $db->prepare("INSERT INTO acc_voucher_order (voucher_id,order_id,order_no,c_order,client_id,client_name,part_no) VALUES (?,?,?,?,?,?,?)")
+                     ->execute([$vid, $ord['Order_id'], $ord['Order_oo'], $ord['c_order'], $partyId, $partyName, $ord['d_id']]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '建立傳票失敗：' . $e->getMessage()];
+    }
+    return ['success' => true, 'voucher_id' => $vid, 'total' => $dSum, 'message' => '已建立傳票，合計 ' . number_format($dSum)];
 }

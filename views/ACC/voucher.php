@@ -72,6 +72,7 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
     <div class="a-tabs">
       <button class="tab-btn on" data-tab="new"><i class="fa fa-plus-square-o"></i> 1. 開立傳票</button>
       <button class="tab-btn" data-tab="list"><i class="fa fa-search"></i> 2. 傳票查詢</button>
+      <?php if ($perms['canEdit']): ?><button class="tab-btn" data-tab="man"><i class="fa fa-pencil-square-o"></i> 3. 訂單預收／無單據</button><?php endif; ?>
       <?php if ($perms['canEdit']): ?><button id="btnAcctCfg" style="align-self:center;"><i class="fa fa-cog"></i> 科目設定</button><?php endif; ?>
       <?php if ($perms['canEdit']): ?><button id="btnCoAcct" style="align-self:center;"><i class="fa fa-bank"></i> 本公司入帳帳戶</button><?php endif; ?>
       <span class="a-role" style="align-self:center;">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b></span>
@@ -109,10 +110,40 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
       </div>
     </div>
 
+    <div id="tabMan" style="display:none;">
+      <div class="a-bar">
+        <label><input type="radio" name="mKind" value="order" checked> 依訂單開立（預收訂金）</label>
+        <label><input type="radio" name="mKind" value="free"> 無單據開立（例：賣廢料）</label>
+      </div>
+      <div id="mOrderPick">
+        <div class="a-bar"><label>搜尋訂單</label>
+          <input type="text" id="mKw" placeholder="客戶ID／客戶名稱／訂單編號／料號／客戶單號（可空白分隔多個關鍵字）" style="width:420px;" autocomplete="off">
+          <button id="btnMSearch" class="btn-warm"><i class="fa fa-search"></i> 搜尋</button>
+          <span id="mHit" style="color:#8a6d45;font-size:12.5px;"></span></div>
+        <div class="a-wrap" style="max-height:260px;overflow:auto;"><table class="a-t"><thead><tr><th>客戶</th><th>訂單編號</th><th>客戶單號</th><th>料號</th><th>數量</th><th>訂單日</th><th>已預收</th><th>客戶溢繳</th><th></th></tr></thead>
+          <tbody id="mBody"><tr><td colspan="9" style="padding:14px;color:#8a6d45;">輸入關鍵字搜尋訂單</td></tr></tbody></table></div>
+        <div id="mPicked" class="info" style="display:none;margin-top:6px;"></div>
+      </div>
+      <div id="mFreeParty" class="a-bar" style="display:none;"><label>對象（選填）</label><input type="text" id="mParty" maxlength="60" style="width:260px;" placeholder="客戶／廠商名稱（可空白）" autocomplete="off"></div>
+      <div id="mForm" style="display:none;margin-top:8px;">
+        <div class="a-bar">
+          <label>傳票日期<span style="color:#DD5138;">＊</span></label><input type="date" id="mDate">
+          <label>ERP傳票號碼<span style="color:#DD5138;">＊</span></label><input type="text" id="mNo" maxlength="12" class="vno-in" autocomplete="off" data-eg-hint="完整 V-1151126001；或只輸入流水號 1~3 碼（年月日取自傳票日期）">
+          <span id="mNoErr" style="color:#DD5138;font-size:12.5px;"></span>
+          <label>備註</label><input type="text" id="mNote" maxlength="300" style="width:360px;">
+        </div>
+        <table class="a-t" style="max-width:900px;"><thead><tr><th style="width:120px;">會計科目</th><th>科目名稱</th><th style="width:90px;">借貸</th><th style="width:130px;">金額</th><th style="width:200px;">摘要</th><th style="width:60px;"></th></tr></thead>
+          <tbody id="mLines"></tbody>
+          <tfoot><tr><td colspan="3" style="text-align:right;font-weight:700;">借方 <span id="mD">0</span>　貸方 <span id="mC">0</span></td><td colspan="3" id="mBal"></td></tr></tfoot></table>
+        <div class="a-bar" style="margin-top:6px;"><button id="btnMAdd"><i class="fa fa-plus"></i> 加一列</button>
+          <span id="mErr" style="color:#DD5138;font-size:12.5px;"></span>
+          <button id="btnMCreate" class="btn-warm" style="margin-left:auto;" disabled><i class="fa fa-book"></i> 開立傳票</button></div>
+      </div>
+    </div>
     <div id="tabList" style="display:none;">
       <div class="a-bar">
         <label>帳款月份</label><input type="month" id="lFrom"> ~ <input type="month" id="lTo">
-        <select id="lSide"><option value="">應收＋應付</option><option value="ar">客戶（應收）</option><option value="ap">廠商（應付）</option></select>
+        <select id="lSide"><option value="">應收＋應付</option><option value="ar">客戶（應收）</option><option value="ap">廠商（應付）</option><option value="order">訂單預收</option><option value="free">無單據</option></select>
         <select id="lStatus"><option value="">全部狀態</option><option value="open">有效</option><option value="void">已作廢</option></select>
         <label><input type="checkbox" id="lNoNo"> 只看尚未填傳票號碼</label>
         <input type="text" id="lKw" placeholder="傳票號碼／客戶(含編號)／單號／料號／發票號碼" style="width:260px;">
@@ -239,9 +270,100 @@ $.getJSON(API,{action:'meta'},function(r){
 })();
 $('.tab-btn').on('click',function(){
   var t=$(this).data('tab'); $('.tab-btn').removeClass('on'); $(this).addClass('on');
-  $('#tabNew').toggle(t==='new'); $('#tabList').toggle(t==='list');
+  $('#tabNew').toggle(t==='new'); $('#tabList').toggle(t==='list'); $('#tabMan').toggle(t==='man');
   if(t==='list') loadList();
 });
+
+
+/* ── 訂單預收／無單據 ── */
+var M_ORDER=null, M_LINES=[];
+function mKind(){ return $('input[name=mKind]:checked').val(); }
+function mDefaultLines(){
+  if(mKind()==='order') M_LINES=[{code:'1102000',side:'D',amount:'',memo:''},{code:'2251000',side:'C',amount:'',memo:''}];
+  else M_LINES=[{code:'',side:'D',amount:'',memo:''},{code:'',side:'C',amount:'',memo:''}];
+}
+function mAcctName(c){ var a=ACCT.filter(function(x){ return x.code===c; })[0]; return a?a.name:''; }
+function mNum(v){ return parseFloat(String(v).replace(/,/g,''))||0; }
+function mRender(){
+  var h='', d=0, c=0;
+  M_LINES.forEach(function(l,i){
+    var a=mNum(l.amount); if(l.side==='D') d+=a; else c+=a;
+    h+='<tr><td><input type="text" class="m-code" data-i="'+i+'" list="dlAcct" value="'+esc(l.code)+'" maxlength="10" autocomplete="off" data-eg-skip style="width:100%;box-sizing:border-box;"></td>'
+      +'<td class="l">'+esc(mAcctName(l.code))+'</td>'
+      +'<td><select class="m-side" data-i="'+i+'" data-eg-skip><option value="D"'+(l.side==='D'?' selected':'')+'>借方</option><option value="C"'+(l.side==='C'?' selected':'')+'>貸方</option></select></td>'
+      +'<td><input type="text" class="m-amt" data-i="'+i+'" value="'+esc(l.amount)+'" autocomplete="off" data-eg-skip style="width:100%;box-sizing:border-box;text-align:right;"></td>'
+      +'<td><input type="text" class="m-memo" data-i="'+i+'" value="'+esc(l.memo)+'" maxlength="100" autocomplete="off" data-eg-skip style="width:100%;box-sizing:border-box;"></td>'
+      +'<td>'+(M_LINES.length>2?'<button class="btn-mini m-del" data-i="'+i+'">移除</button>':'')+'</td></tr>';
+  });
+  $('#mLines').html(h); d=Math.round(d*100)/100; c=Math.round(c*100)/100;
+  $('#mD').text(nf2(d)); $('#mC').text(nf2(c));
+  var bad=M_LINES.some(function(l){ return !mAcctName(l.code) || !(mNum(l.amount)>0); });
+  var ok=d>0 && Math.abs(d-c)<0.009 && !bad;
+  $('#mBal').html(Math.abs(d-c)<0.009&&d>0?'<span style="color:#5C7A2E;">✓ 平衡</span>':'<span style="color:#DD5138;">借貸不平衡或未填金額</span>');
+  var needOrder=(mKind()==='order'&&!M_ORDER);
+  $('#btnMCreate').prop('disabled', !ok||needOrder);
+  $('#mErr').text(needOrder?'請先選定訂單':'');
+}
+function mSwitch(){
+  var o=(mKind()==='order');
+  $('#mOrderPick').toggle(o); $('#mFreeParty').toggle(!o); $('#mForm').toggle(!o||!!M_ORDER);
+  mDefaultLines(); mRender();
+}
+$(document).on('change','input[name=mKind]',function(){ M_ORDER=null; $('#mPicked').hide(); mSwitch(); });
+function mSearch(){
+  var kw=$.trim($('#mKw').val()); if(!kw){ $('#mBody').html('<tr><td colspan="9" style="padding:14px;color:#8a6d45;">輸入關鍵字搜尋訂單</td></tr>'); return; }
+  $.post(API+'?action=vch_order_search',{kw:kw},function(r){
+    if(!r.ok){ toast(esc(r.error||'查詢失敗'),true); return; }
+    window.M_ROWS=r.rows;
+    var h=r.rows.length?'':'<tr><td colspan="9" style="padding:14px;color:#8a6d45;">找不到符合的訂單</td></tr>';
+    r.rows.forEach(function(o,i){
+      h+='<tr><td class="l">'+esc(o.client_display)+' <span class="lk">'+esc(o.customer_id||o.Client_name_ID||'')+'</span></td><td>'+esc(o.Order_oo)+'</td><td>'+esc(o.c_order)+'</td><td class="l">'+esc(o.d_id)+'</td>'
+        +'<td class="r">'+nf(o.Qty)+'</td><td>'+dd(o.order_date)+'</td><td class="r">'+(+o.prepaid?'<b style="color:#5C7A2E;">'+nf(o.prepaid)+'</b>':'')+'</td>'
+        +'<td class="r">'+(+o.overpaid?'<b style="color:#B9793C;">'+nf(o.overpaid)+'</b>':'')+'</td><td><button class="btn-mini m-pick" data-i="'+i+'">選取</button></td></tr>';
+    });
+    $('#mBody').html(h); $('#mHit').text(r.rows.length>=60?'僅列前 60 筆，請加關鍵字縮小':'共 '+r.rows.length+' 筆');
+  },'json').fail(function(x){ failMsg(x,'查詢失敗'); });
+}
+$('#btnMSearch').on('click',mSearch);
+$('#mKw').on('keydown',function(e){ if(e.which===13){ e.preventDefault(); mSearch(); } });
+$(document).on('click','.m-pick',function(){
+  var o=window.M_ROWS[+$(this).data('i')]; M_ORDER=o;
+  $('#mPicked').show().html('已選訂單：<b>'+esc(o.Order_oo)+'</b>　客戶單號 <b>'+esc(o.c_order||'—')+'</b>　客戶 <b>'+esc(o.client_display)+'</b>　料號 '+esc(o.d_id)
+    +(+o.prepaid?'　<span style="color:#5C7A2E;">已預收 '+nf(o.prepaid)+'</span>':'')+(+o.overpaid?'　<span style="color:#B9793C;">客戶尚有溢繳款 '+nf(o.overpaid)+'（可考慮沖用）</span>':''));
+  $('#mNote').val(('訂單 '+o.Order_oo+' 客戶單號 '+(o.c_order||'—')+' '+o.client_display).slice(0,300));
+  $('#mForm').show(); mRender();
+});
+$(document).on('input change','.m-code',function(e){
+  var i=+$(this).data('i'); M_LINES[i].code=$.trim(this.value);
+  var f=sideOfCode(M_LINES[i].code); if(f) M_LINES[i].side=f;
+  if(e.type==='change') mRender(); else $(this).closest('tr').find('td.l').text(mAcctName(M_LINES[i].code));
+});
+$(document).on('change','.m-side',function(){ M_LINES[+$(this).data('i')].side=this.value; mRender(); });
+$(document).on('change','.m-amt',function(){
+  var i=+$(this).data('i'); M_LINES[i].amount=this.value;
+  if(mKind()==='order'&&M_LINES.length===2) M_LINES[1-i].amount=this.value;   // 預收：一借一貸同額
+  mRender();
+});
+$(document).on('change','.m-memo',function(){ M_LINES[+$(this).data('i')].memo=this.value; });
+$(document).on('click','.m-del',function(){ M_LINES.splice(+$(this).data('i'),1); mRender(); });
+$('#btnMAdd').on('click',function(){ M_LINES.push({code:'',side:'D',amount:'',memo:''}); mRender(); });
+function mNoState(){
+  var no=normNo($('#mNo').val(), $('#mDate').val()); if($('#mNo').val()!==no) $('#mNo').val(no);
+  var e=no?noCheck(no,$('#mDate').val()):''; $('#mNoErr').text(e||''); return !e&&!!no;
+}
+$('#mNo').on('blur change',mNoState); $('#mDate').on('change',function(){ if($('#mNo').val()) mNoState(); });
+$('#btnMCreate').on('click',function(){
+  if(!mNoState()){ if(!$('#mNoErr').text()) $('#mNoErr').text('請填 ERP 傳票號碼'); return; }
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=vch_create_manual',{csrf:CSRF,kind:mKind(),order_id:M_ORDER?M_ORDER.Order_id:0,party_name:$('#mParty').val(),
+    voucher_date:$('#mDate').val(),voucher_no:$('#mNo').val(),note:$('#mNote').val(),
+    lines:JSON.stringify(M_LINES.map(function(l){ return {code:l.code,side:l.side,amount:mNum(l.amount),memo:l.memo}; }))},function(r){
+    if(!r.ok){ toast(esc(r.error||'開立失敗'),true); $b.prop('disabled',false); return; }
+    toast('已開立傳票 '+esc($('#mNo').val())+'，合計 '+nf(r.total));
+    M_ORDER=null; $('#mPicked').hide(); $('#mNo').val(''); $('#mNote').val(''); if(mKind()==='order'){ $('#mForm').hide(); mSearch(); } mDefaultLines(); mRender();
+  },'json').fail(function(x){ failMsg(x,'開立失敗'); $b.prop('disabled',false); });
+});
+(function(){ var t=new Date(); $('#mDate').val(t.getFullYear()+'-'+('0'+(t.getMonth()+1)).slice(-2)+'-'+('0'+t.getDate()).slice(-2)); mDefaultLines(); })();
 
 /* ── 開立 ── */
 function loadParties(){
@@ -725,7 +847,7 @@ function loadList(){
     if(!r.rows.length) h='<tr><td colspan="10" style="padding:18px;color:#8a6d45;">沒有符合的傳票</td></tr>';
     r.rows.forEach(function(v){
       h+='<tr class="'+(v.status==='void'?'voided':'')+'"><td><b>'+esc(v.voucher_no||'')+'</b>'+(v.voucher_no?'':'<span class="lk">（未填）</span>')+'</td>'
-        +'<td>'+dd(v.voucher_date)+'</td><td><span class="sd-pill '+(v.side==='ap'?'sd-ap">應付':'sd-ar">應收')+'</span></td><td class="l">'+esc(v.party_name)+'</td>'
+        +'<td>'+dd(v.voucher_date)+'</td><td><span class="sd-pill '+(v.kind==='order'?'sd-ar">預收':(v.kind==='free'?'sd-ar" style="background:#B9793C;">無單據':(v.side==='ap'?'sd-ap">應付':'sd-ar">應收')))+'</span></td><td class="l">'+esc(v.party_name)+'</td>'
         +'<td>'+esc(v.billing_month||'')+'</td><td class="r'+(v.side==='ap'?' amt-ap':'')+'">'+nf(v.total_amount)+'</td>'
         +'<td style="white-space:nowrap;">'+(v.att_invs?'<a href="#" class="att-open" data-inv="'+esc(v.att_invs)+'" title="點選開啟發票附件">'+esc(v.invoice_nos||'')+'</a>':esc(v.invoice_nos||''))
         +' <span style="display:inline-block;width:20px;text-align:left;">'+(v.att_invs?'<a href="#" class="att-open" data-inv="'+esc(v.att_invs)+'" style="color:#B9793C;" title="有附件，點選開啟"><i class="fa fa-paperclip"></i></a>':'')+'</span></td>'
