@@ -543,13 +543,24 @@ function autoLines(){
     L.push({code:A('ap_pay').code,name:A('ap_pay').name,side:neg?'D':'C',amount:abs+tax});
   }
   L=L.filter(function(l){ return l.amount>0.004; });
+  var recvIx=[]; if(side==='ar') L.forEach(function(l,i){ if(l.code===A('ar_recv').code&&l.side==='D') recvIx.push(i); });
   // 使用者手改的科目（以該列順序為鍵；借貸方向維持原分錄結構不變）
   L.forEach(function(l,i){ l.ai=i; l.sysmemo=l.memo||''; var o=AOVR[i];
     if(o && o.code && !(l.code==='4103000' && l.sysmemo)){ l.code=o.code; l.name=o.name; l.edited=1; }
     if(o && o.memo!=null){ l.memo=o.memo; } });
+  // 訂單預收自動沖抵（與後端同一規則）：應收帳款減少、借預收貨款 2251000
+  if(side==='ar' && PP_AVAIL>0 && recvIx.length){
+    var rt=0; recvIx.forEach(function(i){ rt+=L[i].amount; });
+    var off=Math.round(Math.min(PP_AVAIL,rt)*100)/100, left=off;
+    if(off>0.004){
+      recvIx.forEach(function(i){ var t=Math.min(left,L[i].amount); L[i].amount=Math.round((L[i].amount-t)*100)/100; left=Math.round((left-t)*100)/100; });
+      L=L.filter(function(l){ return l.amount>0.004; });
+      L.push({code:'2251000',name:'預收貨款',side:'D',amount:off,memo:'沖預收 '+PP_NOS,ai:-1,sysmemo:'沖預收 '+PP_NOS,pp:1});
+    }
+  }
   return L;
 }
-var jBalanced=false, AOVR={};
+var jBalanced=false, AOVR={}, PP_AVAIL=0, PP_NOS='';
 /* 自動帶出的會計科目可直接手改：輸入代號或名稱，下方出現符合的科目清單可選；離開欄位時驗證必須在科目表內 */
 $(document).on('change','.j-acode',function(){
   var ai=+$(this).data('ai'), v=$.trim(this.value), a=null, up=v.toUpperCase();
@@ -586,7 +597,7 @@ function journalRender(){
   var d=0,c=0,h='';
   rows.forEach(function(l){
     if(l.side==='D') d+=l.amount; else c+=l.amount;
-    var lock=(l.auto && l.code==='4103000' && l.sysmemo);   // 系統帶出的客戶折扣列：科目固定、「?%折扣」不可刪
+    var lock=((l.auto && l.code==='4103000' && l.sysmemo) || l.pp);   // 系統帶出的客戶折扣列：科目固定、「?%折扣」不可刪
     var sysM=l.auto?String(l.sysmemo||''):'';
     var sufM=sysM?String(l.memo||'').slice(sysM.length).replace(/^\s+/,''):'';
     var memoCell = sysM
@@ -801,7 +812,14 @@ $('#btnVCreate').on('click',function(){
   $('#jTitle').text('確認傳票 '+noV);
   $('#jRound').val('round'); EXPSEL={}; renderExp();
   $('#jHead').html('<b>'+esc($('#vParty option:selected').text().split('　')[0])+'</b>　帳款月份 '+esc($('#vBm').val())+'　傳票日期 '+dd(d)+'　共 '+k.length+' 筆憑證、未稅合計 '+nf2(selNet()));
+  PP_AVAIL=0; PP_NOS='';
   journalRender(); openMask('mkJ');
+  if($('#vSide').val()==='ar'){
+    $.post(API+'?action=vch_prepay_avail',{sel:JSON.stringify(k.map(function(i){ return {src_type:items[i].src_type, src_id:items[i].src_id}; }))},function(r){
+      if(r.ok && Number(r.avail)>0){ PP_AVAIL=Number(r.avail); PP_NOS=Object.keys(r.orders||{}).map(function(o){ return r.orders[o].no; }).join('、'); journalRender();
+        $('#jHead').append('　<span style="color:#3f5a1c;background:#EAF1DA;border:1px solid #B7CC8C;border-radius:3px;padding:1px 6px;">此客戶訂單有預收 '+nf2(PP_AVAIL)+'，已自動沖抵應收</span>'); }
+    },'json');
+  }
 });
 $('#btnJConfirm').on('click',function(){
   var k=Object.keys(SEL); if(!k.length) return;

@@ -888,6 +888,13 @@ case 'vch_candidates': {
     acc_out(acc_voucher_candidates($db, $side, $pid, $bm));
 }
 
+case 'vch_prepay_avail': {
+    require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
+    $sel = json_decode((string)($_POST['sel'] ?? '[]'), true);
+    if (!is_array($sel)) $sel = [];
+    acc_out(acc_vch_prepay_avail($db, $sel));
+}
+
 case 'vch_create': {
     require_once $document_root . '/EGsystem/src/common/acc_voucher_lib.php';
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);

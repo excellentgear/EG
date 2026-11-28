@@ -55,6 +55,14 @@ function acc_voucher_ensure(PDO $db): void
         UNIQUE KEY uk_v (voucher_id), KEY idx_o (order_id),
         CONSTRAINT fk_vorder FOREIGN KEY (voucher_id) REFERENCES acc_voucher(voucher_id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單預收傳票對應的訂單'");
+    $db->exec("CREATE TABLE IF NOT EXISTS acc_voucher_prepay_use (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        voucher_id INT NOT NULL,
+        order_id INT NOT NULL,
+        amount DECIMAL(16,2) NOT NULL DEFAULT 0,
+        KEY idx_v (voucher_id), KEY idx_o (order_id),
+        CONSTRAINT fk_vppuse FOREIGN KEY (voucher_id) REFERENCES acc_voucher(voucher_id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='出貨傳票沖用訂單預收的金額'");
     $db->exec("CREATE TABLE IF NOT EXISTS acc_account (
         code   VARCHAR(12) NOT NULL PRIMARY KEY,
         name   VARCHAR(60) NOT NULL,
@@ -298,6 +306,12 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
         }
     }
     $autoLines = acc_vch_auto_lines($db, $side, $total, ['ship' => $shipT, 'ret' => $retT, 'disc' => $discAmt, 'disc_pct' => $discPct, 'groups' => $invGroups], $expGroups);
+    // 自動沖預收：先記下應收帳款列的位置（使用者改科目後仍以原位置為準）
+    $recvIdx = [];
+    if ($side === 'ar') {
+        $rc = acc_vch_acct_cfg($db)['ar_recv']['code'];
+        foreach ($autoLines as $ai0 => $l0) if ($l0['code'] === $rc && $l0['side'] === 'D') $recvIdx[] = $ai0;
+    }
     // 使用者手改自動分錄的科目：以該列順序為鍵，科目名稱一律取自科目表；借貸方向維持原分錄結構
     foreach ($autoOvr as $ai => $ocode) {
         $omemo = null;
@@ -320,6 +334,21 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
         if ($oname === '') return ['success' => false, 'message' => '分錄第 ' . ((int)$ai + 1) . ' 列：科目 ' . $ocode . ' 不在科目表'];
         $autoLines[(int)$ai]['code'] = $ocode; $autoLines[(int)$ai]['name'] = $oname;
     }
+    // 訂單有預收訂金時，沖抵應收帳款：應收減少、借「預收貨款」2251000（與前端 autoLines 同一規則）
+    $ppUse = []; $ppOff = 0.0;
+    if ($side === 'ar' && $recvIdx) {
+        $av = acc_vch_prepay_avail($db, array_values($pick));
+        $recvTot = 0.0; foreach ($recvIdx as $ri) $recvTot += (float)$autoLines[$ri]['amount'];
+        $ppOff = round(min($av['avail'], $recvTot), 2);
+        if ($ppOff > 0.004) {
+            $left = $ppOff;
+            foreach ($recvIdx as $ri) { $t = min($left, (float)$autoLines[$ri]['amount']); $autoLines[$ri]['amount'] = round($autoLines[$ri]['amount'] - $t, 2); $left = round($left - $t, 2); }
+            $autoLines = array_values(array_filter($autoLines, fn($l) => $l['amount'] > 0.004));
+            $nos = []; $l2 = $ppOff;
+            foreach ($av['orders'] as $oid => $o) { if ($l2 <= 0.004) break; $t = round(min($l2, $o['bal']), 2); $ppUse[$oid] = $t; $l2 = round($l2 - $t, 2); $nos[] = $o['no']; }
+            $autoLines[] = ['code' => ACC_VCH_PREPAY[0], 'name' => ACC_VCH_PREPAY[1], 'side' => 'D', 'amount' => $ppOff, 'auto' => 1, 'memo' => '沖預收 ' . implode('、', $nos)];
+        } else $ppOff = 0.0;
+    }
     $lines = array_merge($autoLines, $extraLines);
     [$dSum, $cSum] = acc_vch_lines_balance($lines);
     if (abs($dSum - $cSum) > 0.009) return ['success' => false, 'message' => '借貸不平衡：借方 ' . number_format($dSum, 2) . '、貸方 ' . number_format($cSum, 2) . '，請調整追加的科目'];
@@ -335,6 +364,7 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
             $insL->execute([$vid, $li + 1, $l['code'], $l['name'], $l['side'], $l['amount'], $l['auto'], $l['memo'] ?: null]);
             if (!$l['auto']) acc_vch_account_upsert($db, $l['code'], $l['name']);
         }
+        foreach ($ppUse as $oid => $amt) $db->prepare("INSERT INTO acc_voucher_prepay_use (voucher_id,order_id,amount) VALUES (?,?,?)")->execute([$vid, $oid, $amt]);
         $ins = $db->prepare("INSERT INTO acc_voucher_item (voucher_id,src_type,src_id,src_no,src_date,product_id,spec,qty,unit_price,amount)
                              VALUES (?,?,?,?,?,?,?,?,?,?)");
         foreach ($pick as $it)
@@ -346,7 +376,8 @@ function acc_voucher_create(PDO $db, string $side, string $partyId, string $bm, 
         return ['success' => false, 'message' => '建立傳票失敗：' . $e->getMessage()];
     }
     return ['success' => true, 'voucher_id' => $vid, 'items' => count($pick), 'total' => $total, 'skipped' => $skip,
-            'message' => '已建立傳票，' . count($pick) . ' 筆、合計 ' . number_format($total)];
+            'prepay_offset' => $ppOff,
+            'message' => '已建立傳票，' . count($pick) . ' 筆、合計 ' . number_format($total) . ($ppOff > 0 ? '（已沖預收 ' . number_format($ppOff) . '）' : '')];
 }
 
 function acc_voucher_list(PDO $db, array $f): array
@@ -1042,4 +1073,35 @@ function acc_voucher_create_manual(PDO $db, string $kind, int $orderId, string $
         return ['success' => false, 'message' => '建立傳票失敗：' . $e->getMessage()];
     }
     return ['success' => true, 'voucher_id' => $vid, 'total' => $dSum, 'message' => '已建立傳票，合計 ' . number_format($dSum)];
+}
+
+/** 這批出貨明細所屬訂單的預收可沖餘額：['avail'=>合計, 'orders'=>[order_id=>['bal','no']]]（餘額＝預收傳票貸方 2251000 － 已沖用） */
+function acc_vch_prepay_avail(PDO $db, array $pick): array
+{
+    acc_voucher_ensure($db);
+    $isIds = [];
+    foreach ($pick as $it) if (strtoupper((string)$it['src_type']) === 'IS') $isIds[] = (int)$it['src_id'];
+    $isIds = array_values(array_unique(array_filter($isIds)));
+    if (!$isIds) return ['avail' => 0.0, 'orders' => []];
+    $in = implode(',', $isIds);
+    $oids = [];
+    foreach ($db->query("SELECT Order_id FROM is_list WHERE IS_id IN ($in) AND Order_id IS NOT NULL
+                         UNION SELECT Order_id FROM is_order_map WHERE IS_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN) as $o) $oids[(int)$o] = true;
+    $oids = array_keys($oids);
+    if (!$oids) return ['avail' => 0.0, 'orders' => []];
+    sort($oids);
+    $pre = acc_voucher_prepaid_map($db, $oids);
+    $use = [];
+    $q = $db->query("SELECT u.order_id, SUM(u.amount) a FROM acc_voucher_prepay_use u JOIN acc_voucher v ON v.voucher_id=u.voucher_id AND v.status='open'
+                     WHERE u.order_id IN (" . implode(',', $oids) . ") GROUP BY u.order_id");
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $use[(int)$r['order_id']] = (float)$r['a'];
+    $no = [];
+    $q = $db->query("SELECT Order_id, Order_oo FROM order_track WHERE Order_id IN (" . implode(',', $oids) . ")");
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $no[(int)$r['Order_id']] = (string)$r['Order_oo'];
+    $orders = []; $tot = 0.0;
+    foreach ($oids as $o) {
+        $bal = round(($pre[$o]['amount'] ?? 0) - ($use[$o] ?? 0), 2);
+        if ($bal > 0.004) { $orders[$o] = ['bal' => $bal, 'no' => $no[$o] ?? (string)$o]; $tot += $bal; }
+    }
+    return ['avail' => round($tot, 2), 'orders' => $orders];
 }
