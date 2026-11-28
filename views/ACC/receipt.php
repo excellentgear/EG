@@ -620,7 +620,7 @@ function render(){
         +(CAN_EDIT?'<button class="btn-mini rc-alloc" data-id="'+v.receipt_id+'">沖帳'
           +(v.alloc_cnt?'('+v.alloc_cnt+')':'')+'</button> '
           +'<button class="btn-mini rc-edit" data-i="'+i+'">修改</button> '
-          +'<button class="btn-mini rc-vch" data-id="'+v.receipt_id+'" data-no="'+esc(v.receipt_no)+'">傳票'+(v.has_rcpt_vch?'✓':'')+'</button> ':'')
+          +'<button class="btn-mini rc-vch" data-id="'+v.receipt_id+'" data-no="'+esc(v.receipt_no)+'">入帳傳票'+(v.has_rcpt_vch?'✓':'')+'</button> ':'')
         +(CAN_ADMIN?'<button class="btn-mini rc-del" data-id="'+v.receipt_id+'">刪除</button>':'')
       +'</td></tr>';
   });
